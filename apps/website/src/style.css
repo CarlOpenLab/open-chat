@@ -5,27 +5,27 @@
 }
 
 :root {
-  --brand-black: #171717;
+  --brand-black: #18181b;
   --brand-white: #ffffff;
   --brand-gray-50: #fafafa;
-  --brand-gray-100: #ebebeb;
-  --brand-gray-400: #808080;
-  --brand-gray-500: #666666;
-  --brand-gray-600: #4d4d4d;
-  --brand-gray-900: #171717;
-  --brand-link: #0072f5;
-  --brand-link-hover: #0a72ef;
-  --brand-focus: #0075f5;
-  --brand-ring: rgba(147, 197, 253, 0.5);
-  --brand-workflow-ship: #ff5b4f;
-  --brand-workflow-preview: #de1d8d;
-  --brand-workflow-develop: #0a72ef;
-  --brand-badge-blue-bg: #ebf5ff;
-  --brand-badge-blue-text: #0068d6;
-  --brand-shadow-ring: 0 0 0 1px rgba(0, 0, 0, 0.08);
-  --brand-shadow-card:
-    0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 2px rgba(0, 0, 0, 0.04),
-    0 8px 8px -8px rgba(0, 0, 0, 0.04), 0 0 0 1px #fafafa;
+  --brand-gray-100: #f4f4f5;
+  --brand-gray-200: #e4e4e7;
+  --brand-gray-300: #d4d4d8;
+  --brand-gray-400: #a1a1aa;
+  --brand-gray-500: #737373;
+  --brand-gray-600: #525252;
+  --brand-gray-700: #404040;
+  --brand-gray-900: #18181b;
+  --brand-link: #262626;
+  --brand-link-hover: #18181b;
+  --brand-focus: rgba(24, 24, 27, 0.2);
+  --brand-ring: rgba(24, 24, 27, 0.12);
+  --brand-success: #22c55e;
+  --brand-warning: #f97316;
+  --brand-danger: #ef4444;
+  --brand-shadow-ring: 0 0 0 1px rgba(24, 24, 27, 0.06);
+  --brand-shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --brand-shadow-popup: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
 }
 
 html,
@@ -48,7 +48,7 @@ body {
     "Noto Color Emoji";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: var(--brand-white);
+  background: var(--brand-gray-50);
   color: var(--brand-gray-900);
 }
 
@@ -75,7 +75,7 @@ a:hover {
   --primary-color-hover: var(--brand-link-hover);
   --heading-color: var(--brand-gray-900);
   --text-color: var(--brand-gray-900);
-  --border-color: var(--brand-gray-100);
+  --border-color: var(--brand-gray-200);
   --line-color: rgba(23, 23, 23, 0.1);
   --light-bg: rgba(23, 23, 23, 0.04);
   --table-head-bg: var(--brand-gray-50);
