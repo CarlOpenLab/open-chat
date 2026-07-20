@@ -1,35 +1,56 @@
 * {
-  margin: 0;
-  padding: 0;
   box-sizing: border-box;
 }
 
 :root {
-  --brand-black: #18181b;
-  --brand-white: #ffffff;
-  --brand-gray-50: #fafafa;
-  --brand-gray-100: #f4f4f5;
-  --brand-gray-200: #e4e4e7;
-  --brand-gray-300: #d4d4d8;
-  --brand-gray-400: #a1a1aa;
-  --brand-gray-500: #737373;
-  --brand-gray-600: #525252;
-  --brand-gray-700: #404040;
-  --brand-gray-900: #18181b;
-  --brand-link: #262626;
-  --brand-link-hover: #18181b;
-  --brand-focus: rgba(24, 24, 27, 0.2);
-  --brand-ring: rgba(24, 24, 27, 0.12);
-  --brand-success: #22c55e;
-  --brand-warning: #f97316;
-  --brand-danger: #ef4444;
-  --brand-shadow-ring: 0 0 0 1px rgba(24, 24, 27, 0.06);
-  --brand-shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-  --brand-shadow-popup: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  --brand-background: #f7f7f5;
+  --brand-surface: #ffffff;
+  --brand-surface-muted: #fafafa;
+  --brand-surface-subtle: #f4f4f5;
+  --brand-workspace: #f7f7f5;
+  --brand-sidebar: #18181b;
+  --brand-sidebar-muted: #a1a1aa;
+  --brand-sidebar-foreground: #fafafa;
+  --brand-sidebar-hover: #27272a;
+  --brand-sidebar-active: #3f3f46;
+  --brand-foreground: #18181b;
+  --brand-muted: #71717a;
+  --brand-muted-strong: #52525b;
+  --brand-border: #e4e4e7;
+  --brand-border-strong: #d4d4d8;
+  --brand-primary: #18181b;
+  --brand-primary-hover: #27272a;
+  --brand-primary-foreground: #ffffff;
+  --brand-danger: #dc2626;
+  --brand-danger-subtle: #fef2f2;
+  --brand-ring: rgba(24, 24, 27, 0.24);
+  --brand-shadow-xs: 0 1px 2px rgba(24, 24, 27, 0.05);
+  --brand-shadow-sm: 0 4px 12px rgba(24, 24, 27, 0.06);
+  --brand-shadow-float: 0 12px 32px rgba(24, 24, 27, 0.08);
+  --chat-content-width: 840px;
+  --chat-gutter: clamp(16px, 3vw, 40px);
+  --z-sidebar: 30;
+  --z-backdrop: 20;
 }
 
 html,
+body,
+#app {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100%;
+  height: 100%;
+}
+
+html {
+  background: var(--brand-background);
+  scroll-behavior: smooth;
+}
+
 body {
+  margin: 0;
+  background: var(--brand-background);
+  color: var(--brand-foreground);
   font-family:
     "Geist",
     "Geist Sans",
@@ -41,45 +62,70 @@ body {
     "Helvetica Neue",
     Arial,
     "Noto Sans",
-    sans-serif,
-    "Apple Color Emoji",
-    "Segoe UI Emoji",
-    "Segoe UI Symbol",
-    "Noto Color Emoji";
+    sans-serif;
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: var(--brand-gray-50);
-  color: var(--brand-gray-900);
 }
 
-#app {
-  width: 100%;
-  height: 100vh;
+button,
+input,
+textarea {
+  font: inherit;
 }
 
 a {
-  color: var(--brand-link);
+  color: inherit;
 }
 
-a:hover {
-  color: var(--brand-link-hover);
+button,
+[role="button"] {
+  touch-action: manipulation;
 }
 
 :focus-visible {
-  outline: 2px solid var(--brand-focus);
+  outline: 2px solid var(--brand-primary);
   outline-offset: 2px;
 }
 
+.skip-link {
+  position: fixed;
+  z-index: 100;
+  top: 12px;
+  left: 12px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--brand-primary);
+  color: var(--brand-primary-foreground);
+  transform: translateY(-160%);
+  transition: transform 150ms ease-out;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
 .x-markdown-light {
-  --primary-color: var(--brand-link);
-  --primary-color-hover: var(--brand-link-hover);
-  --heading-color: var(--brand-gray-900);
-  --text-color: var(--brand-gray-900);
-  --border-color: var(--brand-gray-200);
-  --line-color: rgba(23, 23, 23, 0.1);
-  --light-bg: rgba(23, 23, 23, 0.04);
-  --table-head-bg: var(--brand-gray-50);
-  --table-body-bg: var(--brand-white);
-  --cite-bg: rgba(23, 23, 23, 0.08);
-  --cite-hover-bg: rgba(23, 23, 23, 0.14);
+  --primary-color: var(--brand-foreground);
+  --primary-color-hover: var(--brand-primary-hover);
+  --heading-color: var(--brand-foreground);
+  --text-color: var(--brand-foreground);
+  --border-color: var(--brand-border);
+  --line-color: var(--brand-border);
+  --light-bg: var(--brand-surface-subtle);
+  --table-head-bg: var(--brand-surface-muted);
+  --table-body-bg: var(--brand-surface);
+  --cite-bg: var(--brand-surface-subtle);
+  --cite-hover-bg: #e4e4e7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

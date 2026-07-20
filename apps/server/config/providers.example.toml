@@ -1,0 +1,52 @@
+# Gateway bearer token. Omit or leave empty to disable auth.
+# When set, clients must send `Authorization: Bearer <gateway_api_key>`.
+# gateway_api_key = "change-me"
+
+bind_addr = "127.0.0.1:8082"
+default_model = "xopqwen35v35b"
+
+# Optional. Omit or leave empty to disable CORS (use a reverse proxy instead).
+# Use ["*"] for development, or list exact origins for production.
+cors_allowed_origins = ["http://localhost:3000"]
+
+[[providers]]
+name = "xfyun-maas"
+base_url = "https://maas-coding-api.cn-huabei-1.xf-yun.com/v2"
+api_key = "replace-with-xfyun-maas-key"
+
+[[providers.models]]
+id = "xsparkx2flash"
+name = "Spark-X2-Flash"
+context_length = 262144
+
+[[providers.models]]
+id = "xopqwen36v35b"
+name = "Qwen3.6-35B-A3B"
+context_length = 131072
+
+[[providers.models]]
+id = "xopqwen35v35b"
+name = "Qwen3.5-35B-A3B"
+context_length = 131072
+
+[[providers.models]]
+id = "xop3qwencodernext"
+name = "Qwen3-Coder-Next-FP8"
+context_length = 262144
+
+[[providers.models]]
+id = "xopglmv47flash"
+name = "GLM-4.7-Flash"
+context_length = 131072
+
+# Additional OpenAI-compatible providers can be added like this:
+#
+# [[providers]]
+# name = "openrouter"
+# base_url = "https://openrouter.ai/api/v1"
+# api_key = "replace-with-openrouter-key"
+#
+# [[providers.models]]
+# id = "openai/gpt-4o-mini"
+# name = "GPT-4o Mini via OpenRouter"
+# context_length = 128000

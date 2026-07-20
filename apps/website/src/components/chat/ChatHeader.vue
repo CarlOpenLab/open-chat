@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import { DeleteOutlined, DownloadOutlined, UploadOutlined } from "@antdv-next/icons";
+import { DeleteOutlined, DownloadOutlined, MenuOutlined, UploadOutlined } from "@antdv-next/icons";
 import { Tooltip } from "antdv-next";
+
+interface Props {
+  title: string;
+}
 
 interface Emits {
   (e: "toggleSidebar"): void;
@@ -9,6 +13,7 @@ interface Emits {
   (e: "importLocalHistory", file: File): void;
 }
 
+defineProps<Props>();
 const emit = defineEmits<Emits>();
 
 const handleImportChange = (event: Event) => {
@@ -21,26 +26,25 @@ const handleImportChange = (event: Event) => {
 </script>
 
 <template>
-  <div class="chat-header">
-    <button class="menu-toggle" @click="emit('toggleSidebar')">
-      <svg
-        width="20"
-        height="20"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
+  <header class="chat-header">
+    <div class="header-left">
+      <button
+        class="icon-button menu-toggle"
+        type="button"
+        aria-label="切换对话侧栏"
+        @click="emit('toggleSidebar')"
       >
-        <line x1="3" y1="6" x2="21" y2="6"></line>
-        <line x1="3" y1="12" x2="21" y2="12"></line>
-        <line x1="3" y1="18" x2="21" y2="18"></line>
-      </svg>
-    </button>
-    <h1>AI Chat</h1>
-    <div class="header-actions">
+        <MenuOutlined />
+      </button>
+      <div class="header-title">
+        <h1>{{ title }}</h1>
+      </div>
+    </div>
+
+    <div class="header-actions" aria-label="对话工具">
       <Tooltip title="导出日志">
         <button
-          class="header-btn icon-btn"
+          class="icon-button"
           type="button"
           aria-label="导出日志"
           @click="emit('exportLocalHistory')"
@@ -50,7 +54,7 @@ const handleImportChange = (event: Event) => {
       </Tooltip>
 
       <Tooltip title="导入日志">
-        <label class="header-btn icon-btn import-btn" aria-label="导入日志">
+        <label class="icon-button import-button" aria-label="导入日志">
           <UploadOutlined />
           <input
             class="import-input"
@@ -63,7 +67,7 @@ const handleImportChange = (event: Event) => {
 
       <Tooltip title="清空本地记录">
         <button
-          class="header-btn icon-btn danger-btn"
+          class="icon-button danger-button"
           type="button"
           aria-label="清空本地记录"
           @click="emit('clearLocalHistory')"
@@ -72,85 +76,82 @@ const handleImportChange = (event: Event) => {
         </button>
       </Tooltip>
     </div>
-  </div>
+  </header>
 </template>
 
 <style scoped>
 .chat-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--brand-gray-100);
-  background: var(--brand-white);
+  justify-content: space-between;
+  min-height: 64px;
+  padding: 10px var(--chat-gutter);
+  background: var(--brand-workspace);
 }
 
-.menu-toggle {
+.header-left,
+.header-actions {
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 8px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  border-radius: 8px;
-  color: var(--brand-gray-500);
-  transition: background 0.2s;
 }
 
-.menu-toggle:hover {
-  background: var(--brand-gray-100);
-}
-
-.chat-header h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--brand-gray-900);
+.header-left {
+  gap: 10px;
+  min-width: 0;
 }
 
 .header-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
-.header-btn {
-  border: none;
-  background: transparent;
-  color: var(--brand-gray-500);
-  font-size: 13px;
-  line-height: 1;
-  border-radius: 6px;
-  padding: 8px 10px;
-  cursor: pointer;
-  transition: background 0.2s ease;
-}
-
-.header-btn:hover {
-  background: var(--brand-gray-100);
-}
-
-.icon-btn {
-  width: 34px;
-  height: 34px;
-  padding: 0;
+.icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--brand-muted-strong);
+  cursor: pointer;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
 }
 
-.danger-btn {
-  color: #ff4d4f;
+.icon-button:hover {
+  border-color: var(--brand-border);
+  background: var(--brand-surface);
+  color: var(--brand-foreground);
 }
 
-.danger-btn:hover {
-  background: #fff1f0;
+.icon-button:active {
+  background: var(--brand-surface-subtle);
+  transform: scale(0.97);
 }
 
-.import-btn {
+.header-title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.header-title h1 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--brand-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.import-button {
   position: relative;
 }
 
@@ -162,5 +163,23 @@ const handleImportChange = (event: Event) => {
   clip: rect(0, 0, 0, 0);
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+.danger-button:hover {
+  border-color: #fecaca;
+  background: var(--brand-danger-subtle);
+  color: var(--brand-danger);
+}
+
+@media (max-width: 767px) {
+  .chat-header {
+    min-height: 56px;
+    padding-inline: 10px;
+  }
+
+  .icon-button {
+    width: 42px;
+    height: 42px;
+  }
 }
 </style>

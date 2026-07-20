@@ -6,15 +6,6 @@ settings:
 
 catalogs:
   default:
-    '@antdv-next/icons':
-      specifier: ^1.0.5
-      version: 1.0.5
-    '@antdv-next/x':
-      specifier: ^0.3.0
-      version: 0.3.0
-    '@antdv-next/x-markdown':
-      specifier: ^0.0.2
-      version: 0.0.2
     '@antdv-next/x-sdk':
       specifier: ^0.0.2
       version: 0.0.2
@@ -27,30 +18,18 @@ catalogs:
     '@types/node':
       specifier: ^24.12.0
       version: 24.12.0
-    antdv-next:
-      specifier: 1.1.7
-      version: 1.1.7
     cors:
       specifier: ^2.8.6
       version: 2.8.6
-    dotenv:
-      specifier: ^17.3.1
-      version: 17.3.1
     express:
       specifier: ^5.2.1
       version: 5.2.1
-    install:
-      specifier: ^0.13.0
-      version: 0.13.0
+    smol-toml:
+      specifier: ^1.7.0
+      version: 1.7.0
     typescript:
       specifier: ^5
       version: 5.9.3
-    unocss:
-      specifier: ^66.6.7
-      version: 66.6.7
-    vite-plus:
-      specifier: latest
-      version: 0.1.14
     vue:
       specifier: ^3.5.31
       version: 3.5.31
@@ -103,12 +82,12 @@ importers:
       cors:
         specifier: 'catalog:'
         version: 2.8.6
-      dotenv:
-        specifier: 'catalog:'
-        version: 17.3.1
       express:
         specifier: 'catalog:'
         version: 5.2.1
+      smol-toml:
+        specifier: 'catalog:'
+        version: 1.7.0
       vue:
         specifier: 'catalog:'
         version: 3.5.31(typescript@5.9.3)
@@ -2639,6 +2618,10 @@ packages:
   sirv@3.0.2:
     resolution: {integrity: sha512-2wcC/oGxHis/BoHkkPwldgiPSYcpZK3JU28WoMVv55yHJgcZ8rlXvuG9iZggz+sU1d4bRgIGASwyWqjxu3FM0g==}
     engines: {node: '>=18'}
+
+  smol-toml@1.7.0:
+    resolution: {integrity: sha512-aqVvWoyO21L23mb+drl4RmMXbf6N7FdHjAhTRA9ZBL7apWBgfWC16KjrASI+1p9GAroljyMHj6fK67i0UiTNvQ==}
+    engines: {node: '>= 18'}
 
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
@@ -5450,6 +5433,8 @@ snapshots:
       '@polka/url': 1.0.0-next.29
       mrmime: 2.0.1
       totalist: 3.0.1
+
+  smol-toml@1.7.0: {}
 
   source-map-js@1.2.1: {}
 

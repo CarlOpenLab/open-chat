@@ -1,188 +1,197 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
-import { createServer } from "http";
-import type { Request, Response } from "express";
+import { createServer } from "node:http";
+import type { NextFunction, Request, Response } from "express";
+import {
+  loadConfigFile,
+  parseBindAddr,
+  type AppConfig,
+  type ModelConfig,
+  type ProviderConfig,
+} from "./config";
+import { GatewayError } from "./error";
+import type { ChatCompletionRequest } from "./provider";
+import { ProviderRegistry } from "./registry";
 
-dotenv.config();
+const DEFAULT_CONFIG_PATH = "config/providers.toml";
 
-const app = express();
-const PORT = process.env.PORT || 3001;
-const HOST = process.env.HOST || "localhost";
+function resolveConfigPath(): string {
+  return process.env.CONFIG_PATH ?? process.argv[2] ?? DEFAULT_CONFIG_PATH;
+}
 
-// AI Provider 配置
-const AI_PROVIDERS = {
-  qwen: {
-    baseURL: process.env.QWEN_BASE_URL,
-    apiKey: process.env.QWEN_API_KEY,
-    defaultModel: "qwen-plus",
-  },
-  openai: {
-    baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
-    apiKey: process.env.OPENAI_API_KEY,
-    defaultModel: process.env.OPENAI_DEFAULT_MODEL,
-    forceModel: process.env.OPENAI_FORCE_MODEL,
-  },
-};
+function main(): void {
+  const configPath = resolveConfigPath();
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Health check endpoint
-app.get("/health", (req: Request, res: Response) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
-
-// 获取当前配置的 AI 提供商
-function getAiProvider(provider?: string) {
-  // 优先使用 Qwen，如果没有配置则使用 OpenAI
-  if (!provider) {
-    if (AI_PROVIDERS.qwen.apiKey) {
-      provider = "qwen";
-    } else if (AI_PROVIDERS.openai.apiKey) {
-      provider = "openai";
+  let config: AppConfig;
+  let registry: ProviderRegistry;
+  try {
+    config = loadConfigFile(configPath);
+    registry = ProviderRegistry.fromConfig(config);
+  } catch (err) {
+    if (err instanceof GatewayError) {
+      console.error(`Failed to load config from ${configPath}: ${err.message}`);
     } else {
-      return null;
+      console.error(`Failed to load config from ${configPath}:`, err);
     }
+    process.exit(1);
   }
 
-  const config = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
-  if (!config || !config.apiKey) {
-    return null;
+  const app = express();
+  app.use(cors(buildCorsOptions(config.corsAllowedOrigins)));
+  app.use(express.json());
+
+  if (config.gatewayApiKey) {
+    app.use(gatewayAuthMiddleware(config.gatewayApiKey));
   }
 
+  app.get("/health", (_req: Request, res: Response) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  app.get("/api/models", (_req: Request, res: Response) => {
+    res.json(buildModelsResponse(config));
+  });
+
+  app.post("/api/chat/completions", async (req: Request, res: Response) => {
+    try {
+      const body = req.body as ChatCompletionRequest;
+      if (!body || !Array.isArray(body.messages)) {
+        throw GatewayError.invalidRequest("messages array is required");
+      }
+      if (body.messages.length === 0) {
+        throw GatewayError.invalidRequest("messages must not be empty");
+      }
+
+      const route = registry.resolveModel(body.model);
+      const stream = body.stream === true;
+
+      if (stream) {
+        const upstream = await route.provider.chatStream(body, route.model);
+        await pipeSseStream(req, res, upstream);
+      } else {
+        const data = await route.provider.chat(body, route.model);
+        res.json(data);
+      }
+    } catch (err) {
+      if (err instanceof GatewayError) {
+        return sendGatewayError(res, err);
+      }
+      console.error("Chat API error:", err);
+      return sendGatewayError(
+        res,
+        GatewayError.upstream(err instanceof Error ? err.message : "Internal server error"),
+      );
+    }
+  });
+
+  const { host, port } = parseBindAddr(config.bindAddr);
+  const server = createServer(app);
+  server.listen(port, host, () => {
+    console.log(`Server running at http://${host}:${port}`);
+    console.log(`Config:      ${configPath}`);
+    console.log(`Health:      http://${host}:${port}/health`);
+    console.log(`Models:      http://${host}:${port}/api/models`);
+    console.log(`Chat:        http://${host}:${port}/api/chat/completions`);
+    console.log(`Gateway auth: ${config.gatewayApiKey ? "enabled" : "disabled"}`);
+    console.log(`Providers:   ${config.providers.map((p) => p.name).join(", ")}`);
+  });
+
+  process.on("SIGTERM", () => {
+    server.close(() => {
+      console.log("Server closed");
+      process.exit(0);
+    });
+  });
+}
+
+function buildCorsOptions(origins: string[]): cors.CorsOptions {
+  const hasWildcard = origins.some((origin) => origin.trim() === "*");
   return {
-    name: provider,
-    ...config,
+    origin: hasWildcard ? "*" : origins.length > 0 ? origins : false,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Authorization", "Content-Type"],
   };
 }
 
-// Chat API endpoint - OpenAI 兼容格式
-app.post("/api/chat/completions", async (req: Request, res: Response) => {
+function gatewayAuthMiddleware(apiKey: string) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const header = req.header("authorization");
+    if (!header || !header.startsWith("Bearer ")) {
+      return sendGatewayError(res, GatewayError.unauthorized());
+    }
+    const token = header.slice("Bearer ".length).trim();
+    if (token !== apiKey) {
+      return sendGatewayError(res, GatewayError.unauthorized());
+    }
+    next();
+  };
+}
+
+function buildModelsResponse(config: AppConfig): {
+  defaultModel: string;
+  providers: {
+    name: string;
+    models: ModelConfig[];
+  }[];
+} {
+  return {
+    defaultModel: config.defaultModel,
+    providers: config.providers.map((provider: ProviderConfig) => ({
+      name: provider.name,
+      models: provider.models,
+    })),
+  };
+}
+
+async function pipeSseStream(
+  req: Request,
+  res: Response,
+  upstream: ReadableStream<Uint8Array>,
+): Promise<void> {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  const reader = upstream.getReader();
+  const decoder = new TextDecoder();
+  let sawDone = false;
+  let clientClosed = false;
+
+  const onClose = () => {
+    clientClosed = true;
+    reader.cancel().catch(() => {});
+  };
+  req.on("close", onClose);
+
   try {
-    const { messages, stream = false, model, provider, ...otherParams } = req.body;
+    while (!clientClosed) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
 
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({
-        error: {
-          message: "messages array is required",
-          type: "invalid_request_error",
-        },
-      });
+      const text = decoder.decode(value, { stream: true });
+      if (text.includes("data: [DONE]")) sawDone = true;
+      res.write(Buffer.from(value));
     }
-
-    const aiProvider = getAiProvider(provider);
-
-    if (!aiProvider) {
-      return res.status(500).json({
-        error: {
-          message:
-            "No AI provider configured. Please set QWEN_API_KEY or OPENAI_API_KEY in environment variables.",
-          type: "server_error",
-        },
-      });
+  } catch (err) {
+    console.error("Stream read error:", err);
+  } finally {
+    req.off("close", onClose);
+    try {
+      reader.releaseLock();
+    } catch {
+      // reader already released/cancelled
     }
-
-    const selectedModel = (aiProvider as any).forceModel || model || aiProvider.defaultModel;
-    console.log("selectedModel", selectedModel);
-    console.log(`Using AI provider: ${aiProvider.name}, model: ${selectedModel}`);
-
-    // Forward request to AI provider
-    const response = await fetch(`${aiProvider.baseURL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${aiProvider.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: selectedModel,
-        messages,
-        stream,
-        ...otherParams,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error(`AI provider error: ${errorData}`);
-      throw new Error(`AI provider responded with status ${response.status}: ${errorData}`);
+    if (!clientClosed && !sawDone) {
+      res.write("data: [DONE]\n\n");
     }
-
-    if (stream) {
-      // Handle streaming response
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error("No response body");
-      }
-
-      const decoder = new TextDecoder();
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value);
-          res.write(chunk);
-        }
-      } finally {
-        reader.releaseLock();
-        res.end();
-      }
-    } else {
-      // Handle non-streaming response
-      const data = await response.json();
-      res.json(data);
-    }
-  } catch (error) {
-    console.error("Chat API error:", error);
-    res.status(500).json({
-      error: {
-        message: error instanceof Error ? error.message : "Internal server error",
-        type: "server_error",
-      },
-    });
+    res.end();
   }
-});
+}
 
-// 获取支持的模型列表
-app.get("/api/models", (req: Request, res: Response) => {
-  const providers = [];
+function sendGatewayError(res: Response, err: GatewayError): void {
+  res.status(err.status).json(err.toResponse());
+}
 
-  // if (AI_PROVIDERS.qwen.apiKey) {
-  //   providers.push({
-  //     name: "qwen",
-  //     models: ["qwen-turbo", "qwen-plus", "qwen-max", "qwen-max-longcontext"],
-  //   });
-  // }
-
-  if (AI_PROVIDERS.openai.apiKey) {
-    providers.push({
-      name: "openai",
-      models: ["Qwen3.5-35B-A3B"],
-    });
-  }
-
-  res.json({ providers });
-});
-
-// Start server
-const server = createServer(app);
-
-server.listen(Number(PORT), HOST, () => {
-  console.log(`Server running at http://${HOST}:${PORT}`);
-  console.log(`Health check: http://${HOST}:${PORT}/health`);
-  console.log(`Chat API: http://${HOST}:${PORT}/api/chat/completions`);
-});
-
-process.on("SIGTERM", () => {
-  server.close(() => {
-    console.log("Server closed");
-    process.exit(0);
-  });
-});
+main();

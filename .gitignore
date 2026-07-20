@@ -28,3 +28,6 @@ dist-ssr
 .qwen
 .env
 .env.*
+
+# Local provider config (contains secrets)
+apps/server/config/providers.toml

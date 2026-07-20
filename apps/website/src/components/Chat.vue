@@ -14,7 +14,7 @@ import { DeepSeekChatProvider, XRequest, useXChat } from "@antdv-next/x-sdk";
 import { Button, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, ref, watch, defineComponent, h, onMounted, onBeforeUnmount } from "vue";
 import type { Component, VNode } from "vue";
-import { aiService, type ModelInfo } from "../services/ai";
+import { aiService, API_BASE_URL, GATEWAY_API_KEY, type ModelsProvider } from "../services/ai";
 import {
   clearChatState,
   loadChatState,
@@ -142,15 +142,14 @@ const renderMarkdown = (value: string) =>
 
 // ============ 常量定义 ============
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
-
 // ============ 响应式状态 ============
 
-const models = ref<ModelInfo[]>([]);
+const models = ref<ModelsProvider[]>([]);
+const defaultModelId = ref("");
 const content = ref("");
 const conversationsOpen = ref(true);
 const currentConversationKey = ref<string>("");
-const currentModel = ref("Qwen3.5-35B-A3B");
+const currentModel = ref("");
 const thinkingEnabled = ref(true);
 const showWelcome = ref(true);
 const isHydrating = ref(true);
@@ -168,7 +167,6 @@ const getMessagePreview = (content: string, maxLength: number = 20): string => {
 const createNewConversation = (): ConversationItemType => ({
   key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   label: "新对话",
-  icon: "💬",
   group: "今天",
   messages: [],
 });
@@ -186,7 +184,6 @@ const toPersistedConversations = (list: ConversationItemType[]): PersistedConver
         typeof conversation.label === "string" && conversation.label.trim()
           ? conversation.label
           : "新对话";
-      const normalizedIcon = typeof conversation.icon === "string" ? conversation.icon : "💬";
       const normalizedGroup = typeof conversation.group === "string" ? conversation.group : "今天";
 
       const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
@@ -206,7 +203,6 @@ const toPersistedConversations = (list: ConversationItemType[]): PersistedConver
       return {
         key: String(conversation.key),
         label: normalizedLabel,
-        icon: normalizedIcon,
         group: normalizedGroup,
         messages: normalizedMessages,
       };
@@ -215,21 +211,32 @@ const toPersistedConversations = (list: ConversationItemType[]): PersistedConver
 
 // ============ 计算属性 ============
 
-const modelOptions = computed(() => {
-  return models.value.flatMap((p) =>
-    p.models.map((m) => ({
-      label: m,
-      value: m,
-    })),
-  );
+const allModelIds = computed(() =>
+  models.value.flatMap((provider) => provider.models.map((model) => model.id)),
+);
+
+const modelById = computed<Record<string, { id: string; name: string; provider: string }>>(() => {
+  const map: Record<string, { id: string; name: string; provider: string }> = {};
+  for (const provider of models.value) {
+    for (const model of provider.models) {
+      map[model.id] = {
+        id: model.id,
+        name: model.name || model.id,
+        provider: provider.name,
+      };
+    }
+  }
+  return map;
 });
 
-const modelProviderMap = computed<Record<string, string>>(() => {
-  const entries = models.value.flatMap((providerInfo) =>
-    providerInfo.models.map((modelName) => [modelName, providerInfo.name] as const),
-  );
-  return Object.fromEntries(entries);
-});
+const modelOptions = computed(() =>
+  models.value.flatMap((provider) =>
+    provider.models.map((model) => ({
+      label: model.name || model.id,
+      value: model.id,
+    })),
+  ),
+);
 
 const modelDropdownItems = computed<MenuProps["items"]>(() => {
   return modelOptions.value.map((opt) => ({
@@ -238,6 +245,17 @@ const modelDropdownItems = computed<MenuProps["items"]>(() => {
   }));
 });
 
+const currentModelLabel = computed(
+  () => modelById.value[currentModel.value]?.name || currentModel.value || "选择模型",
+);
+
+function reconcileCurrentModel() {
+  if (allModelIds.value.length === 0) return;
+  if (!currentModel.value || !allModelIds.value.includes(currentModel.value)) {
+    currentModel.value = defaultModelId.value || allModelIds.value[0];
+  }
+}
+
 // ============ 对话管理 ============
 
 const getCurrentConversation = (): ConversationItemType | undefined => {
@@ -245,6 +263,12 @@ const getCurrentConversation = (): ConversationItemType | undefined => {
 };
 
 const isInDraftMode = computed(() => !currentConversationKey.value);
+const currentConversationTitle = computed(() => {
+  const conversation = getCurrentConversation();
+  return typeof conversation?.label === "string" && conversation.label.trim()
+    ? conversation.label
+    : "新对话";
+});
 const currentConversationMessages = computed<DefaultMessageInfo<XModelMessage>[]>(() => {
   const conv = getCurrentConversation();
   return conv?.messages ?? [];
@@ -291,10 +315,17 @@ const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
   if (conv) {
     showWelcome.value = conv.messages.length === 0;
   }
+  if (window.matchMedia("(max-width: 767px)").matches) {
+    closeSidebar();
+  }
 };
 
 const handleSidebarToggle = () => {
   conversationsOpen.value = !conversationsOpen.value;
+};
+
+const closeSidebar = () => {
+  conversationsOpen.value = false;
 };
 
 const resetToDraftConversation = () => {
@@ -322,6 +353,7 @@ const applyPersistedState = (persistedState: PersistedChatState) => {
     };
   });
   currentModel.value = persistedState.currentModel;
+  reconcileCurrentModel();
 
   // 导入后保持草稿态，历史会话保留在侧栏供手动打开
   currentConversationKey.value = "";
@@ -422,6 +454,8 @@ const loadModels = async () => {
   try {
     const data = await aiService.getModels();
     models.value = data.providers;
+    defaultModelId.value = data.defaultModel;
+    reconcileCurrentModel();
   } catch (e) {
     console.error("Failed to load models:", e);
   }
@@ -431,34 +465,30 @@ loadModels();
 
 // ============ XChat 配置 ============
 
-const resolveProviderByModel = (model: string): string => {
-  return modelProviderMap.value[model] || models.value[0]?.name || "openai";
-};
-
-const createProvider = (model: string) => {
-  const providerName = resolveProviderByModel(model);
-
+const createProvider = () => {
   return new DeepSeekChatProvider({
     request: XRequest<XModelParams, XModelResponse>(`${API_BASE_URL}/api/chat/completions`, {
       manual: true,
-      params: { model, provider: providerName, stream: true } as XModelParams,
+      params: { stream: true } as XModelParams,
+      headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
       streamTimeout: 60000,
     }),
   });
 };
 
-let provider = createProvider(currentModel.value);
+const provider = createProvider();
 
 const getInitialMessages = (): DefaultMessageInfo<XModelMessage>[] => {
   const conv = getCurrentConversation();
   return conv?.messages || [];
 };
 
-// 监听模型变化，重新创建 provider
-watch(currentModel, (newModel) => {
-  provider = createProvider(newModel);
+// 监听模型变化，持久化选择（model 通过 onRequest 按请求传入，无需重建 provider）
+watch(currentModel, () => {
   schedulePersistState();
 });
+
+watch(models, () => reconcileCurrentModel());
 
 const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useXChat<
   XModelMessage,
@@ -552,6 +582,10 @@ watch(
 );
 
 onMounted(async () => {
+  if (window.matchMedia("(max-width: 767px)").matches) {
+    conversationsOpen.value = false;
+  }
+
   const persistedState = await loadChatState();
 
   if (persistedState && persistedState.conversationList.length > 0) {
@@ -682,6 +716,7 @@ const handleSubmit = (nextContent: string) => {
   showWelcome.value = false;
   onRequest({
     messages: [{ role: "user", content: nextContent }],
+    model: currentModel.value,
     // Qwen(DashScope/OpenAI Compatible) 深度思考参数
     enable_thinking: thinkingEnabled.value,
     // 兼容部分 OpenAI-like 网关的思考参数
@@ -703,12 +738,20 @@ const handleThinkingChange = (value: boolean) => {
 
 const handleReloadMessage = (messageId: string | number) => {
   setMessages(currentConversationMessages.value);
-  onReload(messageId, { userAction: "retry" });
+  onReload(messageId, { model: currentModel.value });
 };
 </script>
 
 <template>
   <div class="chat-layout">
+    <a class="skip-link" href="#chat-content">跳到消息内容</a>
+    <button
+      v-if="conversationsOpen"
+      class="sidebar-backdrop"
+      type="button"
+      aria-label="关闭对话侧栏"
+      @click="closeSidebar"
+    ></button>
     <!-- 左侧边栏 - 对话列表 -->
     <ChatSidebar
       :open="conversationsOpen"
@@ -722,6 +765,7 @@ const handleReloadMessage = (messageId: string | number) => {
     <div class="chat-main">
       <!-- 头部 -->
       <ChatHeader
+        :title="currentConversationTitle"
         @toggle-sidebar="handleSidebarToggle"
         @export-local-history="handleExportLocalHistory"
         @import-local-history="handleImportLocalHistory"
@@ -741,6 +785,7 @@ const handleReloadMessage = (messageId: string | number) => {
         v-model="content"
         :loading="isRequesting"
         :current-model="currentModel"
+        :current-model-label="currentModelLabel"
         :thinking-enabled="thinkingEnabled"
         :model-items="modelDropdownItems ?? []"
         @change="handleChange"
@@ -755,22 +800,51 @@ const handleReloadMessage = (messageId: string | number) => {
 
 <style scoped>
 .chat-layout {
+  position: relative;
   display: flex;
+  min-height: 100dvh;
   height: 100vh;
-  background: var(--brand-white);
-  color: var(--brand-gray-900);
+  overflow: hidden;
+  background: var(--brand-background);
+  color: var(--brand-foreground);
+}
+
+.chat-layout::selection {
+  background: var(--brand-surface-subtle);
+  color: var(--brand-foreground);
+}
+
+.sidebar-backdrop {
+  display: none;
 }
 
 .chat-main {
-  flex: 1;
   display: flex;
+  min-width: 0;
+  flex: 1;
   flex-direction: column;
   overflow: hidden;
+  background: var(--brand-workspace);
 }
 
 .chat-main :deep(.assistant-content-stack) {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+@media (max-width: 767px) {
+  .sidebar-backdrop {
+    position: absolute;
+    z-index: var(--z-backdrop);
+    inset: 0;
+    display: block;
+    border: 0;
+    background: rgba(9, 9, 11, 0.4);
+  }
+
+  .chat-main {
+    width: 100%;
+  }
 }
 </style>

@@ -5,22 +5,36 @@ export interface ChatMessage {
 
 export interface ChatOptions {
   model?: string;
-  provider?: "qwen" | "openai";
   stream?: boolean;
   temperature?: number;
   maxTokens?: number;
 }
 
 export interface ModelInfo {
+  id: string;
+  name?: string;
+  contextLength?: number;
+}
+
+export interface ModelsProvider {
   name: string;
-  models: string[];
+  models: ModelInfo[];
 }
 
 export interface ModelsResponse {
-  providers: ModelInfo[];
+  defaultModel: string;
+  providers: ModelsProvider[];
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+/**
+ * Base URL for gateway requests. Defaults to a relative path so that, in dev,
+ * requests go through the Vite proxy (`/api` -> http://localhost:8082) and avoid
+ * CORS. Set `VITE_API_URL` to target the gateway directly when needed.
+ */
+export const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+
+/** Optional gateway bearer token (only required when the gateway enables auth). */
+export const GATEWAY_API_KEY = import.meta.env.VITE_GATEWAY_API_KEY || "";
 
 export const aiService = {
   /**

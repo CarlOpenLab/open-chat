@@ -17,6 +17,7 @@ catalog:
   dotenv: ^17.3.1
   express: ^5.2.1
   install: ^0.13.0
+  smol-toml: ^1.7.0
   typescript: ^5
   unocss: ^66.6.7
   vite: npm:@voidzero-dev/vite-plus-core@latest

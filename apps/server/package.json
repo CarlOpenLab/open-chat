@@ -11,8 +11,8 @@
   "dependencies": {
     "@antdv-next/x-sdk": "catalog:",
     "cors": "catalog:",
-    "dotenv": "catalog:",
     "express": "catalog:",
+    "smol-toml": "catalog:",
     "vue": "catalog:"
   },
   "devDependencies": {
