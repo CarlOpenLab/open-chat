@@ -17,7 +17,7 @@ import {
   Zap,
 } from "@lucide/vue";
 import { Button, Popover, Tooltip, message } from "antdv-next";
-import { computed, h, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 interface Props {
   open: boolean;
@@ -41,15 +41,13 @@ const accountOpen = ref(false);
 
 const filteredConversations = computed(() => {
   const query = search.value.trim().toLocaleLowerCase();
-  return props.conversationList
-    .filter((item) =>
-      query
-        ? String(item.label ?? "")
-            .toLocaleLowerCase()
-            .includes(query)
-        : true,
-    )
-    .map((item) => ({ ...item, icon: h(MessageSquare) }));
+  return props.conversationList.filter((item) =>
+    query
+      ? String(item.label ?? "")
+          .toLocaleLowerCase()
+          .includes(query)
+      : true,
+  );
 });
 
 const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
@@ -127,17 +125,20 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
     </div>
 
     <div class="conversation-scroll">
-      <Conversations
-        :items="filteredConversations"
-        :active-key="currentKey"
-        :groupable="true"
-        @active-change="handleActiveChange"
-      />
       <div v-if="search && filteredConversations.length === 0" class="search-empty">
         <Search />
         <strong>没有匹配的对话</strong>
         <span>换个关键词试试</span>
       </div>
+      <Conversations
+        v-else
+        :items="filteredConversations"
+        :active-key="currentKey"
+        :groupable="true"
+        @active-change="handleActiveChange"
+      >
+        <template #iconRender><MessageSquare /></template>
+      </Conversations>
     </div>
 
     <footer class="sidebar-footer">

@@ -23,6 +23,7 @@
     "cors": "catalog:",
     "dotenv": "catalog:",
     "express": "catalog:",
+    "sass-embedded": "catalog:",
     "vite-plus": "catalog:"
   },
   "engines": {

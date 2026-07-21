@@ -495,22 +495,6 @@ onBeforeUnmount(() => {
   overflow: hidden;
   padding: 138px 24px 72px;
 }
-.hero::before,
-.hero::after {
-  position: absolute;
-  top: 64px;
-  bottom: 0;
-  width: 1px;
-  background: var(--border);
-  content: "";
-  pointer-events: none;
-}
-.hero::before {
-  left: max(24px, calc(50% - 620px));
-}
-.hero::after {
-  right: max(24px, calc(50% - 620px));
-}
 .hero-copy {
   position: relative;
   z-index: 1;

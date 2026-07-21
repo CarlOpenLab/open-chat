@@ -1,20 +1,11 @@
 <script setup lang="ts">
-import type {
-  BubbleItemType,
-  BubbleListProps,
-  ConversationItemType,
-  ConversationsProps,
-} from "@antdv-next/x";
+import type { BubbleItemType, ConversationItemType, ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelParams, XModelResponse } from "@antdv-next/x-sdk";
-import { SyncOutlined } from "@antdv-next/icons";
-import { CodeHighlighter, Mermaid, Think } from "@antdv-next/x";
-import { XMarkdown } from "@antdv-next/x-markdown";
 import { DeepSeekChatProvider, XRequest, useXChat } from "@antdv-next/x-sdk";
 import { Copy, Download, FileText, Link2, Plus, Trash2, X } from "@lucide/vue";
-import { Button, Input, Modal, Switch, Tooltip, message, type MenuProps } from "antdv-next";
-import { computed, ref, watch, defineComponent, h, onMounted, onBeforeUnmount } from "vue";
-import type { Component, VNode } from "vue";
+import { Button, Input, Modal, Switch, message, type MenuProps } from "antdv-next";
+import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { aiService, API_BASE_URL, GATEWAY_API_KEY, type ModelsProvider } from "../services/ai";
 import {
   clearChatState,
@@ -41,120 +32,6 @@ interface Emits {
 defineProps<Props>();
 const emit = defineEmits<Emits>();
 
-// ============ 工具函数 ============
-
-/**
- * 提取 VNode 中的文本内容
- */
-function extractText(nodes: VNode[]): string {
-  return nodes
-    .map((node) => {
-      const children = node.children;
-      if (typeof children === "string") return children;
-      if (Array.isArray(children)) return extractText(children as VNode[]);
-      return "";
-    })
-    .join("");
-}
-
-// ============ 自定义代码渲染组件 ============
-
-const CodeRenderer = defineComponent({
-  name: "CodeRenderer",
-  inheritAttrs: false,
-  setup(_, { attrs, slots }) {
-    const lang = computed(() => {
-      const dataLang = typeof attrs["data-lang"] === "string" ? attrs["data-lang"] : "";
-      const dataLangCamel = typeof attrs.dataLang === "string" ? attrs.dataLang : "";
-      const langAttr = typeof attrs.lang === "string" ? attrs.lang : "";
-      const className = typeof attrs.class === "string" ? attrs.class : "";
-      const classLang = className.match(/(?:^|\s)language-([^\s]+)/)?.[1] ?? "";
-      return dataLang || dataLangCamel || langAttr || classLang;
-    });
-
-    const isBlock = computed(() => {
-      const dataBlock = attrs["data-block"];
-      const dataBlockCamel = attrs.dataBlock;
-      const block = attrs.block;
-      return (
-        dataBlock === "true" ||
-        dataBlock === true ||
-        dataBlockCamel === "true" ||
-        dataBlockCamel === true ||
-        block === "true" ||
-        block === true
-      );
-    });
-
-    return () => {
-      const code = extractText(slots.default?.() ?? []);
-
-      if (!isBlock.value && !lang.value) {
-        return h("code", code);
-      }
-
-      if (lang.value === "mermaid") {
-        return h(Mermaid, { content: code });
-      }
-
-      return h(CodeHighlighter, {
-        content: code,
-        language: lang.value || "text",
-        showLineNumbers: true,
-        showLanguage: true,
-        showCopyButton: true,
-      });
-    };
-  },
-});
-
-const markdownComponents: Record<string, Component> = {
-  code: CodeRenderer,
-};
-
-interface ParsedThinkContent {
-  thinkContent: string;
-  answerContent: string;
-  thinkDone: boolean;
-}
-
-const parseThinkContent = (value: string): ParsedThinkContent | null => {
-  const openMatch = value.match(/<think(?:\s+status=["']?([^"'>\s]+)["']?)?>/i);
-  if (!openMatch || openMatch.index === undefined) {
-    return null;
-  }
-
-  const openTag = openMatch[0];
-  const status = (openMatch[1] || "").toLowerCase();
-  const thinkStart = openMatch.index + openTag.length;
-  const closeTag = "</think>";
-  const closeIndex = value.indexOf(closeTag, thinkStart);
-
-  const prefix = value.slice(0, openMatch.index).trim();
-  const thinkRaw =
-    closeIndex === -1 ? value.slice(thinkStart) : value.slice(thinkStart, closeIndex);
-  const suffix = closeIndex === -1 ? "" : value.slice(closeIndex + closeTag.length).trim();
-
-  const thinkContent = thinkRaw.replace(/^\n+/, "").trim();
-  const answerContent = [prefix, suffix].filter(Boolean).join("\n\n").trim();
-  const thinkDone = closeIndex !== -1 || status === "done";
-
-  return {
-    thinkContent,
-    answerContent,
-    thinkDone,
-  };
-};
-
-const renderMarkdown = (value: string) =>
-  h(XMarkdown, {
-    content: value,
-    components: markdownComponents,
-    className: "x-markdown-light",
-  });
-
-// ============ 常量定义 ============
-
 // ============ 响应式状态 ============
 
 const models = ref<ModelsProvider[]>([]);
@@ -171,8 +48,6 @@ const currentModel = ref("");
 const thinkingEnabled = ref(true);
 const showWelcome = ref(true);
 const isHydrating = ref(true);
-const thinkExpandedMap = ref<Record<string, boolean>>({});
-const thinkDoneMap = ref<Record<string, boolean>>({});
 const activeRequestConversationKey = ref<string>("");
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -545,46 +420,6 @@ watch(
   messages,
   (newMessages) => {
     const conversationWriteKey = activeRequestConversationKey.value || currentConversationKey.value;
-    const thinkNamespace = conversationWriteKey || "__draft__";
-
-    const nextExpandedMap: Record<string, boolean> = {};
-    const nextDoneMap: Record<string, boolean> = {};
-
-    newMessages.forEach(({ id, message }) => {
-      if (message.role !== "assistant" || typeof message.content !== "string") {
-        return;
-      }
-
-      const parsed = parseThinkContent(message.content);
-      if (!parsed) {
-        return;
-      }
-
-      const key = `${thinkNamespace}::${String(id)}`;
-      const prevDone = thinkDoneMap.value[key];
-      const prevExpanded = thinkExpandedMap.value[key];
-
-      nextDoneMap[key] = parsed.thinkDone;
-
-      if (prevExpanded === undefined) {
-        // 新思考消息：进行中默认展开，已完成默认收起
-        nextExpandedMap[key] = !parsed.thinkDone;
-        return;
-      }
-
-      if (prevDone === false && parsed.thinkDone) {
-        // 仅在“进行中 -> 已完成”这个瞬间自动收起，触发 Think 自带过渡动画
-        nextExpandedMap[key] = false;
-        return;
-      }
-
-      // 其他情况保留用户手动展开/收起状态
-      nextExpandedMap[key] = prevExpanded;
-    });
-
-    thinkExpandedMap.value = nextExpandedMap;
-    thinkDoneMap.value = nextDoneMap;
-
     updateConversationMessages(conversationWriteKey, newMessages);
     schedulePersistState();
   },
@@ -647,76 +482,8 @@ const bubbleItems = computed<BubbleItemType[]>(() =>
     status,
     loading: status === "loading",
     content: typeof message.content === "string" ? message.content : "",
-    footer:
-      // 仅在 AI 回复完整结束后（success）展示重试，避免流式中/异常态提前出现
-      message.role === "assistant" && status === "success"
-        ? () =>
-            h(
-              Tooltip,
-              { title: "重试" },
-              {
-                default: () => [
-                  h(Button, {
-                    size: "small",
-                    type: "text",
-                    icon: h(SyncOutlined),
-                    style: { marginInlineEnd: "auto" },
-                    onClick: () => handleReloadMessage(id),
-                  }),
-                ],
-              },
-            )
-        : undefined,
   })),
 );
-
-const roleConfig = computed<BubbleListProps["role"]>(() => ({
-  assistant: {
-    placement: "start" as const,
-    contentRender: (value: string, info) => {
-      const parsedThink = parseThinkContent(value);
-      if (!parsedThink) {
-        return renderMarkdown(value);
-      }
-
-      const nodes = [];
-
-      if (parsedThink.thinkContent) {
-        const thinkNamespace = currentConversationKey.value || "__draft__";
-        const thinkKey = `${thinkNamespace}::${String(info?.key ?? "")}`;
-        const expanded = thinkExpandedMap.value[thinkKey] ?? !parsedThink.thinkDone;
-
-        nodes.push(
-          h(
-            Think,
-            {
-              title: parsedThink.thinkDone ? "思考过程" : "思考中...",
-              loading: !parsedThink.thinkDone,
-              expanded,
-              blink: !parsedThink.thinkDone,
-              "onUpdate:expanded": (nextExpanded: boolean) => {
-                thinkExpandedMap.value = {
-                  ...thinkExpandedMap.value,
-                  [thinkKey]: nextExpanded,
-                };
-              },
-            },
-            {
-              default: () => renderMarkdown(parsedThink.thinkContent),
-            },
-          ),
-        );
-      }
-
-      if (parsedThink.answerContent) {
-        nodes.push(renderMarkdown(parsedThink.answerContent));
-      }
-
-      return h("div", { class: "assistant-content-stack" }, nodes);
-    },
-  },
-  user: { placement: "end" as const },
-}));
 
 // ============ 事件处理 ============
 
@@ -876,8 +643,8 @@ const copyShareLink = async () => {
       <ChatMessages
         :show-welcome="showWelcome && currentConversationMessages.length === 0"
         :bubble-items="bubbleItems"
-        :role-config="roleConfig"
-        @prompt-click="handlePromptClick"
+        :conversation-key="currentConversationKey"
+        @reload="handleReloadMessage"
       />
 
       <ChatInput
@@ -887,11 +654,13 @@ const copyShareLink = async () => {
         :current-model-label="currentModelLabel"
         :model-items="modelDropdownItems ?? []"
         :thinking-enabled="thinkingEnabled"
+        :show-starter-prompts="showWelcome && currentConversationMessages.length === 0"
         @change="handleChange"
         @cancel="abort"
         @submit="handleSubmit"
         @model-change="handleModelChange"
         @thinking-change="handleThinkingChange"
+        @prompt-click="handlePromptClick"
       />
     </div>
 
@@ -1044,12 +813,6 @@ const copyShareLink = async () => {
   flex-direction: column;
   overflow: hidden;
   background: var(--brand-workspace);
-}
-
-.chat-main :deep(.assistant-content-stack) {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
 .context-panel {

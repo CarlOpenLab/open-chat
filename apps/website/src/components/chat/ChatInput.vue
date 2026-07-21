@@ -1,18 +1,30 @@
 <script setup lang="ts">
-import { Sender } from "@antdv-next/x";
+import { Prompts, Sender, type PromptsItemType } from "@antdv-next/x";
 import {
   AudioLines,
   BrainCircuit,
   ChevronDown,
+  ClipboardList,
+  Code2,
   FileText,
   Globe2,
   PanelTop,
   Paperclip,
+  ScanText,
   SlidersHorizontal,
   Square,
   X,
 } from "@lucide/vue";
-import { Button, Dropdown, Popover, Switch, Tooltip, message, type MenuProps } from "antdv-next";
+import {
+  Badge,
+  Button,
+  Dropdown,
+  Popover,
+  Switch,
+  Tooltip,
+  message,
+  type MenuProps,
+} from "antdv-next";
 import { computed, ref } from "vue";
 
 interface Props {
@@ -22,6 +34,7 @@ interface Props {
   currentModelLabel?: string;
   modelItems: NonNullable<MenuProps["items"]>;
   thinkingEnabled: boolean;
+  showStarterPrompts: boolean;
 }
 
 interface Emits {
@@ -31,6 +44,7 @@ interface Emits {
   (e: "submit", value: string): void;
   (e: "modelChange", key: string): void;
   (e: "thinkingChange", value: boolean): void;
+  (e: "promptClick", info: { data: { description: string } }): void;
 }
 
 const props = defineProps<Props>();
@@ -41,6 +55,38 @@ const toolsOpen = ref(false);
 const searchEnabled = ref(false);
 const canvasEnabled = ref(false);
 const voiceActive = ref(false);
+
+// ============ 推荐提示词（深度思考位置） ============
+
+const starterPromptItems: PromptsItemType[] = [
+  {
+    key: "plan",
+    label: "整理工作计划",
+    description: "把目标拆成清晰的执行步骤",
+  },
+  {
+    key: "analyze",
+    label: "分析一份内容",
+    description: "提炼重点、模式和下一步",
+  },
+  {
+    key: "code",
+    label: "一起写代码",
+    description: "设计、解释或重构实现",
+  },
+];
+
+// 真实发送的提示词文本，按 key 查表，避免污染 Prompts 项的 DOM 属性
+const starterPromptText: Record<string, string> = {
+  plan: "帮我为下周的产品评审整理一份议程，包含目标、风险和待决策事项。",
+  analyze: "分析这份用户反馈，找出重复出现的问题，并按影响范围排序。",
+  code: "帮我设计一个 Vue 登录表单的状态结构，需要覆盖校验、加载和错误重试。",
+};
+
+const handlePromptItemClick = (info: { data: { key: string | number } }) => {
+  const prompt = starterPromptText[String(info.data.key)];
+  if (prompt) emit("promptClick", { data: { description: prompt } });
+};
 
 const modelMenu = computed<MenuProps>(() => ({
   items: props.modelItems,
@@ -99,10 +145,18 @@ const toggleVoice = () => {
       </div>
     </div>
 
-    <div v-if="activeTools.length" class="active-tools">
-      <span v-for="tool in activeTools" :key="tool.key"
-        ><component :is="tool.icon" />{{ tool.label }}</span
+    <div v-if="showStarterPrompts && !loading" class="starter-prompts">
+      <Prompts
+        :items="starterPromptItems"
+        class="starter-prompts-inner"
+        @item-click="handlePromptItemClick"
       >
+        <template #iconRender="{ item }">
+          <ClipboardList v-if="item.key === 'plan'" />
+          <ScanText v-else-if="item.key === 'analyze'" />
+          <Code2 v-else />
+        </template>
+      </Prompts>
     </div>
 
     <Sender
@@ -146,9 +200,16 @@ const toggleVoice = () => {
                 </div>
               </template>
               <Tooltip title="工具">
-                <Button type="text" shape="circle" aria-label="选择工具" :aria-expanded="toolsOpen"
-                  ><SlidersHorizontal
-                /></Button>
+                <Badge :count="activeTools.length" :offset="[-4, 4]" class="tools-badge">
+                  <Button
+                    type="text"
+                    shape="circle"
+                    aria-label="选择工具"
+                    :aria-expanded="toolsOpen"
+                    :class="{ 'tool-active': activeTools.length > 0 }"
+                    ><SlidersHorizontal
+                  /></Button>
+                </Badge>
               </Tooltip>
             </Popover>
           </div>
@@ -202,8 +263,7 @@ const toggleVoice = () => {
     var(--brand-workspace) 100%
   );
 }
-.attachment-preview,
-.active-tools {
+.attachment-preview {
   width: 100%;
   max-width: 780px;
   margin: 0 auto 7px;
@@ -269,26 +329,81 @@ const toggleVoice = () => {
   width: 13px;
   height: 13px;
 }
-.active-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.active-tools > span {
+/* 工具按钮角标：count=0 时自动隐藏 */
+.composer-tools :deep(.tools-badge) {
   display: inline-flex;
-  min-height: 27px;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
+}
+.composer-tools :deep(.tools-badge .ant-badge-count) {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--brand-primary);
+  color: var(--brand-primary-foreground);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 16px;
+}
+.starter-prompts {
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto 7px;
+}
+.starter-prompts :deep(.antd-prompts) {
+  width: 100%;
+}
+.starter-prompts :deep(.antd-prompts-list) {
+  gap: 8px;
+}
+.starter-prompts :deep(.antd-prompts-item) {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 60px;
+  padding: 10px 12px;
+  border: 1px solid var(--brand-border);
+  border-radius: 7px;
+  background: var(--brand-surface);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+.starter-prompts :deep(.antd-prompts-item:hover) {
+  background: var(--brand-surface-muted);
+  border-color: var(--brand-border-strong);
+}
+.starter-prompts :deep(.antd-prompts-item:active) {
+  background: var(--brand-surface-subtle);
+}
+.starter-prompts :deep(.antd-prompts-icon) {
+  display: grid;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  place-items: center;
   border: 1px solid var(--brand-border);
   border-radius: 5px;
-  background: var(--brand-surface);
+  background: var(--brand-surface-subtle);
+}
+.starter-prompts :deep(.antd-prompts-icon svg) {
+  width: 14px;
+  height: 14px;
+}
+.starter-prompts :deep(.antd-prompts-content) {
+  gap: 2px;
+}
+.starter-prompts :deep(.antd-prompts-label) {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brand-foreground);
+}
+.starter-prompts :deep(.antd-prompts-desc) {
+  overflow: hidden;
+  max-width: 100%;
   color: var(--brand-muted);
   font-size: 9px;
-}
-.active-tools :deep(svg) {
-  width: 12px;
-  height: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chat-footer :deep(.antd-sender) {
   width: 100%;
@@ -356,7 +471,8 @@ const toggleVoice = () => {
   color: var(--brand-muted);
 }
 .composer-tools :deep(.ant-btn:hover),
-.composer-tools :deep(.ant-btn[aria-expanded="true"]) {
+.composer-tools :deep(.ant-btn[aria-expanded="true"]),
+.composer-tools :deep(.ant-btn.tool-active) {
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
 }
@@ -562,6 +678,13 @@ const toggleVoice = () => {
   }
   .tools-menu {
     width: min(302px, calc(100vw - 20px));
+  }
+  .starter-prompts :deep(.antd-prompts-item) {
+    flex: 0 0 auto;
+    width: 196px;
+  }
+  .starter-prompts :deep(.antd-prompts-desc) {
+    white-space: normal;
   }
 }
 </style>

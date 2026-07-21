@@ -1,81 +1,201 @@
 <script setup lang="ts">
 import type { BubbleItemType, BubbleListProps } from "@antdv-next/x";
-import { BubbleList } from "@antdv-next/x";
-import { ArrowUpRight, ClipboardList, Code2, Mail, ScanText, Sparkles } from "@lucide/vue";
+import { BubbleList, Think, Welcome } from "@antdv-next/x";
+import { XMarkdown } from "@antdv-next/x-markdown";
+import { RotateCcw, Sparkles } from "@lucide/vue";
+import { Button, Tooltip } from "antdv-next";
+import { computed, ref, watch, type Component } from "vue";
+import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 
 interface Props {
   showWelcome: boolean;
   bubbleItems: BubbleItemType[];
-  roleConfig: BubbleListProps["role"];
+  conversationKey: string;
 }
 
 interface Emits {
-  (e: "promptClick", info: { data: { description: string } }): void;
+  (e: "reload", messageId: string | number): void;
 }
 
-defineProps<Props>();
-const emit = defineEmits<Emits>();
+interface ParsedThinkContent {
+  thinkContent: string;
+  answerContent: string;
+  thinkDone: boolean;
+}
 
-const prompts = [
-  {
-    title: "整理工作计划",
-    description: "把目标拆成清晰的执行步骤",
-    prompt: "帮我为下周的产品评审整理一份议程，包含目标、风险和待决策事项。",
-    icon: ClipboardList,
+const props = defineProps<Props>();
+const emit = defineEmits<Emits>();
+const thinkExpandedMap = ref<Record<string, boolean>>({});
+const thinkDoneMap = ref<Record<string, boolean>>({});
+
+const roleConfig: BubbleListProps["role"] = {
+  assistant: { placement: "start" },
+  user: { placement: "end" },
+};
+
+const markdownComponents: Record<string, Component> = {
+  code: MarkdownCodeRenderer,
+};
+
+const parseThinkContent = (value: string): ParsedThinkContent | null => {
+  const openMatch = value.match(/<think(?:\s+status=["']?([^"'>\s]+)["']?)?>/i);
+  if (!openMatch || openMatch.index === undefined) return null;
+
+  const status = (openMatch[1] || "").toLowerCase();
+  const thinkStart = openMatch.index + openMatch[0].length;
+  const closeTag = "</think>";
+  const closeIndex = value.indexOf(closeTag, thinkStart);
+  const prefix = value.slice(0, openMatch.index).trim();
+  const thinkRaw =
+    closeIndex === -1 ? value.slice(thinkStart) : value.slice(thinkStart, closeIndex);
+  const suffix = closeIndex === -1 ? "" : value.slice(closeIndex + closeTag.length).trim();
+
+  return {
+    thinkContent: thinkRaw.replace(/^\n+/, "").trim(),
+    answerContent: [prefix, suffix].filter(Boolean).join("\n\n").trim(),
+    thinkDone: closeIndex !== -1 || status === "done",
+  };
+};
+
+const displayItems = computed<BubbleItemType[]>(() =>
+  props.bubbleItems.map((item) => ({
+    ...item,
+    extraInfo: {
+      ...item.extraInfo,
+      parsedThink:
+        item.role === "assistant" && typeof item.content === "string"
+          ? parseThinkContent(item.content)
+          : null,
+    },
+  })),
+);
+
+const getThinkKey = (messageId: string | number) =>
+  `${props.conversationKey || "__draft__"}::${String(messageId)}`;
+
+const isThinkExpanded = (messageId: string | number, thinkDone: boolean) =>
+  thinkExpandedMap.value[getThinkKey(messageId)] ?? !thinkDone;
+
+const setThinkExpanded = (messageId: string | number, expanded: boolean) => {
+  thinkExpandedMap.value = {
+    ...thinkExpandedMap.value,
+    [getThinkKey(messageId)]: expanded,
+  };
+};
+
+watch(
+  displayItems,
+  (items) => {
+    const nextExpandedMap = { ...thinkExpandedMap.value };
+    const nextDoneMap = { ...thinkDoneMap.value };
+
+    items.forEach((item) => {
+      const parsed = item.extraInfo?.parsedThink as ParsedThinkContent | null;
+      if (!parsed) return;
+
+      const key = getThinkKey(item.key);
+      const previousDone = thinkDoneMap.value[key];
+      const previousExpanded = thinkExpandedMap.value[key];
+      nextDoneMap[key] = parsed.thinkDone;
+
+      if (previousExpanded === undefined) {
+        nextExpandedMap[key] = !parsed.thinkDone;
+      } else if (previousDone === false && parsed.thinkDone) {
+        nextExpandedMap[key] = false;
+      }
+    });
+
+    thinkExpandedMap.value = nextExpandedMap;
+    thinkDoneMap.value = nextDoneMap;
   },
-  {
-    title: "分析一份内容",
-    description: "提炼重点、模式和下一步",
-    prompt: "分析这份用户反馈，找出重复出现的问题，并按影响范围排序。",
-    icon: ScanText,
-  },
-  {
-    title: "一起写代码",
-    description: "设计、解释或重构实现",
-    prompt: "帮我设计一个 Vue 登录表单的状态结构，需要覆盖校验、加载和错误重试。",
-    icon: Code2,
-  },
-  {
-    title: "起草一份文本",
-    description: "快速得到结构清晰的初稿",
-    prompt: "帮我写一封项目延期说明邮件，语气坦诚、专业，并给出新的时间节点。",
-    icon: Mail,
-  },
-];
+  { immediate: true },
+);
 </script>
 
 <template>
-  <main id="chat-content" class="messages-wrapper" tabindex="-1">
-    <section v-if="showWelcome" class="empty-state" aria-labelledby="welcome-title">
-      <span class="empty-mark" aria-hidden="true"><Sparkles /></span>
-      <p>OPEN CHAT AI</p>
-      <h2 id="welcome-title">今天想一起完成什么？</h2>
-      <span class="empty-description">从一个问题开始，或者把正在处理的内容交给 Open Chat。</span>
-      <div class="starter-prompts" aria-label="推荐提示词">
-        <button
-          v-for="prompt in prompts"
-          :key="prompt.title"
-          type="button"
-          @click="emit('promptClick', { data: { description: prompt.prompt } })"
-        >
-          <span class="prompt-icon"><component :is="prompt.icon" /></span>
-          <span
-            ><strong>{{ prompt.title }}</strong
-            ><small>{{ prompt.description }}</small></span
-          >
-          <ArrowUpRight />
-        </button>
-      </div>
+  <main
+    id="chat-content"
+    class="messages-wrapper"
+    :class="{ 'is-empty': showWelcome }"
+    tabindex="-1"
+  >
+    <section v-if="showWelcome" class="empty-state">
+      <Welcome
+        class="welcome-hero"
+        variant="borderless"
+        title="今天想一起完成什么？"
+        description="从一个问题开始，或者把正在处理的内容交给 Open Chat。"
+      >
+        <template #icon><Sparkles /></template>
+      </Welcome>
     </section>
 
     <BubbleList
       v-else
       :style="{ height: '100%' }"
       :role="roleConfig"
-      :items="bubbleItems"
+      :items="displayItems"
       :auto-scroll="true"
       class="bubble-list"
-    />
+    >
+      <template #avatar="{ role }">
+        <span
+          class="message-avatar"
+          :class="`message-avatar-${role}`"
+          :title="role === 'assistant' ? 'Open Chat' : 'Carl Chen'"
+        >
+          <Sparkles v-if="role === 'assistant'" />
+          <span v-else>CC</span>
+        </span>
+      </template>
+
+      <template #contentRender="{ content, item }">
+        <div v-if="item.role === 'assistant'" class="assistant-content-stack">
+          <template v-if="item.extraInfo?.parsedThink">
+            <Think
+              v-if="item.extraInfo.parsedThink.thinkContent"
+              :title="item.extraInfo.parsedThink.thinkDone ? '思考过程' : '思考中...'"
+              :loading="!item.extraInfo.parsedThink.thinkDone"
+              :expanded="isThinkExpanded(item.key, item.extraInfo.parsedThink.thinkDone)"
+              :blink="!item.extraInfo.parsedThink.thinkDone"
+              @update:expanded="setThinkExpanded(item.key, $event)"
+            >
+              <XMarkdown
+                :content="item.extraInfo.parsedThink.thinkContent"
+                :components="markdownComponents"
+                class-name="x-markdown-light"
+              />
+            </Think>
+            <XMarkdown
+              v-if="item.extraInfo.parsedThink.answerContent"
+              :content="item.extraInfo.parsedThink.answerContent"
+              :components="markdownComponents"
+              class-name="x-markdown-light"
+            />
+          </template>
+          <XMarkdown
+            v-else
+            :content="String(content)"
+            :components="markdownComponents"
+            class-name="x-markdown-light"
+          />
+        </div>
+        <span v-else>{{ content }}</span>
+      </template>
+
+      <template #footer="{ item }">
+        <Tooltip v-if="item.role === 'assistant' && item.status === 'success'" title="重新生成">
+          <Button
+            size="small"
+            type="text"
+            aria-label="重新生成回答"
+            @click="emit('reload', item.key)"
+          >
+            <RotateCcw />
+          </Button>
+        </Tooltip>
+      </template>
+    </BubbleList>
   </main>
 </template>
 
@@ -87,111 +207,58 @@ const prompts = [
   padding: 38px max(28px, calc((100% - 780px) / 2)) 24px;
   background: var(--brand-workspace);
 }
+.messages-wrapper.is-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
 .empty-state {
   width: min(100%, 700px);
   margin: auto;
-  padding: 54px 0 24px;
+  padding: 0;
   text-align: center;
   animation: empty-in 360ms ease-out both;
 }
-.empty-mark {
+/* Welcome 组件：覆盖为居中纵向布局，匹配空态 hero */
+.welcome-hero {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.welcome-hero :deep(.antd-welcome-content-wrapper) {
+  align-items: center;
+}
+.welcome-hero :deep(.antd-welcome-icon) {
   display: grid;
+  flex: 0 0 auto;
   width: 42px;
   height: 42px;
   place-items: center;
-  margin: 0 auto 20px;
+  margin: 0;
   border-radius: 7px;
   background: var(--brand-primary);
   color: var(--brand-primary-foreground);
   box-shadow: var(--brand-shadow-sm);
 }
-.empty-mark :deep(svg) {
+.welcome-hero :deep(.antd-welcome-icon svg) {
   width: 19px;
   height: 19px;
 }
-.empty-state > p {
-  margin: 0 0 8px;
-  color: var(--brand-muted);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 10px;
-  font-weight: 600;
-}
-.empty-state h2 {
+.welcome-hero :deep(.antd-welcome-title) {
   margin: 0;
   color: var(--brand-foreground);
   font-size: 28px;
   line-height: 1.2;
   font-weight: 680;
+  text-align: center;
 }
-.empty-description {
+.welcome-hero :deep(.antd-welcome-description) {
   display: block;
-  margin: 10px 0 30px;
+  max-width: 460px;
+  margin: 0;
   color: var(--brand-muted);
   font-size: 13px;
-}
-.starter-prompts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  border-top: 1px solid var(--brand-border);
-  border-left: 1px solid var(--brand-border);
-  text-align: left;
-}
-.starter-prompts button {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 16px;
-  align-items: center;
-  gap: 10px;
-  min-height: 82px;
-  padding: 12px 14px;
-  border: 0;
-  border-right: 1px solid var(--brand-border);
-  border-bottom: 1px solid var(--brand-border);
-  background: var(--brand-workspace);
-  color: var(--brand-foreground);
-  text-align: left;
-  cursor: pointer;
-  transition: background 160ms ease;
-}
-.starter-prompts button:hover {
-  background: var(--brand-surface-muted);
-}
-.starter-prompts button > :deep(svg) {
-  width: 14px;
-  height: 14px;
-  color: var(--brand-muted);
-  transition: transform 160ms ease;
-}
-.starter-prompts button:hover > :deep(svg) {
-  transform: translate(2px, -2px);
-}
-.prompt-icon {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid var(--brand-border);
-  border-radius: 5px;
-  background: var(--brand-surface);
-}
-.prompt-icon :deep(svg) {
-  width: 14px;
-  height: 14px;
-}
-.starter-prompts button > span:nth-child(2) {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-.starter-prompts strong {
-  font-size: 11px;
-}
-.starter-prompts small {
-  margin-top: 2px;
-  overflow: hidden;
-  color: var(--brand-muted);
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: center;
 }
 .messages-wrapper :deep(.antd-bubble-list) {
   width: min(100%, 780px);
@@ -210,7 +277,36 @@ const prompts = [
   padding-inline-start: 0 !important;
 }
 .messages-wrapper :deep(.antd-bubble-avatar) {
-  min-width: 30px;
+  min-width: 32px;
+}
+.message-avatar {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--brand-border);
+  border-radius: 6px;
+  box-shadow: var(--brand-shadow-xs);
+  font-size: 10px;
+  font-weight: 700;
+}
+.message-avatar-assistant {
+  border-color: var(--brand-primary);
+  background: var(--brand-primary);
+  color: var(--brand-primary-foreground);
+}
+.message-avatar-user {
+  background: var(--brand-surface);
+  color: var(--brand-foreground);
+}
+.message-avatar :deep(svg) {
+  width: 15px;
+  height: 15px;
+}
+.assistant-content-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .messages-wrapper :deep(.antd-bubble-start .antd-bubble-body) {
   width: min(100%, 737px);
@@ -243,6 +339,10 @@ const prompts = [
   border-radius: 4px;
   color: var(--brand-muted);
 }
+.messages-wrapper :deep(.antd-bubble-footer .ant-btn svg) {
+  width: 14px;
+  height: 14px;
+}
 .messages-wrapper :deep(.x-markdown-light) {
   color: var(--brand-foreground);
   font-size: 13px;
@@ -254,9 +354,7 @@ const prompts = [
 .messages-wrapper :deep(.x-markdown-light p:last-child) {
   margin-bottom: 0;
 }
-.messages-wrapper :deep(.x-markdown-light pre) {
-  margin: 16px 0;
-}
+
 @keyframes empty-in {
   from {
     opacity: 0;
@@ -282,29 +380,12 @@ const prompts = [
   .messages-wrapper {
     padding: 22px 15px 20px;
   }
-  .empty-state {
-    padding-top: 36px;
-  }
-  .empty-state h2 {
+  .welcome-hero :deep(.antd-welcome-title) {
     font-size: 24px;
   }
-  .empty-description {
+  .welcome-hero :deep(.antd-welcome-description) {
     max-width: 300px;
     margin-inline: auto;
-  }
-  .starter-prompts {
-    grid-template-columns: 1fr;
-  }
-  .starter-prompts button {
-    min-height: 68px;
-  }
-  .starter-prompts button:nth-child(n + 4) {
-    display: none;
-  }
-}
-@media (max-width: 390px) {
-  .starter-prompts button:nth-child(3) {
-    display: none;
   }
 }
 </style>

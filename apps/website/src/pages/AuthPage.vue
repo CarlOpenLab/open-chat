@@ -200,9 +200,9 @@ const forgotPassword = () => {
             </Input>
           </FormItem>
 
-          <FormItem name="password">
+          <FormItem name="password" class="password-item">
             <template #label>
-              <div class="password-label">
+              <div class="password-label w-full flex items-center justify-between">
                 <span>密码</span>
                 <button v-if="!isRegister" type="button" @click="forgotPassword">忘记密码？</button>
               </div>
@@ -258,11 +258,13 @@ const forgotPassword = () => {
   </main>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .auth-page {
   display: grid;
   grid-template-columns: minmax(360px, 0.92fr) minmax(520px, 1.08fr);
+  height: 100dvh;
   min-height: 100dvh;
+  overflow: hidden;
   background: var(--background);
   color: var(--foreground);
   font-size: 16px;
@@ -270,7 +272,8 @@ const forgotPassword = () => {
 .auth-story {
   position: relative;
   display: flex;
-  min-height: 100dvh;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
   justify-content: space-between;
   overflow: hidden;
@@ -393,12 +396,20 @@ const forgotPassword = () => {
 .auth-panel {
   display: flex;
   min-width: 0;
-  min-height: 100dvh;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   background: var(--background);
 }
 .panel-toolbar {
+  position: sticky;
+  z-index: 10;
+  top: 0;
+  flex: 0 0 auto;
   padding: 26px clamp(24px, 5vw, 80px);
+  background: var(--background);
 }
 .panel-toolbar :deep(.ant-btn) {
   width: 40px;
@@ -581,8 +592,11 @@ const forgotPassword = () => {
 @media (max-width: 700px) {
   .auth-page {
     display: block;
+    height: auto;
+    overflow: visible;
   }
   .auth-story {
+    height: auto;
     min-height: auto;
     padding: 22px 24px 28px;
     border-right: 0;
@@ -609,7 +623,10 @@ const forgotPassword = () => {
     display: none;
   }
   .auth-panel {
+    height: auto;
     min-height: 0;
+    overflow: visible;
+    scrollbar-gutter: auto;
   }
   .panel-toolbar {
     padding: 18px 20px;
@@ -667,6 +684,14 @@ const forgotPassword = () => {
     align-items: flex-start;
     flex-direction: column;
     gap: 8px;
+  }
+}
+
+.password-item :deep(.ant-form-item-required) {
+  width: 100%;
+
+  &::after {
+    display: none;
   }
 }
 </style>
