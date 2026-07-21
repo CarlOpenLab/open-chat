@@ -9,6 +9,9 @@ catalogs:
     '@antdv-next/x-sdk':
       specifier: ^0.0.2
       version: 0.0.2
+    '@lucide/vue':
+      specifier: ^1.25.0
+      version: 1.25.0
     '@types/cors':
       specifier: ^2.8.19
       version: 2.8.19
@@ -119,6 +122,9 @@ importers:
       '@antdv-next/x-sdk':
         specifier: 'catalog:'
         version: 0.0.2(vue@3.5.31(typescript@5.9.3))
+      '@lucide/vue':
+        specifier: 'catalog:'
+        version: 1.25.0(vue@3.5.31(typescript@5.9.3))
       antdv-next:
         specifier: 'catalog:'
         version: 1.1.7(vue@3.5.31(typescript@5.9.3))
@@ -443,6 +449,11 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@lucide/vue@1.25.0':
+    resolution: {integrity: sha512-hkEetV+v48ScIn3uwqwWQ66sI8foeP2q6OMI09GzLFH4SfvBlfe3JHYlMBdBCqFC7WRlhFsndyDn/awRKRc2OQ==}
+    peerDependencies:
+      vue: '>=3.0.1'
 
   '@mermaid-js/parser@1.0.1':
     resolution: {integrity: sha512-opmV19kN1JsK0T6HhhokHpcVkqKpF+x2pPDKKM2ThHtZAB5F4PROopk0amuVYK5qMrIA4erzpNm8gmPNJgMDxQ==}
@@ -3128,6 +3139,10 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@lucide/vue@1.25.0(vue@3.5.31(typescript@5.9.3))':
+    dependencies:
+      vue: 3.5.31(typescript@5.9.3)
 
   '@mermaid-js/parser@1.0.1':
     dependencies:

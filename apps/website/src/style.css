@@ -3,34 +3,80 @@
 }
 
 :root {
-  --brand-background: #f7f7f5;
-  --brand-surface: #ffffff;
-  --brand-surface-muted: #fafafa;
-  --brand-surface-subtle: #f4f4f5;
-  --brand-workspace: #f7f7f5;
-  --brand-sidebar: #18181b;
-  --brand-sidebar-muted: #a1a1aa;
-  --brand-sidebar-foreground: #fafafa;
-  --brand-sidebar-hover: #27272a;
-  --brand-sidebar-active: #3f3f46;
-  --brand-foreground: #18181b;
-  --brand-muted: #71717a;
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #09090b;
+  --subtle: #fafafa;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --input: #d4d4d8;
+  --success: #16a34a;
+  --success-subtle: rgba(22, 163, 74, 0.14);
+  --danger: #dc2626;
+  --danger-subtle: #fef2f2;
+  --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.05);
+  --shadow-lg: 0 8px 24px rgba(24, 24, 27, 0.08);
+  --shadow-xl: 0 24px 60px rgba(24, 24, 27, 0.12), 0 2px 10px rgba(24, 24, 27, 0.05);
+  --brand-background: var(--background);
+  --brand-surface: var(--background);
+  --brand-surface-muted: var(--subtle);
+  --brand-surface-subtle: var(--muted);
+  --brand-workspace: var(--background);
+  --brand-sidebar: var(--subtle);
+  --brand-sidebar-muted: var(--muted-foreground);
+  --brand-sidebar-foreground: var(--foreground);
+  --brand-sidebar-hover: var(--muted);
+  --brand-sidebar-active: var(--muted);
+  --brand-foreground: var(--foreground);
+  --brand-muted: var(--muted-foreground);
   --brand-muted-strong: #52525b;
-  --brand-border: #e4e4e7;
-  --brand-border-strong: #d4d4d8;
-  --brand-primary: #18181b;
+  --brand-border: var(--border);
+  --brand-border-strong: var(--border-strong);
+  --brand-primary: var(--foreground);
   --brand-primary-hover: #27272a;
-  --brand-primary-foreground: #ffffff;
-  --brand-danger: #dc2626;
-  --brand-danger-subtle: #fef2f2;
-  --brand-ring: rgba(24, 24, 27, 0.24);
-  --brand-shadow-xs: 0 1px 2px rgba(24, 24, 27, 0.05);
-  --brand-shadow-sm: 0 4px 12px rgba(24, 24, 27, 0.06);
-  --brand-shadow-float: 0 12px 32px rgba(24, 24, 27, 0.08);
-  --chat-content-width: 840px;
+  --brand-primary-foreground: var(--background);
+  --brand-danger: var(--danger);
+  --brand-danger-subtle: var(--danger-subtle);
+  --brand-ring: rgba(24, 24, 27, 0.2);
+  --brand-shadow-xs: var(--shadow-sm);
+  --brand-shadow-sm: var(--shadow-lg);
+  --brand-shadow-float: 0 8px 28px rgba(24, 24, 27, 0.09);
+  --chat-content-width: 780px;
   --chat-gutter: clamp(16px, 3vw, 40px);
-  --z-sidebar: 30;
+  --icon-xs: 12px;
+  --icon-sm: 14px;
+  --icon-md: 16px;
+  --icon-lg: 18px;
+  --icon-xl: 20px;
   --z-backdrop: 20;
+  --z-sidebar: 30;
+  --z-popover: 80;
+  --z-modal: 200;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #09090b;
+  --foreground: #fafafa;
+  --subtle: #0f0f11;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --border: #27272a;
+  --border-strong: #3f3f46;
+  --input: #52525b;
+  --success: #22c55e;
+  --success-subtle: rgba(34, 197, 94, 0.14);
+  --danger: #f87171;
+  --danger-subtle: rgba(248, 113, 113, 0.1);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.32);
+  --shadow-xl: 0 24px 60px rgba(0, 0, 0, 0.48), 0 2px 10px rgba(0, 0, 0, 0.22);
+  --brand-muted-strong: #a1a1aa;
+  --brand-primary-hover: #e4e4e7;
+  --brand-ring: rgba(250, 250, 250, 0.2);
+  --brand-shadow-float: 0 8px 28px rgba(0, 0, 0, 0.36);
 }
 
 html,
@@ -39,64 +85,94 @@ body,
   width: 100%;
   min-width: 320px;
   min-height: 100%;
-  height: 100%;
+  margin: 0;
 }
 
 html {
-  background: var(--brand-background);
+  background: var(--background);
   scroll-behavior: smooth;
 }
 
 body {
-  margin: 0;
-  background: var(--brand-background);
-  color: var(--brand-foreground);
+  background: var(--background);
+  color: var(--foreground);
   font-family:
-    "Geist",
-    "Geist Sans",
-    "Inter",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Roboto,
-    "Helvetica Neue",
-    Arial,
-    "Noto Sans",
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Noto Sans SC", "Segoe UI",
     sans-serif;
   font-size: 14px;
+  line-height: 1.6;
+  letter-spacing: 0;
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
+  letter-spacing: 0;
+}
+
+button,
+a,
+select,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+[role="button"] {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+button:disabled,
+[role="button"][aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button:not(:disabled):active,
+[role="button"]:not([aria-disabled="true"]):active {
+  opacity: 0.72;
 }
 
 a {
   color: inherit;
 }
 
-button,
-[role="button"] {
-  touch-action: manipulation;
+svg.lucide {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: 0 0 auto;
+  stroke-width: 1.8;
+}
+
+::selection {
+  background: var(--foreground);
+  color: var(--background);
 }
 
 :focus-visible {
-  outline: 2px solid var(--brand-primary);
+  outline: 2px solid var(--foreground);
   outline-offset: 2px;
 }
 
 .skip-link {
   position: fixed;
   z-index: 100;
-  top: 12px;
-  left: 12px;
-  padding: 10px 14px;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 8px 12px;
   border-radius: 6px;
-  background: var(--brand-primary);
-  color: var(--brand-primary-foreground);
+  background: var(--foreground);
+  color: var(--background);
+  text-decoration: none;
   transform: translateY(-160%);
   transition: transform 150ms ease-out;
 }
@@ -106,17 +182,17 @@ button,
 }
 
 .x-markdown-light {
-  --primary-color: var(--brand-foreground);
-  --primary-color-hover: var(--brand-primary-hover);
-  --heading-color: var(--brand-foreground);
-  --text-color: var(--brand-foreground);
-  --border-color: var(--brand-border);
-  --line-color: var(--brand-border);
-  --light-bg: var(--brand-surface-subtle);
-  --table-head-bg: var(--brand-surface-muted);
-  --table-body-bg: var(--brand-surface);
-  --cite-bg: var(--brand-surface-subtle);
-  --cite-hover-bg: #e4e4e7;
+  --primary-color: var(--foreground);
+  --primary-color-hover: var(--foreground);
+  --heading-color: var(--foreground);
+  --text-color: var(--foreground);
+  --border-color: var(--border);
+  --line-color: var(--border);
+  --light-bg: var(--muted);
+  --table-head-bg: var(--subtle);
+  --table-body-bg: var(--background);
+  --cite-bg: var(--muted);
+  --cite-hover-bg: var(--border);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -9,6 +9,7 @@ catalog:
   "@antdv-next/x-markdown": ^0.0.2
   "@antdv-next/x-sdk": ^0.0.2
   "@lobehub/icons": ^5.2.0
+  "@lucide/vue": ^1.25.0
   "@types/cors": ^2.8.19
   "@types/express": ^5.0.6
   "@types/node": ^24.12.0

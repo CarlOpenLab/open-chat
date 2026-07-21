@@ -12,6 +12,7 @@
     "@antdv-next/x": "catalog:",
     "@antdv-next/x-markdown": "catalog:",
     "@antdv-next/x-sdk": "catalog:",
+    "@lucide/vue": "catalog:",
     "antdv-next": "catalog:",
     "install": "catalog:",
     "vue": "catalog:"

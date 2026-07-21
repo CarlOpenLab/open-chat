@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { BubbleItemType, BubbleListProps } from "@antdv-next/x";
-import { BubbleList, Prompts } from "@antdv-next/x";
+import { BubbleList } from "@antdv-next/x";
+import { ArrowUpRight, ClipboardList, Code2, Mail, ScanText, Sparkles } from "@lucide/vue";
 
 interface Props {
   showWelcome: boolean;
@@ -9,46 +10,72 @@ interface Props {
 }
 
 interface Emits {
-  (e: "promptClick", info: { data: { description?: string } }): void;
+  (e: "promptClick", info: { data: { description: string } }): void;
 }
 
 defineProps<Props>();
 const emit = defineEmits<Emits>();
 
-const handlePromptClick = (info: any) => {
-  emit("promptClick", info);
-};
+const prompts = [
+  {
+    title: "整理工作计划",
+    description: "把目标拆成清晰的执行步骤",
+    prompt: "帮我为下周的产品评审整理一份议程，包含目标、风险和待决策事项。",
+    icon: ClipboardList,
+  },
+  {
+    title: "分析一份内容",
+    description: "提炼重点、模式和下一步",
+    prompt: "分析这份用户反馈，找出重复出现的问题，并按影响范围排序。",
+    icon: ScanText,
+  },
+  {
+    title: "一起写代码",
+    description: "设计、解释或重构实现",
+    prompt: "帮我设计一个 Vue 登录表单的状态结构，需要覆盖校验、加载和错误重试。",
+    icon: Code2,
+  },
+  {
+    title: "起草一份文本",
+    description: "快速得到结构清晰的初稿",
+    prompt: "帮我写一封项目延期说明邮件，语气坦诚、专业，并给出新的时间节点。",
+    icon: Mail,
+  },
+];
 </script>
 
 <template>
   <main id="chat-content" class="messages-wrapper" tabindex="-1">
-    <template v-if="showWelcome">
-      <section class="welcome-container" aria-labelledby="welcome-title">
-        <div class="welcome-copy">
-          <h2 id="welcome-title">今天想完成什么？</h2>
-        </div>
-        <div class="prompts-wrapper" aria-label="快捷开始">
-          <Prompts
-            :items="[
-              { key: '1', description: '帮我规划一个项目' },
-              { key: '2', description: '解释一个复杂概念' },
-              { key: '3', description: '审阅并改进一段代码' },
-              { key: '4', description: '起草一份产品文案' },
-            ]"
-            @item-click="handlePromptClick"
-          />
-        </div>
-      </section>
-    </template>
-    <template v-else>
-      <BubbleList
-        :style="{ height: '100%' }"
-        :role="roleConfig"
-        :items="bubbleItems"
-        :auto-scroll="true"
-        class="bubble-list"
-      />
-    </template>
+    <section v-if="showWelcome" class="empty-state" aria-labelledby="welcome-title">
+      <span class="empty-mark" aria-hidden="true"><Sparkles /></span>
+      <p>OPEN CHAT AI</p>
+      <h2 id="welcome-title">今天想一起完成什么？</h2>
+      <span class="empty-description">从一个问题开始，或者把正在处理的内容交给 Open Chat。</span>
+      <div class="starter-prompts" aria-label="推荐提示词">
+        <button
+          v-for="prompt in prompts"
+          :key="prompt.title"
+          type="button"
+          @click="emit('promptClick', { data: { description: prompt.prompt } })"
+        >
+          <span class="prompt-icon"><component :is="prompt.icon" /></span>
+          <span
+            ><strong>{{ prompt.title }}</strong
+            ><small>{{ prompt.description }}</small></span
+          >
+          <ArrowUpRight />
+        </button>
+      </div>
+    </section>
+
+    <BubbleList
+      v-else
+      :style="{ height: '100%' }"
+      :role="roleConfig"
+      :items="bubbleItems"
+      :auto-scroll="true"
+      class="bubble-list"
+    />
   </main>
 </template>
 
@@ -57,152 +84,227 @@ const handlePromptClick = (info: any) => {
   min-height: 0;
   flex: 1;
   overflow: hidden;
-  padding: 24px var(--chat-gutter) 16px;
+  padding: 38px max(28px, calc((100% - 780px) / 2)) 24px;
   background: var(--brand-workspace);
 }
-
-.welcome-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: min(100%, var(--chat-content-width));
-  height: 100%;
-  margin: 0 auto;
-  padding-bottom: 10vh;
+.empty-state {
+  width: min(100%, 700px);
+  margin: auto;
+  padding: 54px 0 24px;
   text-align: center;
+  animation: empty-in 360ms ease-out both;
 }
-
-.welcome-copy {
-  max-width: 560px;
-  margin-bottom: 36px;
-}
-
-.welcome-copy h2 {
-  margin: 0;
-  color: var(--brand-foreground);
-  font-size: 38px;
-  font-weight: 650;
-  line-height: 1.12;
-  letter-spacing: 0;
-  text-wrap: balance;
-}
-
-.prompts-wrapper {
-  width: min(100%, 720px);
-}
-
-.prompts-wrapper :deep(.antd-prompts-list) {
+.empty-mark {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.prompts-wrapper :deep(.antd-prompts-item) {
-  min-height: 58px;
-  margin: 0;
-  border: 1px solid var(--brand-border);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: none;
-  transition:
-    background 150ms ease,
-    border-color 150ms ease,
-    color 150ms ease;
-}
-
-.prompts-wrapper :deep(.antd-prompts-item:hover) {
-  border-color: var(--brand-border-strong);
-  background: var(--brand-surface);
-}
-
-.prompts-wrapper :deep(.antd-prompts-item:active) {
-  background: var(--brand-surface-subtle);
-  transform: scale(0.99);
-}
-
-.prompts-wrapper :deep(.antd-prompts-item-description) {
-  color: var(--brand-foreground);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.messages-wrapper :deep(.antd-bubble-list) {
-  width: min(100%, var(--chat-content-width));
-  margin: 0 auto;
-}
-
-.messages-wrapper :deep(.antd-bubble) {
-  max-width: min(100%, 760px);
-}
-
-.messages-wrapper :deep(.antd-bubble-content) {
-  border-radius: 8px;
-}
-
-.messages-wrapper :deep(.antd-bubble[data-role="assistant"] .antd-bubble-content),
-.messages-wrapper :deep(.antd-bubble-assistant .antd-bubble-content) {
-  background: transparent;
-  color: var(--brand-foreground);
-}
-
-.messages-wrapper :deep(.antd-bubble[data-role="user"] .antd-bubble-content),
-.messages-wrapper :deep(.antd-bubble-user .antd-bubble-content) {
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  margin: 0 auto 20px;
+  border-radius: 7px;
   background: var(--brand-primary);
   color: var(--brand-primary-foreground);
+  box-shadow: var(--brand-shadow-sm);
 }
-
-.messages-wrapper :deep(.x-markdown-light) {
-  font-size: 14px;
+.empty-mark :deep(svg) {
+  width: 19px;
+  height: 19px;
+}
+.empty-state > p {
+  margin: 0 0 8px;
+  color: var(--brand-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+}
+.empty-state h2 {
+  margin: 0;
+  color: var(--brand-foreground);
+  font-size: 28px;
+  line-height: 1.2;
+  font-weight: 680;
+}
+.empty-description {
+  display: block;
+  margin: 10px 0 30px;
+  color: var(--brand-muted);
+  font-size: 13px;
+}
+.starter-prompts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--brand-border);
+  border-left: 1px solid var(--brand-border);
+  text-align: left;
+}
+.starter-prompts button {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 10px;
+  min-height: 82px;
+  padding: 12px 14px;
+  border: 0;
+  border-right: 1px solid var(--brand-border);
+  border-bottom: 1px solid var(--brand-border);
+  background: var(--brand-workspace);
+  color: var(--brand-foreground);
+  text-align: left;
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+.starter-prompts button:hover {
+  background: var(--brand-surface-muted);
+}
+.starter-prompts button > :deep(svg) {
+  width: 14px;
+  height: 14px;
+  color: var(--brand-muted);
+  transition: transform 160ms ease;
+}
+.starter-prompts button:hover > :deep(svg) {
+  transform: translate(2px, -2px);
+}
+.prompt-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--brand-border);
+  border-radius: 5px;
+  background: var(--brand-surface);
+}
+.prompt-icon :deep(svg) {
+  width: 14px;
+  height: 14px;
+}
+.starter-prompts button > span:nth-child(2) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.starter-prompts strong {
+  font-size: 11px;
+}
+.starter-prompts small {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--brand-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.messages-wrapper :deep(.antd-bubble-list) {
+  width: min(100%, 780px);
+  margin: 0 auto;
+}
+.messages-wrapper :deep(.antd-bubble-list-scroll-content) {
+  padding-inline: 0;
+}
+.messages-wrapper :deep(.antd-bubble) {
+  padding-block: 15px;
+}
+.messages-wrapper :deep(.antd-bubble-start) {
+  padding-inline-end: 0 !important;
+}
+.messages-wrapper :deep(.antd-bubble-end) {
+  padding-inline-start: 0 !important;
+}
+.messages-wrapper :deep(.antd-bubble-avatar) {
+  min-width: 30px;
+}
+.messages-wrapper :deep(.antd-bubble-start .antd-bubble-body) {
+  width: min(100%, 737px);
+}
+.messages-wrapper :deep(.antd-bubble-end .antd-bubble-body) {
+  max-width: min(76%, 620px);
+}
+.messages-wrapper :deep(.antd-bubble-content) {
+  font-size: 13px;
   line-height: 1.7;
 }
-
-.messages-wrapper :deep(.x-markdown-light p) {
-  margin: 8px 0;
+.messages-wrapper :deep(.antd-bubble-start .antd-bubble-content) {
+  background: transparent;
+  color: var(--brand-foreground);
 }
-
+.messages-wrapper :deep(.antd-bubble-end .antd-bubble-content) {
+  padding: 11px 14px;
+  border-radius: 7px 7px 2px;
+  background: var(--brand-surface-subtle);
+  color: var(--brand-foreground);
+}
+.messages-wrapper :deep(.antd-bubble-footer) {
+  margin-top: 8px;
+}
+.messages-wrapper :deep(.antd-bubble-footer .ant-btn) {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 4px;
+  color: var(--brand-muted);
+}
+.messages-wrapper :deep(.x-markdown-light) {
+  color: var(--brand-foreground);
+  font-size: 13px;
+  line-height: 1.82;
+}
+.messages-wrapper :deep(.x-markdown-light p) {
+  margin: 0 0 13px;
+}
+.messages-wrapper :deep(.x-markdown-light p:last-child) {
+  margin-bottom: 0;
+}
 .messages-wrapper :deep(.x-markdown-light pre) {
   margin: 16px 0;
-  padding: 0;
-  border-radius: 0;
-  background: transparent;
 }
-
-.messages-wrapper :deep(.x-markdown-light pre code) {
-  display: block;
-  padding: 0;
-  overflow: visible;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: inherit;
-  line-height: inherit;
+@keyframes empty-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
-
-@media (max-width: 767px) {
+@media (max-width: 820px) {
   .messages-wrapper {
-    padding: 20px 16px 10px;
+    padding: 28px 24px 24px;
   }
-
-  .welcome-container {
-    padding-bottom: 6vh;
+  .messages-wrapper :deep(.antd-bubble) {
+    padding-block: 12px;
   }
-
-  .welcome-copy {
-    margin-bottom: 28px;
+  .messages-wrapper :deep(.antd-bubble-end .antd-bubble-body) {
+    max-width: 88%;
   }
-
-  .welcome-copy h2 {
-    font-size: 28px;
+}
+@media (max-width: 560px) {
+  .messages-wrapper {
+    padding: 22px 15px 20px;
   }
-
-  .prompts-wrapper :deep(.antd-prompts-list) {
+  .empty-state {
+    padding-top: 36px;
+  }
+  .empty-state h2 {
+    font-size: 24px;
+  }
+  .empty-description {
+    max-width: 300px;
+    margin-inline: auto;
+  }
+  .starter-prompts {
     grid-template-columns: 1fr;
   }
-
-  .prompts-wrapper :deep(.antd-prompts-item) {
-    min-height: 54px;
+  .starter-prompts button {
+    min-height: 68px;
+  }
+  .starter-prompts button:nth-child(n + 4) {
+    display: none;
+  }
+}
+@media (max-width: 390px) {
+  .starter-prompts button:nth-child(3) {
+    display: none;
   }
 }
 </style>
