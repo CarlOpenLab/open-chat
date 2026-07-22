@@ -5,6 +5,7 @@ import { XMarkdown } from "@antdv-next/x-markdown";
 import { RotateCcw, Sparkles } from "@lucide/vue";
 import { Button, Tooltip } from "antdv-next";
 import { computed, ref, watch, type Component } from "vue";
+import { normalizeMarkdownContent } from "../../utils/normalizeMarkdown";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 
 interface Props {
@@ -58,16 +59,24 @@ const parseThinkContent = (value: string): ParsedThinkContent | null => {
 };
 
 const displayItems = computed<BubbleItemType[]>(() =>
-  props.bubbleItems.map((item) => ({
-    ...item,
-    extraInfo: {
-      ...item.extraInfo,
-      parsedThink:
-        item.role === "assistant" && typeof item.content === "string"
-          ? parseThinkContent(item.content)
-          : null,
-    },
-  })),
+  props.bubbleItems.map((item) => {
+    const normalizedContent =
+      item.role === "assistant" && typeof item.content === "string"
+        ? normalizeMarkdownContent(item.content)
+        : item.content;
+
+    return {
+      ...item,
+      content: normalizedContent,
+      extraInfo: {
+        ...item.extraInfo,
+        parsedThink:
+          item.role === "assistant" && typeof normalizedContent === "string"
+            ? parseThinkContent(normalizedContent)
+            : null,
+      },
+    };
+  }),
 );
 
 const getThinkKey = (messageId: string | number) =>
