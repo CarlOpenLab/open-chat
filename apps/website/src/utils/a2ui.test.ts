@@ -2,6 +2,9 @@ import { expect, test } from "vite-plus/test";
 import {
   collectA2UIConversationState,
   createA2UIDataModelSnapshot,
+  createA2UISubmission,
+  flattenA2UIDataModelSnapshot,
+  formatA2UISubmissionAsUserMessage,
   parseA2UIContent,
 } from "./a2ui";
 
@@ -46,8 +49,48 @@ test("ignores invalid and prototype-polluting form paths", () => {
   ).toEqual({ valid: "kept" });
 });
 
+test("round-trips a submitted data model back to bound paths", () => {
+  const snapshot = {
+    form: {
+      name: "Carl",
+      contact: { email: "carl@example.com" },
+      "source/path": "docs",
+    },
+    accepted: true,
+  };
+
+  const valuesByPath = flattenA2UIDataModelSnapshot(snapshot);
+  expect(valuesByPath).toEqual({
+    "/form/name": "Carl",
+    "/form/contact/email": "carl@example.com",
+    "/form/source~1path": "docs",
+    "/accepted": true,
+  });
+  expect(createA2UIDataModelSnapshot(valuesByPath)).toEqual(snapshot);
+});
+
+test("formats a submission as a readable user message", () => {
+  const submission = createA2UISubmission(
+    {
+      surfaceId: "brief-form",
+      surfaceRevision: 4,
+      ownerMessageId: "assistant-1",
+      name: "submitBrief",
+      context: { source: "brief" },
+      data: { form: { name: "Carl", email: "carl@example.com" } },
+    },
+    "conversation-1",
+    1721730000000,
+  );
+
+  const formatted = formatA2UISubmissionAsUserMessage(submission);
+  expect(formatted).toBe(
+    `[表单提交] submitBrief\n\n${JSON.stringify({ form: { name: "Carl", email: "carl@example.com" } }, null, 2)}`,
+  );
+});
+
 test("separates a complete A2UI block from surrounding Markdown", () => {
-  const parsed = parseA2UIContent(`Before\n\n<a2ui-json>\n${commands}\n</a2ui-json>\n\nAfter`);
+  const parsed = parseA2UIContent(`Before\n\n<a2ui>\n${commands}\n</a2ui>\n\nAfter`);
 
   expect(parsed.markdown).toBe("Before\n\n\n\nAfter");
   expect(parsed.commands).toHaveLength(2);
@@ -56,27 +99,18 @@ test("separates a complete A2UI block from surrounding Markdown", () => {
 });
 
 test("hides an incomplete A2UI block while streaming", () => {
-  const parsed = parseA2UIContent(`Visible\n\n<a2ui-json>\n${commands.slice(0, 80)}`);
+  const parsed = parseA2UIContent(`Visible\n\n<a2ui>\n${commands.slice(0, 80)}`);
 
   expect(parsed.markdown).toBe("Visible");
   expect(parsed.commands).toEqual([]);
   expect(parsed.hasPendingBlock).toBe(true);
 });
 
-test("extracts the json-a2ui fenced carrier before Markdown rendering", () => {
-  const parsed = parseA2UIContent(`Before\n\n\`\`\`json-a2ui\n${commands}\n\`\`\`\n\nAfter`);
-
-  expect(parsed.markdown).toBe("Before\n\n\nAfter");
-  expect(parsed.commands).toHaveLength(2);
-  expect(parsed.errors).toEqual([]);
-  expect(parsed.hasPendingBlock).toBe(false);
-});
-
 test("does not parse an A2UI example inside a fenced code block", () => {
   const content = `\`\`\`text
-<a2ui-json>
+<a2ui>
 ${commands}
-</a2ui-json>
+</a2ui>
 \`\`\``;
   const parsed = parseA2UIContent(content);
 
@@ -85,27 +119,27 @@ ${commands}
 });
 
 test("rejects malformed and unsupported commands", () => {
-  const parsed = parseA2UIContent(`<a2ui-json>
+  const parsed = parseA2UIContent(`<a2ui>
 [{"version":"v0.8","createSurface":{"surfaceId":"bad"}}]
-</a2ui-json>`);
+</a2ui>`);
 
   expect(parsed.commands).toEqual([]);
   expect(parsed.errors).toHaveLength(1);
 });
 
 test("rejects nested children objects unsupported by the registered renderer", () => {
-  const parsed = parseA2UIContent(`<a2ui-json>
+  const parsed = parseA2UIContent(`<a2ui>
 [{"version":"v0.9","updateComponents":{"surfaceId":"card","components":[{"id":"root","component":"Column","children":[{"id":"nested"}]}]}}]
-</a2ui-json>`);
+</a2ui>`);
 
   expect(parsed.commands).toEqual([]);
   expect(parsed.errors).toHaveLength(1);
 });
 
 test("rejects root data model replacement unsupported by x-card", () => {
-  const parsed = parseA2UIContent(`<a2ui-json>
+  const parsed = parseA2UIContent(`<a2ui>
 [{"version":"v0.9","updateDataModel":{"surfaceId":"card","path":"/","value":{}}}]
-</a2ui-json>`);
+</a2ui>`);
 
   expect(parsed.commands).toEqual([]);
   expect(parsed.errors).toHaveLength(1);
@@ -116,12 +150,12 @@ test("collects one active surface across assistant messages", () => {
     {
       role: "assistant",
       status: "success",
-      content: `<a2ui-json>${commands}</a2ui-json>`,
+      content: `<a2ui>${commands}</a2ui>`,
     },
     {
       role: "assistant",
       status: "success",
-      content: `<a2ui-json>[{"version":"v0.9","updateDataModel":{"surfaceId":"status-card","path":"/status","value":"Updated"}}]</a2ui-json>`,
+      content: `<a2ui>[{"version":"v0.9","updateDataModel":{"surfaceId":"status-card","path":"/status","value":"Updated"}}]</a2ui>`,
     },
   ]);
 
@@ -135,7 +169,7 @@ test("reports a pending surface block only while its message is loading", () => 
     {
       role: "assistant",
       status: "loading",
-      content: '<a2ui-json>[{"version":"v0.9"',
+      content: '<a2ui>[{"version":"v0.9"',
     },
   ]);
 

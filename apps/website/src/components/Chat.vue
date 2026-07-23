@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { BubbleItemType, ConversationItemType, ConversationsProps } from "@antdv-next/x";
-import type { ActionPayload } from "@antdv-next/x-card";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelParams, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest, useXChat } from "@antdv-next/x-sdk";
@@ -9,6 +8,12 @@ import { Button, Input, Modal, Switch, message, type MenuProps } from "antdv-nex
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { aiService, API_BASE_URL, GATEWAY_API_KEY, type ModelsProvider } from "../services/ai";
 import { OpenChatProvider } from "../services/OpenChatProvider";
+import {
+  createA2UISubmission,
+  formatA2UISubmissionAsUserMessage,
+  type A2UIActionPayload,
+  type A2UISubmission,
+} from "../utils/a2ui";
 import {
   clearChatState,
   loadChatState,
@@ -29,6 +34,10 @@ interface Props {
 interface Emits {
   (e: "navigate", path: string): void;
   (e: "toggleTheme"): void;
+}
+
+interface OpenChatConversation extends ConversationItemType {
+  a2uiSubmissions?: A2UISubmission[];
 }
 
 defineProps<Props>();
@@ -60,16 +69,17 @@ const getMessagePreview = (content: string, maxLength: number = 20): string => {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
 };
 
-const createNewConversation = (): ConversationItemType => ({
+const createNewConversation = (): OpenChatConversation => ({
   key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   label: "新对话",
   group: "今天",
   messages: [],
+  a2uiSubmissions: [],
 });
 
-const conversationList = ref<ConversationItemType[]>([]);
+const conversationList = ref<OpenChatConversation[]>([]);
 
-const toPersistedConversations = (list: ConversationItemType[]): PersistedConversation[] => {
+const toPersistedConversations = (list: OpenChatConversation[]): PersistedConversation[] => {
   return list
     .filter((conversation) => {
       const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
@@ -101,6 +111,9 @@ const toPersistedConversations = (list: ConversationItemType[]): PersistedConver
         label: normalizedLabel,
         group: normalizedGroup,
         messages: normalizedMessages,
+        a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
+          ? conversation.a2uiSubmissions
+          : [],
       };
     });
 };
@@ -154,7 +167,7 @@ function reconcileCurrentModel() {
 
 // ============ 对话管理 ============
 
-const getCurrentConversation = (): ConversationItemType | undefined => {
+const getCurrentConversation = (): OpenChatConversation | undefined => {
   return conversationList.value.find((c) => c.key === currentConversationKey.value);
 };
 
@@ -169,6 +182,10 @@ const currentConversationMessages = computed<DefaultMessageInfo<XModelMessage>[]
   const conv = getCurrentConversation();
   return conv?.messages ?? [];
 });
+const currentA2UISubmissions = computed(() => getCurrentConversation()?.a2uiSubmissions ?? []);
+const formatSubmissionTime = (timestamp: number) =>
+  new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(timestamp);
+const formatSubmissionData = (data: Record<string, unknown>) => JSON.stringify(data, null, 2);
 
 const updateConversationMessages = (
   conversationKey: string,
@@ -279,7 +296,7 @@ const schedulePersistState = () => {
 
   persistTimer = setTimeout(() => {
     const state = {
-      version: 1 as const,
+      version: 2 as const,
       currentConversationKey: currentConversationKey.value,
       currentModel: currentModel.value,
       conversationList: toPersistedConversations(conversationList.value),
@@ -290,7 +307,7 @@ const schedulePersistState = () => {
 
 const handleExportLocalHistory = () => {
   const state: PersistedChatState = {
-    version: 1,
+    version: 2,
     currentConversationKey: currentConversationKey.value,
     currentModel: currentModel.value,
     conversationList: toPersistedConversations(conversationList.value),
@@ -479,27 +496,15 @@ onBeforeUnmount(() => {
 
 // ============ 消息转换 ============
 
-const A2UI_ACTION_PREFIX = "[A2UI_ACTION]";
-const isInternalA2UIAction = (modelMessage: XModelMessage) =>
-  modelMessage.role === "user" &&
-  typeof modelMessage.content === "string" &&
-  modelMessage.content.startsWith(A2UI_ACTION_PREFIX);
-
-const bubbleItems = computed<BubbleItemType[]>(() =>
-  currentConversationMessages.value.flatMap(({ id, message: modelMessage, status }) => {
-    if (isInternalA2UIAction(modelMessage)) return [];
-
-    return [
-      {
-        key: id,
-        role: modelMessage.role,
-        status,
-        loading: status === "loading",
-        content: typeof modelMessage.content === "string" ? modelMessage.content : "",
-      },
-    ];
-  }),
-);
+const bubbleItems = computed<BubbleItemType[]>(() => {
+  return currentConversationMessages.value.map(({ id, message: modelMessage, status }) => ({
+    key: id,
+    role: modelMessage.role,
+    status,
+    loading: status === "loading",
+    content: typeof modelMessage.content === "string" ? modelMessage.content : "",
+  }));
+});
 
 // ============ 事件处理 ============
 
@@ -532,9 +537,7 @@ const handleSubmit = (nextContent: string) => {
   onRequest({
     messages: [{ role: "user", content: nextContent }],
     model: currentModel.value,
-    // Qwen(DashScope/OpenAI Compatible) 深度思考参数
     enable_thinking: thinkingEnabled.value,
-    // 兼容部分 OpenAI-like 网关的思考参数
     thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
   });
   // 清空输入框
@@ -543,17 +546,33 @@ const handleSubmit = (nextContent: string) => {
   }, 0);
 };
 
-const handleA2UIAction = (payload: ActionPayload) => {
+const handleA2UIAction = (payload: A2UIActionPayload) => {
   if (isRequesting.value) {
     message.warning("回答生成中，请稍后再操作界面");
     return;
   }
 
-  pendingA2UISurfaceId.value = payload.surfaceId;
-  const serializedContext = JSON.stringify(payload.context ?? {}).slice(0, 4000);
-  handleSubmit(
-    `${A2UI_ACTION_PREFIX}\nsurfaceId: ${payload.surfaceId}\nname: ${payload.name}\ncontext: ${serializedContext}`,
+  const conversation = getCurrentConversation();
+  if (!conversation) {
+    message.error("当前对话不存在，无法提交表单");
+    return;
+  }
+  const duplicate = (conversation.a2uiSubmissions ?? []).some(
+    (submission) =>
+      submission.surfaceId === payload.surfaceId &&
+      submission.surfaceRevision === payload.surfaceRevision &&
+      submission.action.name === payload.name,
   );
+  if (duplicate) {
+    message.info("这份表单已经提交");
+    return;
+  }
+
+  const submission = createA2UISubmission(payload, currentConversationKey.value);
+  conversation.a2uiSubmissions = [...(conversation.a2uiSubmissions ?? []), submission];
+  pendingA2UISurfaceId.value = payload.surfaceId;
+  schedulePersistState();
+  handleSubmit(formatA2UISubmissionAsUserMessage(submission));
 };
 
 const handleModelChange = (key: string) => {
@@ -565,6 +584,19 @@ const handleThinkingChange = (value: boolean) => {
 };
 
 const handleReloadMessage = (messageId: string | number) => {
+  const lastAssistantMessage = [...currentConversationMessages.value]
+    .reverse()
+    .find(({ message: modelMessage }) => modelMessage.role === "assistant");
+
+  if (
+    !lastAssistantMessage ||
+    lastAssistantMessage.status !== "success" ||
+    String(lastAssistantMessage.id) !== String(messageId)
+  ) {
+    message.warning("只能重新生成最后一条回答");
+    return;
+  }
+
   setMessages(currentConversationMessages.value);
   onReload(messageId, { model: currentModel.value });
 };
@@ -674,6 +706,7 @@ const copyShareLink = async () => {
         :bubble-items="bubbleItems"
         :conversation-key="currentConversationKey"
         :a2ui-pending-surface-id="pendingA2UISurfaceId"
+        :a2ui-submissions="currentA2UISubmissions"
         @a2ui-action="handleA2UIAction"
         @reload="handleReloadMessage"
       />
@@ -718,6 +751,23 @@ const copyShareLink = async () => {
           <div class="context-file">
             <span><Link2 /></span><span><strong>发布检查清单</strong><small>刚刚同步</small></span>
           </div>
+        </section>
+        <section v-if="currentA2UISubmissions.length">
+          <div class="context-heading"><h2>结构化输入</h2></div>
+          <article
+            v-for="submission in currentA2UISubmissions"
+            :key="submission.submissionId"
+            class="context-submission"
+          >
+            <header>
+              <span>{{ submission.action.name }}</span>
+              <time :datetime="new Date(submission.submittedAt).toISOString()">
+                {{ formatSubmissionTime(submission.submittedAt) }}
+              </time>
+            </header>
+            <small>{{ submission.surfaceId }} · revision {{ submission.surfaceRevision }}</small>
+            <pre>{{ formatSubmissionData(submission.data) }}</pre>
+          </article>
         </section>
         <section>
           <div class="context-heading"><h2>本次对话</h2></div>
@@ -994,6 +1044,51 @@ const copyShareLink = async () => {
 }
 .context-content dl {
   margin: 0;
+}
+.context-submission {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--brand-border);
+  border-radius: 6px;
+  background: var(--brand-surface-subtle);
+}
+.context-submission + .context-submission {
+  margin-top: 8px;
+}
+.context-submission > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.context-submission > header span {
+  color: var(--brand-foreground);
+  font-size: 12px;
+  font-weight: 650;
+}
+.context-submission time,
+.context-submission small {
+  color: var(--brand-muted);
+  font-size: 10px;
+}
+.context-submission pre {
+  max-height: 220px;
+  padding: 9px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--brand-border);
+  border-radius: 4px;
+  background: var(--brand-surface);
+  color: var(--brand-foreground);
+  font:
+    11px/1.55 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .context-content dl div {
   display: flex;

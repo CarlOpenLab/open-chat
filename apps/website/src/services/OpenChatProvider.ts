@@ -8,19 +8,18 @@ import { DeepSeekChatProvider } from "@antdv-next/x-sdk";
 
 const A2UI_SYSTEM_PROMPT = `You are the assistant inside Open Chat. Answer with normal Markdown by default. Only return A2UI when the user explicitly asks for an interactive UI, form, card, or structured control.
 
-When A2UI is requested, output exactly one complete protocol block. For this chat, use the fenced carrier with opening \`\`\`json-a2ui and closing \`\`\`; do not use the legacy <a2ui-json> tags unless explicitly requested.
-\`\`\`json-a2ui
+When A2UI is requested, output exactly one complete protocol block using the <a2ui> tag, opened with <a2ui> and closed with </a2ui>.
+<a2ui>
 [
   {"version":"v0.9","createSurface":{"surfaceId":"status-card-1","catalogId":"local://open-chat/basic"}},
   {"version":"v0.9","updateComponents":{"surfaceId":"status-card-1","components":[{"id":"root","component":"Card","title":"Service status","child":"content"},{"id":"content","component":"Column","gap":14,"children":["status-row","availability","latency","refresh"]},{"id":"status-row","component":"Row","justify":"space-between","children":["service","status-tag"]},{"id":"service","component":"Text","text":"API gateway","variant":"h3"},{"id":"status-label","component":"Text","text":"Operational"},{"id":"status-tag","component":"Tag","color":"success","child":"status-label"},{"id":"availability","component":"Progress","percent":{"path":"/availability"},"status":"success"},{"id":"latency","component":"Statistic","title":"Median latency","value":{"path":"/latency"},"suffix":"ms"},{"id":"refresh-label","component":"Text","text":"Refresh"},{"id":"refresh","component":"Button","child":"refresh-label","variant":"primary","action":{"event":{"name":"refresh","context":{"source":"status-card"}}}}]}},
   {"version":"v0.9","updateDataModel":{"surfaceId":"status-card-1","path":"/availability","value":99.9}},
   {"version":"v0.9","updateDataModel":{"surfaceId":"status-card-1","path":"/latency","value":184}}
 ]
-\`\`\`
+</a2ui>
 
 Strict A2UI rules:
-- The protocol carrier is the json-a2ui fence, not a normal json or javascript fence. Do not add outer string quotes.
-- The carrier content must be one valid JSON array. No comments, trailing commas, JavaScript syntax, or outer string quotes.
+- The <a2ui> tag content must be one valid JSON array. No comments, trailing commas, JavaScript syntax, or outer string quotes.
 - Every array item must contain version plus exactly one of createSurface, updateComponents, updateDataModel, or deleteSurface. Never put two updateDataModel keys in one object.
 - updateComponents has exactly this shape: {"surfaceId":"...","components":[...]}. Never wrap it in formCard, card, config, or another key.
 - updateDataModel has exactly this shape: {"surfaceId":"...","path":"/field","value":...}. Send one updateDataModel object per array item.
@@ -35,11 +34,10 @@ Strict A2UI rules:
 - Text and TextField data binding uses a property value such as {"path":"/form/name"}; the same path value can be used by Alert message/description, Statistic value, and Progress percent. Do not use {name} placeholders or bindingExpression.
 - TextField uses label and value. Button and Tag labels are Text child components; do not use a label object on Button or Tag.
 - Card supports title and size. Column and Row support gap, align, and justify. Alert supports message, description, type, and showIcon. Statistic supports title, value, prefix, suffix, and precision.
-- Button actions use {"event":{"name":"actionName","context":{...}}}. For form submission buttons, always include every submitted field as a path value, such as {"name":{"path":"/form/name"}}.
+- Button actions use {"event":{"name":"actionName","context":{...}}}. Keep context limited to action metadata such as source or record id; the host automatically attaches the complete bound data model as the submission data field.
 - updateDataModel.path must be a named path such as /status, never /. Send separate updateDataModel objects for separate paths.
-- Treat [A2UI_ACTION] as an internal event, never echo it in prose. Update the existing surface and do not create that surface again.
-- After a successful form action, keep feedback inside the existing Card: add a success Alert and disable submitted fields and actions where appropriate. Do not return an empty assistant message.
-- Keep explanatory prose outside the A2UI block concise.`;
+- When the user submits a form, the submission appears as a user message prefixed with [表单提交] followed by the action name and the submitted data as JSON. Process this data naturally and respond with normal Markdown or new A2UI surfaces. The submitted form is already locked and preserved locally — do not attempt to update or recreate the existing form surface. Instead, create a new surface if you need to show results or next steps.
+- Keep explanatory prose outside the <a2ui> block concise.`;
 
 export class OpenChatProvider extends DeepSeekChatProvider<
   XModelMessage,

@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import type { BubbleItemType, BubbleListProps } from "@antdv-next/x";
 import { BubbleList, Think, Welcome } from "@antdv-next/x";
-import type { ActionPayload, XCardCommand } from "@antdv-next/x-card";
+import type { XCardCommand } from "@antdv-next/x-card";
 import { XMarkdown } from "@antdv-next/x-markdown";
 import { RotateCcw, Sparkles } from "@lucide/vue";
 import { Button, Tooltip } from "antdv-next";
 import { computed, ref, watch, type Component } from "vue";
-import { getA2UISurfaceId, parseA2UIContent } from "../../utils/a2ui";
+import {
+  getA2UISurfaceId,
+  parseA2UIContent,
+  type A2UIActionPayload,
+  type A2UISubmission,
+} from "../../utils/a2ui";
 import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 
@@ -15,10 +20,11 @@ interface Props {
   bubbleItems: BubbleItemType[];
   conversationKey: string;
   a2uiPendingSurfaceId?: string;
+  a2uiSubmissions?: A2UISubmission[];
 }
 
 interface Emits {
-  (e: "a2uiAction", payload: ActionPayload): void;
+  (e: "a2uiAction", payload: A2UIActionPayload): void;
   (e: "reload", messageId: string | number): void;
 }
 
@@ -34,10 +40,17 @@ interface ParsedThinkContent {
   thinkDone: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  a2uiPendingSurfaceId: "",
+  a2uiSubmissions: () => [],
+});
 const emit = defineEmits<Emits>();
 const thinkExpandedMap = ref<Record<string, boolean>>({});
 const thinkDoneMap = ref<Record<string, boolean>>({});
+
+/** useXChat 中 "loading"（占位等待）和 "updating"（流式接收中）都表示消息仍在进行中 */
+const isStreamingStatus = (status: unknown): boolean =>
+  status === "loading" || status === "updating";
 
 const roleConfig: BubbleListProps["role"] = {
   assistant: { placement: "start" },
@@ -95,7 +108,7 @@ const displayItems = computed<BubbleItemType[]>(() => {
 
   preparedItems.forEach((item) => {
     const parsed = item.extraInfo?.parsedA2UI;
-    if (!parsed || item.status === "loading") return;
+    if (!parsed || isStreamingStatus(item.status)) return;
 
     parsed.commands.forEach((command) => {
       const surfaceId = getA2UISurfaceId(command);
@@ -122,16 +135,9 @@ const displayItems = computed<BubbleItemType[]>(() => {
 
   return preparedItems.flatMap((item) => {
     const parsed = item.extraInfo?.parsedA2UI;
-    const isInternalActionPlaceholder =
-      Boolean(props.a2uiPendingSurfaceId) &&
-      item.role === "assistant" &&
-      item.status === "loading" &&
-      ((typeof item.content === "string" && item.content.trim() === "请稍候...") ||
-        (parsed && !parsed.markdown.trim()));
-    if (isInternalActionPlaceholder) return [];
     if (!parsed) return [item];
 
-    const isFinal = item.status !== "loading";
+    const isFinal = !isStreamingStatus(item.status);
     const errors = isFinal ? [...parsed.errors] : [];
     if (isFinal && parsed.hasPendingBlock) {
       errors.push("A2UI 响应未完整闭合");
@@ -151,7 +157,6 @@ const displayItems = computed<BubbleItemType[]>(() => {
     return [
       {
         ...item,
-        content: hasVisibleText ? item.content : " ",
         extraInfo: {
           ...item.extraInfo,
           parsedA2UI,
@@ -162,13 +167,20 @@ const displayItems = computed<BubbleItemType[]>(() => {
 });
 
 const getMarkdownStreaming = (item: BubbleItemType) => ({
-  hasNextChunk: item.status === "loading",
+  hasNextChunk: isStreamingStatus(item.status),
   enableAnimation: false,
 });
 
 const isA2UIActionPending = (commands: XCardCommand[]) =>
   Boolean(props.a2uiPendingSurfaceId) &&
   commands.some((command) => getA2UISurfaceId(command) === props.a2uiPendingSurfaceId);
+
+const lastAssistantMessageKey = computed(
+  () => [...displayItems.value].reverse().find((item) => item.role === "assistant")?.key,
+);
+
+const submissionsForMessage = (messageId: string | number) =>
+  props.a2uiSubmissions.filter((submission) => submission.ownerMessageId === String(messageId));
 
 const getThinkKey = (messageId: string | number) =>
   `${props.conversationKey || "__draft__"}::${String(messageId)}`;
@@ -293,6 +305,8 @@ watch(
             :errors="item.extraInfo.parsedA2UI.errors"
             :pending="item.extraInfo.parsedA2UI.hasPendingBlock"
             :action-pending="isA2UIActionPending(item.extraInfo.parsedA2UI.commands)"
+            :owner-message-id="String(item.key)"
+            :submissions="submissionsForMessage(item.key)"
             @action="emit('a2uiAction', $event)"
           />
         </div>
@@ -300,7 +314,14 @@ watch(
       </template>
 
       <template #footer="{ item }">
-        <Tooltip v-if="item.role === 'assistant' && item.status === 'success'" title="重新生成">
+        <Tooltip
+          v-if="
+            item.role === 'assistant' &&
+            item.status === 'success' &&
+            item.key === lastAssistantMessageKey
+          "
+          title="重新生成"
+        >
           <Button
             size="small"
             type="text"

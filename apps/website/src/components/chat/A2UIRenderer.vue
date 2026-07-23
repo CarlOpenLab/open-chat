@@ -21,7 +21,13 @@ import {
   TypographyText,
   TypographyTitle,
 } from "antdv-next";
-import { createA2UIDataModelSnapshot } from "../../utils/a2ui";
+import {
+  createA2UIDataModelSnapshot,
+  flattenA2UIDataModelSnapshot,
+  getA2UISurfaceId,
+  type A2UIActionPayload,
+  type A2UISubmission,
+} from "../../utils/a2ui";
 import {
   computed,
   defineComponent,
@@ -41,10 +47,12 @@ interface Props {
   errors?: string[];
   pending?: boolean;
   actionPending?: boolean;
+  ownerMessageId?: string;
+  submissions?: A2UISubmission[];
 }
 
 interface Emits {
-  (e: "action", payload: ActionPayload): void;
+  (e: "action", payload: A2UIActionPayload): void;
 }
 
 interface A2UIAction {
@@ -65,9 +73,38 @@ const props = withDefaults(defineProps<Props>(), {
   errors: () => [],
   pending: false,
   actionPending: false,
+  ownerMessageId: "",
+  submissions: () => [],
 });
 const emit = defineEmits<Emits>();
 const inputValues = reactive<A2UIInputValues>({});
+const latestSubmissionBySurface = computed(() => {
+  const latest = new Map<string, A2UISubmission>();
+  props.submissions.forEach((submission) => {
+    const current = latest.get(submission.surfaceId);
+    if (!current || submission.submittedAt >= current.submittedAt) {
+      latest.set(submission.surfaceId, submission);
+    }
+  });
+  return latest;
+});
+const submittedValuesBySurface = computed<Record<string, Record<string, unknown>>>(() =>
+  Object.fromEntries(
+    [...latestSubmissionBySurface.value.entries()].map(([surfaceId, submission]) => [
+      surfaceId,
+      flattenA2UIDataModelSnapshot(submission.data),
+    ]),
+  ),
+);
+const submittedActionNamesBySurface = computed(() => {
+  const names = new Map<string, Set<string>>();
+  props.submissions.forEach((submission) => {
+    const surfaceNames = names.get(submission.surfaceId) ?? new Set<string>();
+    surfaceNames.add(submission.action.name);
+    names.set(submission.surfaceId, surfaceNames);
+  });
+  return names;
+});
 provide(A2UIInputValuesKey, inputValues);
 provide(
   A2UIActionPendingKey,
@@ -76,8 +113,8 @@ provide(
 
 let processedCommandCount = 0;
 watch(
-  () => props.commands.length,
-  (commandCount) => {
+  () => [props.commands.length, props.submissions] as const,
+  ([commandCount]) => {
     if (commandCount < processedCommandCount) {
       Object.keys(inputValues).forEach((surfaceId) => delete inputValues[surfaceId]);
       processedCommandCount = 0;
@@ -86,12 +123,19 @@ watch(
     props.commands.slice(processedCommandCount).forEach((command) => {
       if (!("updateDataModel" in command)) return;
       const { surfaceId, path, value } = command.updateDataModel;
-      const surfaceValues = inputValues[surfaceId];
-      if (surfaceValues && path in surfaceValues) surfaceValues[path] = value;
+      inputValues[surfaceId] ??= {};
+      const submittedValues = submittedValuesBySurface.value[surfaceId];
+      inputValues[surfaceId][path] =
+        submittedValues && Object.hasOwn(submittedValues, path) ? submittedValues[path] : value;
     });
     processedCommandCount = commandCount;
+
+    Object.entries(submittedValuesBySurface.value).forEach(([surfaceId, values]) => {
+      inputValues[surfaceId] ??= {};
+      Object.assign(inputValues[surfaceId], values);
+    });
   },
-  { immediate: true },
+  { immediate: true, deep: true },
 );
 
 const surfaceIds = computed(() => {
@@ -298,19 +342,14 @@ const A2UIButton = defineComponent({
           return [key, value];
         }),
       );
-      const hasConfiguredValues = Object.values(configuredContext).some(
-        (value) => value !== undefined,
-      );
-      const context = hasConfiguredValues
-        ? configuredContext
-        : createA2UIDataModelSnapshot(surfaceValues);
-      componentProps.onAction?.(name, context);
+      componentProps.onAction?.(name, configuredContext);
     };
 
     return () =>
       h(
         Button,
         {
+          class: "a2ui-button",
           danger: componentProps.danger,
           disabled: componentProps.disabled || actionPending.value,
           loading: componentProps.loading || actionPending.value,
@@ -358,6 +397,34 @@ const rendererCommands = computed<XCardCommand[]>(() => {
           if (component.component === "Button" || component.component === "TextField") {
             normalized.__a2uiSurfaceId = command.updateComponents.surfaceId;
           }
+          const surfaceId = command.updateComponents.surfaceId;
+          const submittedValues = submittedValuesBySurface.value[surfaceId];
+          const submittedActionNames = submittedActionNamesBySurface.value.get(surfaceId);
+          if (
+            submittedValues &&
+            component.component === "TextField" &&
+            component.value &&
+            typeof component.value === "object" &&
+            "path" in component.value &&
+            typeof component.value.path === "string" &&
+            Object.hasOwn(submittedValues, component.value.path)
+          ) {
+            normalized.disabled = true;
+          }
+          if (
+            submittedActionNames &&
+            component.component === "Button" &&
+            component.action &&
+            typeof component.action === "object" &&
+            "event" in component.action &&
+            component.action.event &&
+            typeof component.action.event === "object" &&
+            "name" in component.action.event &&
+            typeof component.action.event.name === "string" &&
+            submittedActionNames.has(component.action.event.name)
+          ) {
+            normalized.disabled = true;
+          }
           if (
             component.component === "TextField" &&
             component.value &&
@@ -383,6 +450,24 @@ const rendererCommands = computed<XCardCommand[]>(() => {
 
   return [...normalizedCommands, ...localDataUpdates];
 });
+
+const handleRendererAction = (payload: ActionPayload) => {
+  const surfaceValues = inputValues[payload.surfaceId] ?? {};
+  const surfaceRevision = props.commands.filter(
+    (command) => getA2UISurfaceId(command) === payload.surfaceId,
+  ).length;
+  emit("action", {
+    surfaceId: payload.surfaceId,
+    surfaceRevision,
+    ownerMessageId: props.ownerMessageId,
+    name: payload.name,
+    context:
+      payload.context && typeof payload.context === "object"
+        ? (payload.context as Record<string, unknown>)
+        : {},
+    data: createA2UIDataModelSnapshot(surfaceValues),
+  });
+};
 
 const pathValue = {
   type: "object",
@@ -507,14 +592,14 @@ registerCatalog(catalog);
       v-if="surfaceIds.length"
       :commands="rendererCommands"
       :components="componentCatalog"
-      :on-action="(payload) => emit('action', payload)"
+      :on-action="handleRendererAction"
     >
       <XCardCard v-for="surfaceId in surfaceIds" :id="surfaceId" :key="surfaceId" />
     </XCardBox>
 
-    <div v-if="pending" class="a2ui-pending" aria-label="界面生成中">
-      <Skeleton active :paragraph="{ rows: 2 }" :title="false" />
-    </div>
+    <Card v-if="pending" class="a2ui-pending" size="small" role="status" aria-label="界面生成中">
+      <Skeleton active :paragraph="{ rows: 3 }" />
+    </Card>
     <Alert
       v-for="error in errors"
       :key="error"
@@ -557,6 +642,19 @@ registerCatalog(catalog);
 }
 .a2ui-field-label {
   line-height: 1.4;
+}
+.a2ui-renderer :deep(.a2ui-button.ant-btn-primary) {
+  border-color: var(--brand-primary) !important;
+  background: var(--brand-primary) !important;
+  color: var(--brand-primary-foreground) !important;
+}
+.a2ui-renderer :deep(.a2ui-button.ant-btn-primary .a2ui-copy) {
+  color: inherit !important;
+}
+.a2ui-renderer :deep(.a2ui-button.ant-btn-primary:not(:disabled):hover) {
+  border-color: var(--brand-primary-hover) !important;
+  background: var(--brand-primary-hover) !important;
+  color: var(--brand-primary-foreground) !important;
 }
 .a2ui-pending,
 .a2ui-error {

@@ -1,9 +1,7 @@
 import type { XCardCommand } from "@antdv-next/x-card";
 
-const A2UI_OPEN_TAG = "<a2ui-json>";
-const A2UI_CLOSE_TAG = "</a2ui-json>";
-const A2UI_FENCE = /^[\t ]{0,3}```json-a2ui[\t ]*$/i;
-const A2UI_FENCE_CLOSE = /^[\t ]{0,3}```[\t ]*$/;
+const A2UI_OPEN_TAG = "<a2ui>";
+const A2UI_CLOSE_TAG = "</a2ui>";
 const FENCE = /^[\t ]{0,3}(`{3,}|~{3,})/;
 
 export interface ParsedA2UIContent {
@@ -23,6 +21,30 @@ export interface A2UIConversationState {
   commands: XCardCommand[];
   errors: string[];
   pending: boolean;
+}
+
+export interface A2UIActionPayload {
+  surfaceId: string;
+  surfaceRevision: number;
+  ownerMessageId: string;
+  name: string;
+  context: Record<string, unknown>;
+  data: Record<string, unknown>;
+}
+
+export interface A2UISubmission {
+  submissionId: string;
+  conversationId: string;
+  ownerMessageId: string;
+  surfaceId: string;
+  surfaceRevision: number;
+  action: {
+    name: string;
+    context: Record<string, unknown>;
+  };
+  data: Record<string, unknown>;
+  status: "submitted";
+  submittedAt: number;
 }
 
 export function getA2UISurfaceId(command: XCardCommand): string {
@@ -62,50 +84,30 @@ function findOpenTagOutsideCodeFence(content: string, from: number): number {
   return -1;
 }
 
-interface FencedBlockPosition {
-  start: number;
-  payloadStart: number;
-}
-
-function findA2UIFenceOutsideCodeFence(content: string, from: number): FencedBlockPosition | null {
-  let offset = 0;
-  let fenceMarker = "";
-
-  for (const line of content.split(/(?<=\n)/)) {
-    const lineWithoutNewline = line.replace(/\r?\n$/, "");
-
-    if (!fenceMarker && offset >= from && A2UI_FENCE.test(lineWithoutNewline)) {
-      return { start: offset, payloadStart: offset + line.length };
-    }
-
-    const fence = lineWithoutNewline.match(FENCE)?.[1] ?? "";
-    if (fence) {
-      if (!fenceMarker) fenceMarker = fence;
-      else if (fence[0] === fenceMarker[0] && fence.length >= fenceMarker.length) fenceMarker = "";
-    }
-
-    offset += line.length;
-  }
-
-  return null;
-}
-
-function findA2UIFenceClose(content: string, payloadStart: number) {
-  let offset = payloadStart;
-
-  for (const line of content.slice(payloadStart).split(/(?<=\n)/)) {
-    const lineWithoutNewline = line.replace(/\r?\n$/, "");
-    if (A2UI_FENCE_CLOSE.test(lineWithoutNewline)) {
-      return { closeIndex: offset, endIndex: offset + line.length };
-    }
-    offset += line.length;
-  }
-
-  return null;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function isValidA2UISubmission(value: unknown): value is A2UISubmission {
+  if (!isRecord(value) || !isRecord(value.action) || !isRecord(value.data)) return false;
+  return (
+    typeof value.submissionId === "string" &&
+    value.submissionId.length > 0 &&
+    typeof value.conversationId === "string" &&
+    typeof value.ownerMessageId === "string" &&
+    value.ownerMessageId.length > 0 &&
+    typeof value.surfaceId === "string" &&
+    value.surfaceId.length > 0 &&
+    typeof value.surfaceRevision === "number" &&
+    Number.isInteger(value.surfaceRevision) &&
+    value.surfaceRevision >= 0 &&
+    typeof value.action.name === "string" &&
+    value.action.name.length > 0 &&
+    isRecord(value.action.context) &&
+    value.status === "submitted" &&
+    typeof value.submittedAt === "number" &&
+    Number.isFinite(value.submittedAt)
+  );
 }
 
 const UNSAFE_DATA_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
@@ -142,6 +144,63 @@ export function createA2UIDataModelSnapshot(
   });
 
   return snapshot;
+}
+
+function escapeJsonPointerSegment(segment: string): string {
+  return segment.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+export function flattenA2UIDataModelSnapshot(
+  snapshot: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const valuesByPath: Record<string, unknown> = {};
+
+  const visit = (value: unknown, segments: string[]) => {
+    if (isRecord(value) && Object.keys(value).length > 0) {
+      Object.entries(value).forEach(([key, child]) => {
+        if (!key || UNSAFE_DATA_PATH_SEGMENTS.has(key)) return;
+        visit(child, [...segments, key]);
+      });
+      return;
+    }
+
+    if (segments.length === 0) return;
+    valuesByPath[`/${segments.map(escapeJsonPointerSegment).join("/")}`] = value;
+  };
+
+  visit(snapshot, []);
+  return valuesByPath;
+}
+
+export function createA2UISubmission(
+  payload: A2UIActionPayload,
+  conversationId: string,
+  now: number = Date.now(),
+): A2UISubmission {
+  const randomId = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 14);
+  return {
+    submissionId: `a2ui-${randomId}`,
+    conversationId,
+    ownerMessageId: payload.ownerMessageId,
+    surfaceId: payload.surfaceId,
+    surfaceRevision: payload.surfaceRevision,
+    action: {
+      name: payload.name,
+      context: payload.context,
+    },
+    data: payload.data,
+    status: "submitted",
+    submittedAt: now,
+  };
+}
+
+/** Format a form submission as a normal user message so the AI can process
+ *  the data naturally. The submitted form is already locked locally — the AI
+ *  should respond with normal Markdown or new A2UI surfaces, not update the
+ *  existing form. */
+export function formatA2UISubmissionAsUserMessage(submission: A2UISubmission): string {
+  const dataJson = JSON.stringify(submission.data, null, 2);
+  return `[表单提交] ${submission.action.name}\n\n${dataJson}`;
 }
 
 function validateCommand(value: unknown): value is XCardCommand {
@@ -266,23 +325,15 @@ export function parseA2UIContent(content: string): ParsedA2UIContent {
 
   while (cursor < content.length) {
     const tagStart = findOpenTagOutsideCodeFence(content, cursor);
-    const fencedStart = findA2UIFenceOutsideCodeFence(content, cursor);
-    const useFence = fencedStart !== null && (tagStart === -1 || fencedStart.start < tagStart);
-    const blockStart = useFence ? (fencedStart?.start ?? -1) : tagStart;
 
-    if (blockStart === -1) {
+    if (tagStart === -1) {
       markdownParts.push(content.slice(cursor));
       break;
     }
 
-    markdownParts.push(content.slice(cursor, blockStart));
-    const payloadStart = useFence
-      ? (fencedStart?.payloadStart ?? content.length)
-      : blockStart + A2UI_OPEN_TAG.length;
-    const fencedClose = useFence ? findA2UIFenceClose(content, payloadStart) : null;
-    const closeIndex = useFence
-      ? (fencedClose?.closeIndex ?? -1)
-      : content.indexOf(A2UI_CLOSE_TAG, payloadStart);
+    markdownParts.push(content.slice(cursor, tagStart));
+    const payloadStart = tagStart + A2UI_OPEN_TAG.length;
+    const closeIndex = content.indexOf(A2UI_CLOSE_TAG, payloadStart);
 
     if (closeIndex === -1) {
       return {
@@ -297,9 +348,7 @@ export function parseA2UIContent(content: string): ParsedA2UIContent {
     const parsed = parseCommandBlock(content.slice(payloadStart, closeIndex).trim(), blockNumber);
     commands.push(...parsed.commands);
     errors.push(...parsed.errors);
-    cursor = useFence
-      ? (fencedClose?.endIndex ?? content.length)
-      : closeIndex + A2UI_CLOSE_TAG.length;
+    cursor = closeIndex + A2UI_CLOSE_TAG.length;
   }
 
   return {

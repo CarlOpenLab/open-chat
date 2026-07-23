@@ -1,5 +1,6 @@
 import type { ConversationItemType } from "@antdv-next/x";
 import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
+import { isValidA2UISubmission, type A2UISubmission } from "../utils/a2ui";
 
 const DB_NAME = "open-chat";
 const DB_VERSION = 1;
@@ -8,10 +9,11 @@ const CHAT_STATE_KEY = "chat-state-v1";
 
 export interface PersistedConversation extends Omit<ConversationItemType, "messages"> {
   messages: DefaultMessageInfo<XModelMessage>[];
+  a2uiSubmissions?: A2UISubmission[];
 }
 
 export interface PersistedChatState {
-  version: 1;
+  version: 2;
   currentConversationKey: string;
   currentModel: string;
   conversationList: PersistedConversation[];
@@ -68,16 +70,23 @@ async function withStore<T>(
   });
 }
 
-function isValidPersistedState(value: unknown): value is PersistedChatState {
+interface PersistedChatStateInput {
+  version: 1 | 2;
+  currentConversationKey: string | number;
+  currentModel: string;
+  conversationList: PersistedConversation[];
+}
+
+function isValidPersistedState(value: unknown): value is PersistedChatStateInput {
   if (!value || typeof value !== "object") return false;
 
-  const state = value as Partial<PersistedChatState> & { currentConversationKey?: unknown };
+  const state = value as Partial<PersistedChatStateInput>;
   const validCurrentConversationKey =
     typeof state.currentConversationKey === "string" ||
     typeof state.currentConversationKey === "number";
 
   return (
-    state.version === 1 &&
+    (state.version === 1 || state.version === 2) &&
     validCurrentConversationKey &&
     typeof state.currentModel === "string" &&
     Array.isArray(state.conversationList)
@@ -88,8 +97,15 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
   if (!isValidPersistedState(value)) return null;
 
   return {
-    ...value,
+    version: 2,
     currentConversationKey: String(value.currentConversationKey),
+    currentModel: value.currentModel,
+    conversationList: value.conversationList.map((conversation) => ({
+      ...conversation,
+      a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
+        ? conversation.a2uiSubmissions.filter(isValidA2UISubmission)
+        : [],
+    })),
   };
 }
 
