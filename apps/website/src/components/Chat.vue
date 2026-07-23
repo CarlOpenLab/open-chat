@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import type { BubbleItemType, ConversationItemType, ConversationsProps } from "@antdv-next/x";
+import type { ActionPayload } from "@antdv-next/x-card";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelParams, XModelResponse } from "@antdv-next/x-sdk";
-import { DeepSeekChatProvider, XRequest, useXChat } from "@antdv-next/x-sdk";
+import { XRequest, useXChat } from "@antdv-next/x-sdk";
 import { Copy, Download, FileText, Link2, Plus, Trash2, X } from "@lucide/vue";
 import { Button, Input, Modal, Switch, message, type MenuProps } from "antdv-next";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { aiService, API_BASE_URL, GATEWAY_API_KEY, type ModelsProvider } from "../services/ai";
+import { OpenChatProvider } from "../services/OpenChatProvider";
 import {
   clearChatState,
   loadChatState,
@@ -46,6 +48,7 @@ const memoryEnabled = ref(true);
 const currentConversationKey = ref<string>("");
 const currentModel = ref("");
 const thinkingEnabled = ref(true);
+const pendingA2UISurfaceId = ref("");
 const showWelcome = ref(true);
 const isHydrating = ref(true);
 const activeRequestConversationKey = ref<string>("");
@@ -359,7 +362,7 @@ loadModels();
 // ============ XChat 配置 ============
 
 const createProvider = () => {
-  return new DeepSeekChatProvider({
+  return new OpenChatProvider({
     request: XRequest<XModelParams, XModelResponse>(`${API_BASE_URL}/api/chat/completions`, {
       manual: true,
       params: { stream: true } as XModelParams,
@@ -412,6 +415,7 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
 watch(isRequesting, (requesting) => {
   if (!requesting) {
     activeRequestConversationKey.value = "";
+    pendingA2UISurfaceId.value = "";
   }
 });
 
@@ -475,14 +479,26 @@ onBeforeUnmount(() => {
 
 // ============ 消息转换 ============
 
+const A2UI_ACTION_PREFIX = "[A2UI_ACTION]";
+const isInternalA2UIAction = (modelMessage: XModelMessage) =>
+  modelMessage.role === "user" &&
+  typeof modelMessage.content === "string" &&
+  modelMessage.content.startsWith(A2UI_ACTION_PREFIX);
+
 const bubbleItems = computed<BubbleItemType[]>(() =>
-  currentConversationMessages.value.map(({ id, message, status }) => ({
-    key: id,
-    role: message.role,
-    status,
-    loading: status === "loading",
-    content: typeof message.content === "string" ? message.content : "",
-  })),
+  currentConversationMessages.value.flatMap(({ id, message: modelMessage, status }) => {
+    if (isInternalA2UIAction(modelMessage)) return [];
+
+    return [
+      {
+        key: id,
+        role: modelMessage.role,
+        status,
+        loading: status === "loading",
+        content: typeof modelMessage.content === "string" ? modelMessage.content : "",
+      },
+    ];
+  }),
 );
 
 // ============ 事件处理 ============
@@ -525,6 +541,19 @@ const handleSubmit = (nextContent: string) => {
   setTimeout(() => {
     content.value = "";
   }, 0);
+};
+
+const handleA2UIAction = (payload: ActionPayload) => {
+  if (isRequesting.value) {
+    message.warning("回答生成中，请稍后再操作界面");
+    return;
+  }
+
+  pendingA2UISurfaceId.value = payload.surfaceId;
+  const serializedContext = JSON.stringify(payload.context ?? {}).slice(0, 4000);
+  handleSubmit(
+    `${A2UI_ACTION_PREFIX}\nsurfaceId: ${payload.surfaceId}\nname: ${payload.name}\ncontext: ${serializedContext}`,
+  );
 };
 
 const handleModelChange = (key: string) => {
@@ -644,6 +673,8 @@ const copyShareLink = async () => {
         :show-welcome="showWelcome && currentConversationMessages.length === 0"
         :bubble-items="bubbleItems"
         :conversation-key="currentConversationKey"
+        :a2ui-pending-surface-id="pendingA2UISurfaceId"
+        @a2ui-action="handleA2UIAction"
         @reload="handleReloadMessage"
       />
 

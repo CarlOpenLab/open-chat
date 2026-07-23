@@ -1,21 +1,31 @@
 <script setup lang="ts">
 import type { BubbleItemType, BubbleListProps } from "@antdv-next/x";
 import { BubbleList, Think, Welcome } from "@antdv-next/x";
+import type { ActionPayload, XCardCommand } from "@antdv-next/x-card";
 import { XMarkdown } from "@antdv-next/x-markdown";
 import { RotateCcw, Sparkles } from "@lucide/vue";
 import { Button, Tooltip } from "antdv-next";
 import { computed, ref, watch, type Component } from "vue";
-import { normalizeMarkdownContent } from "../../utils/normalizeMarkdown";
+import { getA2UISurfaceId, parseA2UIContent } from "../../utils/a2ui";
+import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 
 interface Props {
   showWelcome: boolean;
   bubbleItems: BubbleItemType[];
   conversationKey: string;
+  a2uiPendingSurfaceId?: string;
 }
 
 interface Emits {
+  (e: "a2uiAction", payload: ActionPayload): void;
   (e: "reload", messageId: string | number): void;
+}
+
+interface ParsedA2UIRenderContent {
+  commands: XCardCommand[];
+  errors: string[];
+  hasPendingBlock: boolean;
 }
 
 interface ParsedThinkContent {
@@ -58,26 +68,107 @@ const parseThinkContent = (value: string): ParsedThinkContent | null => {
   };
 };
 
-const displayItems = computed<BubbleItemType[]>(() =>
-  props.bubbleItems.map((item) => {
-    const normalizedContent =
+const displayItems = computed<BubbleItemType[]>(() => {
+  const preparedItems = props.bubbleItems.map((item) => {
+    const parsedA2UI =
       item.role === "assistant" && typeof item.content === "string"
-        ? normalizeMarkdownContent(item.content)
-        : item.content;
+        ? parseA2UIContent(item.content)
+        : null;
+    const displayContent = parsedA2UI?.markdown ?? item.content;
 
     return {
       ...item,
-      content: normalizedContent,
+      content: displayContent,
       extraInfo: {
         ...item.extraInfo,
+        parsedA2UI,
         parsedThink:
-          item.role === "assistant" && typeof normalizedContent === "string"
-            ? parseThinkContent(normalizedContent)
+          item.role === "assistant" && typeof displayContent === "string"
+            ? parseThinkContent(displayContent)
             : null,
       },
     };
-  }),
-);
+  });
+
+  const surfaceOwner = new Map<string, string>();
+  const commandsByOwner = new Map<string, XCardCommand[]>();
+
+  preparedItems.forEach((item) => {
+    const parsed = item.extraInfo?.parsedA2UI;
+    if (!parsed || item.status === "loading") return;
+
+    parsed.commands.forEach((command) => {
+      const surfaceId = getA2UISurfaceId(command);
+      const itemKey = String(item.key);
+
+      if ("createSurface" in command) {
+        if (surfaceOwner.has(surfaceId)) {
+          parsed.errors.push(`A2UI Surface ${surfaceId} 被重复创建`);
+          return;
+        }
+        surfaceOwner.set(surfaceId, itemKey);
+      }
+
+      const ownerKey = surfaceOwner.get(surfaceId);
+      if (!ownerKey) {
+        parsed.errors.push(`A2UI Surface ${surfaceId} 尚未创建`);
+        return;
+      }
+
+      commandsByOwner.set(ownerKey, [...(commandsByOwner.get(ownerKey) ?? []), command]);
+      if ("deleteSurface" in command) surfaceOwner.delete(surfaceId);
+    });
+  });
+
+  return preparedItems.flatMap((item) => {
+    const parsed = item.extraInfo?.parsedA2UI;
+    const isInternalActionPlaceholder =
+      Boolean(props.a2uiPendingSurfaceId) &&
+      item.role === "assistant" &&
+      item.status === "loading" &&
+      ((typeof item.content === "string" && item.content.trim() === "请稍候...") ||
+        (parsed && !parsed.markdown.trim()));
+    if (isInternalActionPlaceholder) return [];
+    if (!parsed) return [item];
+
+    const isFinal = item.status !== "loading";
+    const errors = isFinal ? [...parsed.errors] : [];
+    if (isFinal && parsed.hasPendingBlock) {
+      errors.push("A2UI 响应未完整闭合");
+    }
+
+    const parsedA2UI: ParsedA2UIRenderContent = {
+      commands: isFinal ? (commandsByOwner.get(String(item.key)) ?? []) : [],
+      errors,
+      hasPendingBlock: !isFinal && (parsed.hasPendingBlock || parsed.commands.length > 0),
+    };
+    const hasVisibleText = typeof item.content !== "string" || item.content.trim().length > 0;
+    const hasVisibleA2UI =
+      parsedA2UI.commands.length > 0 || parsedA2UI.errors.length > 0 || parsedA2UI.hasPendingBlock;
+
+    if (item.role === "assistant" && !hasVisibleText && !hasVisibleA2UI) return [];
+
+    return [
+      {
+        ...item,
+        content: hasVisibleText ? item.content : " ",
+        extraInfo: {
+          ...item.extraInfo,
+          parsedA2UI,
+        },
+      },
+    ];
+  });
+});
+
+const getMarkdownStreaming = (item: BubbleItemType) => ({
+  hasNextChunk: item.status === "loading",
+  enableAnimation: false,
+});
+
+const isA2UIActionPending = (commands: XCardCommand[]) =>
+  Boolean(props.a2uiPendingSurfaceId) &&
+  commands.some((command) => getA2UISurfaceId(command) === props.a2uiPendingSurfaceId);
 
 const getThinkKey = (messageId: string | number) =>
   `${props.conversationKey || "__draft__"}::${String(messageId)}`;
@@ -172,6 +263,7 @@ watch(
               <XMarkdown
                 :content="item.extraInfo.parsedThink.thinkContent"
                 :components="markdownComponents"
+                :streaming="getMarkdownStreaming(item)"
                 class-name="x-markdown-light"
               />
             </Think>
@@ -179,6 +271,7 @@ watch(
               v-if="item.extraInfo.parsedThink.answerContent"
               :content="item.extraInfo.parsedThink.answerContent"
               :components="markdownComponents"
+              :streaming="getMarkdownStreaming(item)"
               class-name="x-markdown-light"
             />
           </template>
@@ -186,7 +279,21 @@ watch(
             v-else
             :content="String(content)"
             :components="markdownComponents"
+            :streaming="getMarkdownStreaming(item)"
             class-name="x-markdown-light"
+          />
+          <A2UIRenderer
+            v-if="
+              item.extraInfo?.parsedA2UI &&
+              (item.extraInfo.parsedA2UI.commands.length ||
+                item.extraInfo.parsedA2UI.errors.length ||
+                item.extraInfo.parsedA2UI.hasPendingBlock)
+            "
+            :commands="item.extraInfo.parsedA2UI.commands"
+            :errors="item.extraInfo.parsedA2UI.errors"
+            :pending="item.extraInfo.parsedA2UI.hasPendingBlock"
+            :action-pending="isA2UIActionPending(item.extraInfo.parsedA2UI.commands)"
+            @action="emit('a2uiAction', $event)"
           />
         </div>
         <span v-else>{{ content }}</span>

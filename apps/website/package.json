@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@antdv-next/x": "catalog:",
+    "@antdv-next/x-card": "catalog:",
     "@antdv-next/x-markdown": "catalog:",
     "@antdv-next/x-sdk": "catalog:",
     "@lucide/vue": "catalog:",
