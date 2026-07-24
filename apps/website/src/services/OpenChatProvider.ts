@@ -82,10 +82,14 @@ export const createTicketBranchSystemPrompt = (date: Date = new Date()) => `${A2
 - 分支名格式严格为：<type>/<feature-name>/<YYYYMMDD>/<ticketId>。
 - YYYYMMDD 必须使用上方给出的当前日期 ${formatPromptDate(date)}。
 - ticketId 去除首尾空格；若包含不适合 Git 分支名的空格或斜杠，统一替换为连字符。
-- 最终只能输出这一条命令：git switch -c <branch-name>
-- 不要输出解释、前后缀、引号、Markdown 代码块或其他内容。
+- 最终只能输出一个 Markdown 代码块，代码块内只能包含这一条命令：git checkout -b <branch-name>。
+- Markdown 代码块必须使用 bash 作为语言标识。
+- 不要输出代码块以外的解释、标题、前后缀、引号或其他内容。
 
-正确示例：git switch -c feat/new-tree/20251204/123432`;
+正确示例：
+\`\`\`bash
+git checkout -b feat/new-tree/20251204/123432
+\`\`\``;
 
 export interface OpenChatParams extends XModelParams {
   systemPrompt?: string;

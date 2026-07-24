@@ -1,6 +1,7 @@
 <script lang="ts">
 import { CodeHighlighter, Mermaid } from "@antdv-next/x";
-import { defineComponent, h, type VNode } from "vue";
+import { defineComponent, h, inject, type VNode } from "vue";
+import { markdownThemeKey } from "./markdownTheme";
 
 const extractText = (nodes: VNode[]): string =>
   nodes
@@ -18,6 +19,8 @@ export default defineComponent({
   name: "MarkdownCodeRenderer",
   inheritAttrs: false,
   setup(_, { attrs, slots }) {
+    const theme = inject(markdownThemeKey);
+
     return () => {
       const code = extractText(slots.default?.() ?? []);
       const className = readStringAttr(attrs, "class");
@@ -37,6 +40,7 @@ export default defineComponent({
       return h(CodeHighlighter, {
         content: code,
         language: language || "text",
+        theme: theme?.value ?? "light",
         showLineNumbers: true,
         showLanguage: true,
         showCopyButton: true,

@@ -766,6 +766,7 @@ const copyShareLink = async () => {
       <ChatMessages
         :show-welcome="showWelcome && currentConversationMessages.length === 0"
         :bubble-items="bubbleItems"
+        :dark="dark"
         :conversation-key="currentConversationKey"
         :a2ui-pending-surface-id="pendingA2UISurfaceId"
         :a2ui-submissions="currentA2UISubmissions"

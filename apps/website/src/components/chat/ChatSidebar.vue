@@ -189,7 +189,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
         :items="filteredConversations"
         :active-key="currentKey"
         :groupable="true"
-        :menu="conversationMenu"
+        :menu="open ? conversationMenu : undefined"
         @active-change="handleActiveChange"
       >
         <template #iconRender><MessageSquare /></template>
@@ -266,7 +266,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
   </aside>
 </template>
 
-<style scoped>
+<style lang="scss" scoped>
 .chat-sidebar {
   position: relative;
   z-index: 30;
@@ -509,6 +509,9 @@ kbd {
   min-width: 18px;
   color: var(--brand-muted);
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .chat-sidebar :deep(.antd-conversations-item-active .antd-conversations-icon) {
   color: var(--brand-primary);
@@ -545,6 +548,17 @@ kbd {
 }
 .chat-sidebar.is-collapsed :deep(.conversation-menu-trigger) {
   display: none;
+}
+.chat-sidebar.is-collapsed .conversation-scroll,
+.chat-sidebar.is-collapsed :deep(.antd-conversations) {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.chat-sidebar.is-collapsed .conversation-scroll::-webkit-scrollbar,
+.chat-sidebar.is-collapsed :deep(.antd-conversations::-webkit-scrollbar) {
+  display: none;
+  width: 0;
+  height: 0;
 }
 .search-empty {
   display: flex;
@@ -632,9 +646,24 @@ kbd {
   padding: 0;
 }
 .chat-sidebar.is-collapsed :deep(.antd-conversations-item) {
-  display: flex;
-  justify-content: center;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  margin-inline: auto;
+  place-items: center;
+  gap: 0;
   padding: 0;
+}
+.chat-sidebar.is-collapsed :deep(.antd-conversations-icon) {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  margin: 0;
+}
+.chat-sidebar.is-collapsed :deep(.antd-conversations-icon svg) {
+  display: block;
+  margin: auto;
 }
 .chat-sidebar.is-collapsed .sidebar-collapse :deep(svg) {
   transform: rotate(180deg);
@@ -751,8 +780,18 @@ kbd {
   }
   .chat-sidebar.is-collapsed :deep(.antd-conversations-item) {
     display: flex;
+    width: auto;
+    height: auto;
+    margin-inline: 0;
     justify-content: initial;
+    gap: 8px;
     padding-inline: 9px;
+  }
+  .chat-sidebar.is-collapsed :deep(.antd-conversations-icon) {
+    display: flex;
+    width: 18px;
+    height: auto;
+    margin: 0;
   }
   .chat-sidebar.is-collapsed .sidebar-collapse :deep(svg) {
     transform: none;

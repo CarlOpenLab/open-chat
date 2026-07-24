@@ -5,7 +5,7 @@ import type { XCardCommand } from "@antdv-next/x-card";
 import { XMarkdown } from "@antdv-next/x-markdown";
 import { RotateCcw, Sparkles } from "@lucide/vue";
 import { Button, Tooltip } from "antdv-next";
-import { computed, ref, watch, type Component } from "vue";
+import { computed, provide, ref, watch, type Component } from "vue";
 import {
   getA2UISurfaceId,
   parseA2UIContent,
@@ -14,10 +14,12 @@ import {
 } from "../../utils/a2ui";
 import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
+import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 
 interface Props {
   showWelcome: boolean;
   bubbleItems: BubbleItemType[];
+  dark: boolean;
   conversationKey: string;
   a2uiPendingSurfaceId?: string;
   a2uiSubmissions?: A2UISubmission[];
@@ -45,6 +47,9 @@ const props = withDefaults(defineProps<Props>(), {
   a2uiSubmissions: () => [],
 });
 const emit = defineEmits<Emits>();
+const markdownTheme = computed<MarkdownTheme>(() => (props.dark ? "dark" : "light"));
+const markdownClassName = computed(() => `chat-markdown x-markdown-${markdownTheme.value}`);
+provide(markdownThemeKey, markdownTheme);
 const thinkExpandedMap = ref<Record<string, boolean>>({});
 const thinkDoneMap = ref<Record<string, boolean>>({});
 
@@ -276,7 +281,7 @@ watch(
                 :content="item.extraInfo.parsedThink.thinkContent"
                 :components="markdownComponents"
                 :streaming="getMarkdownStreaming(item)"
-                class-name="x-markdown-light"
+                :class-name="markdownClassName"
               />
             </Think>
             <XMarkdown
@@ -284,7 +289,7 @@ watch(
               :content="item.extraInfo.parsedThink.answerContent"
               :components="markdownComponents"
               :streaming="getMarkdownStreaming(item)"
-              class-name="x-markdown-light"
+              :class-name="markdownClassName"
             />
           </template>
           <XMarkdown
@@ -292,7 +297,7 @@ watch(
             :content="String(content)"
             :components="markdownComponents"
             :streaming="getMarkdownStreaming(item)"
-            class-name="x-markdown-light"
+            :class-name="markdownClassName"
           />
           <A2UIRenderer
             v-if="
@@ -500,7 +505,7 @@ watch(
   width: 14px;
   height: 14px;
 }
-.messages-wrapper :deep(.x-markdown-light) {
+.messages-wrapper :deep(.chat-markdown) {
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -509,15 +514,15 @@ watch(
   line-height: 1.82;
   overflow-wrap: anywhere;
 }
-.messages-wrapper :deep(.x-markdown-light pre),
-.messages-wrapper :deep(.x-markdown-light table),
+.messages-wrapper :deep(.chat-markdown pre),
+.messages-wrapper :deep(.chat-markdown table),
 .messages-wrapper :deep(.antd-code-highlighter) {
   width: 100%;
   min-width: 0;
   max-width: 100%;
 }
-.messages-wrapper :deep(.x-markdown-light pre),
-.messages-wrapper :deep(.x-markdown-light table) {
+.messages-wrapper :deep(.chat-markdown pre),
+.messages-wrapper :deep(.chat-markdown table) {
   overflow-x: auto;
   overscroll-behavior-x: contain;
 }
@@ -526,10 +531,10 @@ watch(
   min-width: 0;
   max-width: 100%;
 }
-.messages-wrapper :deep(.x-markdown-light p) {
+.messages-wrapper :deep(.chat-markdown p) {
   margin: 0 0 13px;
 }
-.messages-wrapper :deep(.x-markdown-light p:last-child) {
+.messages-wrapper :deep(.chat-markdown p:last-child) {
   margin-bottom: 0;
 }
 
