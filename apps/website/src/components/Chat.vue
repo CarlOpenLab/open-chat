@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import type { BubbleItemType, ConversationItemType, ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
-import type { XModelMessage, XModelParams, XModelResponse } from "@antdv-next/x-sdk";
+import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest, useXChat } from "@antdv-next/x-sdk";
 import { Copy, Download, FileText, Link2, Plus, Trash2, X } from "@lucide/vue";
 import { Button, Input, Modal, Switch, message, type MenuProps } from "antdv-next";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { aiService, API_BASE_URL, GATEWAY_API_KEY, type ModelsProvider } from "../services/ai";
-import { OpenChatProvider } from "../services/OpenChatProvider";
+import {
+  OpenChatProvider,
+  createTicketBranchSystemPrompt,
+  type OpenChatParams,
+} from "../services/OpenChatProvider";
 import {
   A2UI_SUBMISSION_MESSAGE_KIND,
   createA2UISubmission,
@@ -40,6 +44,7 @@ interface Emits {
 
 interface OpenChatConversation extends ConversationItemType {
   a2uiSubmissions?: A2UISubmission[];
+  systemPrompt?: string;
 }
 
 defineProps<Props>();
@@ -71,12 +76,13 @@ const getMessagePreview = (content: string, maxLength: number = 20): string => {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
 };
 
-const createNewConversation = (): OpenChatConversation => ({
+const createNewConversation = (systemPrompt: string = ""): OpenChatConversation => ({
   key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   label: "新对话",
   group: "今天",
   messages: [],
   a2uiSubmissions: [],
+  systemPrompt,
 });
 
 const conversationList = ref<OpenChatConversation[]>([]);
@@ -116,6 +122,8 @@ const toPersistedConversations = (list: OpenChatConversation[]): PersistedConver
         a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
           ? conversation.a2uiSubmissions
           : [],
+        systemPrompt:
+          typeof conversation.systemPrompt === "string" ? conversation.systemPrompt : "",
       };
     });
 };
@@ -386,9 +394,9 @@ loadModels();
 
 const createProvider = () => {
   return new OpenChatProvider({
-    request: XRequest<XModelParams, XModelResponse>(`${API_BASE_URL}/api/chat/completions`, {
+    request: XRequest<OpenChatParams, XModelResponse>(`${API_BASE_URL}/api/chat/completions`, {
       manual: true,
-      params: { stream: true } as XModelParams,
+      params: { stream: true } as OpenChatParams,
       headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
       streamTimeout: 60000,
     }),
@@ -412,7 +420,7 @@ watch(models, () => reconcileCurrentModel());
 const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useXChat<
   XModelMessage,
   XModelMessage,
-  XModelParams,
+  OpenChatParams,
   XModelResponse
 >({
   provider: provider,
@@ -519,12 +527,14 @@ const bubbleItems = computed<BubbleItemType[]>(() => {
 
 // ============ 事件处理 ============
 
-const handlePromptClick = (info: { data: { description?: string } }) => {
+const handlePromptClick = (info: { data: { key?: string; description?: string } }) => {
   const prompt = typeof info.data.description === "string" ? info.data.description : "";
-  if (!isRequesting.value && prompt) {
-    showWelcome.value = false;
-    handleSubmit(prompt);
-  }
+  if (isRequesting.value || !prompt) return;
+
+  showWelcome.value = false;
+  handleSubmit(prompt, {
+    systemPrompt: info.data.key === "ticket-branch" ? createTicketBranchSystemPrompt() : "",
+  });
 };
 
 const handleChange = (value: string) => {
@@ -533,15 +543,21 @@ const handleChange = (value: string) => {
 
 const handleSubmit = (
   nextContent: string,
-  options: { extraInfo?: Record<string, unknown> } = {},
+  options: { extraInfo?: Record<string, unknown>; systemPrompt?: string } = {},
 ) => {
   if (!nextContent || !nextContent.trim()) return;
 
   // 草稿态首次发送时，才创建真实会话并写入侧栏
   if (isInDraftMode.value) {
-    const newConversation = createNewConversation();
+    const newConversation = createNewConversation(options.systemPrompt);
     conversationList.value.unshift(newConversation);
     currentConversationKey.value = String(newConversation.key);
+  }
+
+  const conversation = getCurrentConversation();
+  if (!conversation) return;
+  if (options.systemPrompt !== undefined) {
+    conversation.systemPrompt = options.systemPrompt.trim();
   }
 
   setMessages(currentConversationMessages.value);
@@ -552,6 +568,7 @@ const handleSubmit = (
     {
       messages: [{ role: "user", content: nextContent }],
       model: currentModel.value,
+      systemPrompt: conversation.systemPrompt ?? "",
       enable_thinking: thinkingEnabled.value,
       thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
     },
@@ -621,7 +638,10 @@ const handleReloadMessage = (messageId: string | number) => {
   }
 
   setMessages(currentConversationMessages.value);
-  onReload(messageId, { model: currentModel.value });
+  onReload(messageId, {
+    model: currentModel.value,
+    systemPrompt: getCurrentConversation()?.systemPrompt ?? "",
+  });
 };
 
 const handleRenameConversation = (title: string) => {

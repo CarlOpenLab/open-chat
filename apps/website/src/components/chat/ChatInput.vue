@@ -4,13 +4,13 @@ import {
   AudioLines,
   BrainCircuit,
   ChevronDown,
-  ClipboardList,
-  Code2,
+  GitBranch,
+  Lightbulb,
   FileText,
   Globe2,
   PanelTop,
   Paperclip,
-  ScanText,
+  Sparkles,
   SlidersHorizontal,
   Square,
   X,
@@ -44,7 +44,7 @@ interface Emits {
   (e: "submit", value: string): void;
   (e: "modelChange", key: string): void;
   (e: "thinkingChange", value: boolean): void;
-  (e: "promptClick", info: { data: { description: string } }): void;
+  (e: "promptClick", info: { data: { key: string; description: string } }): void;
 }
 
 const props = defineProps<Props>();
@@ -60,32 +60,33 @@ const voiceActive = ref(false);
 
 const starterPromptItems: PromptsItemType[] = [
   {
-    key: "plan",
-    label: "整理工作计划",
-    description: "把目标拆成清晰的执行步骤",
+    key: "ticket-branch",
+    label: "生成工单分支",
+    description: "填写工单 ID 和项目名称，生成 Git 分支",
   },
   {
-    key: "analyze",
-    label: "分析一份内容",
-    description: "提炼重点、模式和下一步",
+    key: "placeholder-idea",
+    label: "梳理一个想法",
+    description: "快速整理目标、边界和下一步",
   },
   {
-    key: "code",
-    label: "一起写代码",
-    description: "设计、解释或重构实现",
+    key: "placeholder-review",
+    label: "检查一段内容",
+    description: "发现问题并给出简洁建议",
   },
 ];
 
 // 真实发送的提示词文本，按 key 查表，避免污染 Prompts 项的 DOM 属性
 const starterPromptText: Record<string, string> = {
-  plan: "帮我为下周的产品评审整理一份议程，包含目标、风险和待决策事项。",
-  analyze: "分析这份用户反馈，找出重复出现的问题，并按影响范围排序。",
-  code: "帮我设计一个 Vue 登录表单的状态结构，需要覆盖校验、加载和错误重试。",
+  "ticket-branch": "请启动工单分支生成流程，先用表单收集工单 ID 和项目名称。",
+  "placeholder-idea": "帮我把这个想法整理成目标、范围和下一步行动。",
+  "placeholder-review": "帮我检查一段内容，指出最需要改进的三个地方。",
 };
 
 const handlePromptItemClick = (info: { data: { key: string | number } }) => {
-  const prompt = starterPromptText[String(info.data.key)];
-  if (prompt) emit("promptClick", { data: { description: prompt } });
+  const key = String(info.data.key);
+  const prompt = starterPromptText[key];
+  if (prompt) emit("promptClick", { data: { key, description: prompt } });
 };
 
 const modelMenu = computed<MenuProps>(() => ({
@@ -152,9 +153,9 @@ const toggleVoice = () => {
         @item-click="handlePromptItemClick"
       >
         <template #iconRender="{ item }">
-          <ClipboardList v-if="item.key === 'plan'" />
-          <ScanText v-else-if="item.key === 'analyze'" />
-          <Code2 v-else />
+          <GitBranch v-if="item.key === 'ticket-branch'" />
+          <Lightbulb v-else-if="item.key === 'placeholder-idea'" />
+          <Sparkles v-else />
         </template>
       </Prompts>
     </div>

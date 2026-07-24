@@ -6,7 +6,7 @@ import type {
 } from "@antdv-next/x-sdk";
 import { DeepSeekChatProvider } from "@antdv-next/x-sdk";
 
-const A2UI_SYSTEM_PROMPT = `You are the assistant inside Open Chat. Answer with normal Markdown by default. Only return A2UI when the user explicitly asks for an interactive UI, form, card, or structured control.
+export const A2UI_SYSTEM_PROMPT = `You are the assistant inside Open Chat. Answer with normal Markdown by default. Only return A2UI when the user explicitly asks for an interactive UI, form, card, or structured control.
 
 When A2UI is requested, output exactly one complete protocol block using the <a2ui> tag, opened with <a2ui> and closed with </a2ui>.
 <a2ui>
@@ -39,21 +39,78 @@ Strict A2UI rules:
 - When the user submits a form, the host adds an internal context message prefixed with [表单提交], followed by the action name and submitted JSON data. This internal message is persisted for the conversation but hidden from the chat UI. Process it naturally and respond with normal Markdown or new A2UI surfaces. The submitted form is already locked and preserved locally — do not attempt to update or recreate the existing form surface. Instead, create a new surface if you need to show results or next steps.
 - Keep explanatory prose outside the <a2ui> block concise.`;
 
+const formatPromptDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}${month}${day}`;
+};
+
+export const createTicketBranchSystemPrompt = (date: Date = new Date()) => `${A2UI_SYSTEM_PROMPT}
+
+你是一个“工单分支生成器”。当前日期是 ${formatPromptDate(date)}。
+
+你必须按以下两阶段流程工作：
+
+第一阶段：收集信息
+- 当用户尚未提交表单时，只输出一个完整的 <a2ui> 协议块，不要输出解释、标题或 Markdown 代码块。
+- 表单必须包含两个必填文本字段：
+  1. 工单 ID，数据路径为 /ticketId。
+  2. 项目名称，数据路径为 /projectName。这里填写项目、需求或改动的名称，你要用它判断分支类型并生成 feature-name。
+- 表单提交按钮的 action name 必须是 generate_ticket_branch。
+- 第一阶段必须原样输出下面的表单协议，确保字段和 action 稳定：
+<a2ui>
+[
+  {"version":"v0.9","createSurface":{"surfaceId":"ticket-branch-form","catalogId":"local://open-chat/basic"}},
+  {"version":"v0.9","updateComponents":{"surfaceId":"ticket-branch-form","components":[{"id":"root","component":"Card","title":"生成工单分支","child":"form-content"},{"id":"form-content","component":"Column","gap":14,"children":["form-tip","ticket-id","project-name","submit"]},{"id":"form-tip","component":"Text","text":"填写工单 ID 和项目名称，系统会自动判断分支类型并生成命令。","variant":"secondary"},{"id":"ticket-id","component":"TextField","label":"工单 ID *","placeholder":"例如：123432","value":{"path":"/ticketId"}},{"id":"project-name","component":"TextField","label":"项目名称 *","placeholder":"例如：新增组织树筛选功能","value":{"path":"/projectName"}},{"id":"submit-label","component":"Text","text":"生成分支命令"},{"id":"submit","component":"Button","child":"submit-label","variant":"primary","action":{"event":{"name":"generate_ticket_branch","context":{"source":"ticket-branch-form","requiredPaths":["/ticketId","/projectName"]}}}}]}},
+  {"version":"v0.9","updateDataModel":{"surfaceId":"ticket-branch-form","path":"/ticketId","value":""}},
+  {"version":"v0.9","updateDataModel":{"surfaceId":"ticket-branch-form","path":"/projectName","value":""}}
+]
+</a2ui>
+
+第二阶段：生成分支命令
+- 当收到以 [表单提交] 开头、action 为 generate_ticket_branch 的消息时，读取 ticketId 和 projectName。
+- 根据 projectName 自动判断分支类型：
+  - feat：新增功能、增加能力、增加模块或提供新的交互。
+  - fix：修复一般问题、异常、错误处理或非紧急补丁。
+  - hotfix：修复需要立即上线的生产紧急问题。
+  - chore：构建脚本、依赖、环境配置、项目维护等不影响业务逻辑的改动。
+  - refactor：重构代码且不改变既有行为。
+  - docs：文档修改。
+  - test：测试相关改动。
+- 把 projectName 提炼并转换为简短、清晰的小写英文 kebab-case feature-name，只保留字母、数字和连字符。
+- 分支名格式严格为：<type>/<feature-name>/<YYYYMMDD>/<ticketId>。
+- YYYYMMDD 必须使用上方给出的当前日期 ${formatPromptDate(date)}。
+- ticketId 去除首尾空格；若包含不适合 Git 分支名的空格或斜杠，统一替换为连字符。
+- 最终只能输出这一条命令：git switch -c <branch-name>
+- 不要输出解释、前后缀、引号、Markdown 代码块或其他内容。
+
+正确示例：git switch -c feat/new-tree/20251204/123432`;
+
+export interface OpenChatParams extends XModelParams {
+  systemPrompt?: string;
+}
+
 export class OpenChatProvider extends DeepSeekChatProvider<
   XModelMessage,
-  XModelParams,
+  OpenChatParams,
   XModelResponse
 > {
   override transformParams(
-    requestParams: Partial<XModelParams>,
-    options: XRequestConfigOptions<XModelParams, XModelResponse, XModelMessage>,
-  ): XModelParams {
-    const params = super.transformParams(requestParams, options);
+    requestParams: Partial<OpenChatParams>,
+    options: XRequestConfigOptions<OpenChatParams, XModelResponse, XModelMessage>,
+  ): OpenChatParams {
+    const { systemPrompt = "", ...modelRequestParams } = requestParams;
+    const params = super.transformParams(modelRequestParams, options);
+    delete params.systemPrompt;
     const messages = params.messages ?? [];
+    const normalizedSystemPrompt = systemPrompt.trim();
 
     return {
       ...params,
-      messages: [{ role: "system", content: A2UI_SYSTEM_PROMPT }, ...messages],
+      messages: normalizedSystemPrompt
+        ? [{ role: "system", content: normalizedSystemPrompt }, ...messages]
+        : messages,
     };
   }
 }

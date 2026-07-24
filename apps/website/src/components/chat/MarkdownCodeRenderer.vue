@@ -1,14 +1,6 @@
-<script setup lang="ts">
+<script lang="ts">
 import { CodeHighlighter, Mermaid } from "@antdv-next/x";
-import { computed, useAttrs, useSlots, type VNode } from "vue";
-
-defineOptions({
-  name: "MarkdownCodeRenderer",
-  inheritAttrs: false,
-});
-
-const attrs = useAttrs();
-const slots = useSlots();
+import { defineComponent, h, type VNode } from "vue";
 
 const extractText = (nodes: VNode[]): string =>
   nodes
@@ -19,32 +11,37 @@ const extractText = (nodes: VNode[]): string =>
     })
     .join("");
 
-const code = computed(() => extractText(slots.default?.() ?? []));
+const readStringAttr = (attrs: Record<string, unknown>, name: string) =>
+  typeof attrs[name] === "string" ? attrs[name] : "";
 
-const language = computed(() => {
-  const dataLang = typeof attrs["data-lang"] === "string" ? attrs["data-lang"] : "";
-  const dataLangCamel = typeof attrs.dataLang === "string" ? attrs.dataLang : "";
-  const lang = typeof attrs.lang === "string" ? attrs.lang : "";
-  const className = typeof attrs.class === "string" ? attrs.class : "";
-  const classLang = className.match(/(?:^|\s)language-([^\s]+)/)?.[1] ?? "";
-  return dataLang || dataLangCamel || lang || classLang;
-});
+export default defineComponent({
+  name: "MarkdownCodeRenderer",
+  inheritAttrs: false,
+  setup(_, { attrs, slots }) {
+    return () => {
+      const code = extractText(slots.default?.() ?? []);
+      const className = readStringAttr(attrs, "class");
+      const classLang = className.match(/(?:^|\s)language-([^\s]+)/)?.[1] ?? "";
+      const language =
+        readStringAttr(attrs, "data-lang") ||
+        readStringAttr(attrs, "dataLang") ||
+        readStringAttr(attrs, "lang") ||
+        classLang;
+      const isBlock = [attrs["data-block"], attrs.dataBlock, attrs.block].some(
+        (value) => value === true || value === "true",
+      );
 
-const isBlock = computed(() => {
-  const values = [attrs["data-block"], attrs.dataBlock, attrs.block];
-  return values.some((value) => value === true || value === "true");
+      if (!isBlock && !language) return h("code", code);
+      if (language === "mermaid") return h(Mermaid, { content: code });
+
+      return h(CodeHighlighter, {
+        content: code,
+        language: language || "text",
+        showLineNumbers: true,
+        showLanguage: true,
+        showCopyButton: true,
+      });
+    };
+  },
 });
 </script>
-
-<template>
-  <code v-if="!isBlock && !language">{{ code }}</code>
-  <Mermaid v-else-if="language === 'mermaid'" :content="code" />
-  <CodeHighlighter
-    v-else
-    :content="code"
-    :language="language || 'text'"
-    :show-line-numbers="true"
-    :show-language="true"
-    :show-copy-button="true"
-  />
-</template>

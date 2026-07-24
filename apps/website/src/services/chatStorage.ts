@@ -10,6 +10,7 @@ const CHAT_STATE_KEY = "chat-state-v1";
 export interface PersistedConversation extends Omit<ConversationItemType, "messages"> {
   messages: DefaultMessageInfo<XModelMessage>[];
   a2uiSubmissions?: A2UISubmission[];
+  systemPrompt?: string;
 }
 
 export interface PersistedChatState {
@@ -100,12 +101,16 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
     version: 2,
     currentConversationKey: String(value.currentConversationKey),
     currentModel: value.currentModel,
-    conversationList: value.conversationList.map((conversation) => ({
-      ...conversation,
-      a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
-        ? conversation.a2uiSubmissions.filter(isValidA2UISubmission)
-        : [],
-    })),
+    conversationList: value.conversationList.map((conversation) => {
+      const { systemPrompt, ...persistedConversation } = conversation;
+      return {
+        ...persistedConversation,
+        a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
+          ? conversation.a2uiSubmissions.filter(isValidA2UISubmission)
+          : [],
+        ...(typeof systemPrompt === "string" ? { systemPrompt } : {}),
+      };
+    }),
   };
 }
 

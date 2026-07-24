@@ -325,9 +325,22 @@ const A2UIButton = defineComponent({
       A2UIActionPendingKey,
       computed(() => false),
     );
+    const requiredPaths = computed(() => {
+      const configuredPaths = componentProps.action?.event?.context?.requiredPaths;
+      return Array.isArray(configuredPaths)
+        ? configuredPaths.filter((path): path is string => typeof path === "string")
+        : [];
+    });
+    const hasMissingRequiredValue = computed(() => {
+      const surfaceValues = values[componentProps.__a2uiSurfaceId] ?? {};
+      return requiredPaths.value.some((path) => {
+        const value = surfaceValues[path];
+        return value === null || value === undefined || String(value).trim() === "";
+      });
+    });
     const handleClick = () => {
       const name = componentProps.action?.event?.name;
-      if (!name || actionPending.value) return;
+      if (!name || actionPending.value || hasMissingRequiredValue.value) return;
       const surfaceValues = values[componentProps.__a2uiSurfaceId] ?? {};
       const configuredContext = Object.fromEntries(
         Object.entries(componentProps.action?.event?.context ?? {}).map(([key, value]) => {
@@ -351,7 +364,7 @@ const A2UIButton = defineComponent({
         {
           class: "a2ui-button",
           danger: componentProps.danger,
-          disabled: componentProps.disabled || actionPending.value,
+          disabled: componentProps.disabled || actionPending.value || hasMissingRequiredValue.value,
           loading: componentProps.loading || actionPending.value,
           size: componentProps.size,
           type: ["primary", "text", "link"].includes(componentProps.variant)
