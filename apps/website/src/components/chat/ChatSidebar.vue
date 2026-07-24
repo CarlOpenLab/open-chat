@@ -2,6 +2,7 @@
 import type { ConversationItemType, ConversationsProps } from "@antdv-next/x";
 import { Conversations } from "@antdv-next/x";
 import {
+  Archive,
   ArrowUpRight,
   CircleQuestionMark,
   Ellipsis,
@@ -9,15 +10,18 @@ import {
   MessageSquare,
   Moon,
   PanelLeftClose,
+  Pencil,
+  Pin,
   Search,
   Settings2,
   Sparkles,
   SquarePen,
   Sun,
+  Trash2,
   Zap,
 } from "@lucide/vue";
-import { Button, Popover, Tooltip, message } from "antdv-next";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { Button, Input, Modal, Popover, Tooltip, message } from "antdv-next";
+import { computed, h, onBeforeUnmount, onMounted, ref } from "vue";
 
 interface Props {
   open: boolean;
@@ -32,12 +36,19 @@ interface Emits {
   (e: "toggleTheme"): void;
   (e: "newConversation"): void;
   (e: "activeChange", key: string): void;
+  (e: "rename", key: string, title: string): void;
+  (e: "pin", key: string): void;
+  (e: "archive", key: string): void;
+  (e: "delete", key: string): void;
 }
 
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 const search = ref("");
 const accountOpen = ref(false);
+const renameOpen = ref(false);
+const renameKey = ref("");
+const renameDraft = ref("");
 
 const filteredConversations = computed(() => {
   const query = search.value.trim().toLocaleLowerCase();
@@ -53,6 +64,48 @@ const filteredConversations = computed(() => {
 const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
   emit("activeChange", key);
 };
+
+const openRename = (item: ConversationItemType) => {
+  renameKey.value = item.key;
+  renameDraft.value = String(item.label ?? "").trim();
+  renameOpen.value = true;
+};
+
+const confirmRename = () => {
+  const title = renameDraft.value.trim();
+  if (!renameKey.value || !title) {
+    message.warning("请输入对话名称");
+    return;
+  }
+  emit("rename", renameKey.value, title);
+  renameOpen.value = false;
+};
+
+const conversationMenu: ConversationsProps["menu"] = (item) => ({
+  trigger: () =>
+    h(
+      "button",
+      {
+        type: "button",
+        class: "conversation-menu-trigger",
+        "aria-label": "打开对话操作菜单",
+      },
+      [h(Ellipsis)],
+    ),
+  items: [
+    { key: "rename", label: "重命名", icon: h(Pencil) },
+    { key: "pin", label: item.group === "置顶" ? "取消置顶" : "置顶对话", icon: h(Pin) },
+    { key: "archive", label: "归档对话", icon: h(Archive) },
+    { type: "divider" },
+    { key: "delete", label: "删除对话", icon: h(Trash2), danger: true },
+  ],
+  onClick: ({ key }) => {
+    if (key === "rename") openRename(item);
+    if (key === "pin") emit("pin", item.key);
+    if (key === "archive") emit("archive", item.key);
+    if (key === "delete") emit("delete", item.key);
+  },
+});
 
 const handleShortcut = (event: KeyboardEvent) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
@@ -125,16 +178,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
     </div>
 
     <div class="conversation-scroll">
-      <div v-if="search && filteredConversations.length === 0" class="search-empty">
-        <Search />
-        <strong>没有匹配的对话</strong>
-        <span>换个关键词试试</span>
+      <div v-if="filteredConversations.length === 0" class="search-empty">
+        <Search v-if="search" />
+        <MessageSquare v-else />
+        <strong>{{ search ? "没有匹配的对话" : "还没有对话" }}</strong>
+        <span>{{ search ? "换个关键词试试" : "开始一个新对话吧" }}</span>
       </div>
       <Conversations
         v-else
         :items="filteredConversations"
         :active-key="currentKey"
         :groupable="true"
+        :menu="conversationMenu"
         @active-change="handleActiveChange"
       >
         <template #iconRender><MessageSquare /></template>
@@ -191,6 +246,23 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
         </button>
       </Popover>
     </footer>
+
+    <Modal
+      v-model:open="renameOpen"
+      title="重命名对话"
+      ok-text="保存"
+      cancel-text="取消"
+      :width="360"
+      @ok="confirmRename"
+    >
+      <Input
+        v-model:value="renameDraft"
+        autofocus
+        aria-label="对话名称"
+        placeholder="输入对话名称"
+        @press-enter="confirmRename"
+      />
+    </Modal>
   </aside>
 </template>
 
@@ -407,22 +479,72 @@ kbd {
   font-weight: 600;
 }
 .chat-sidebar :deep(.antd-conversations-item) {
-  min-height: 36px;
+  min-height: 40px;
   padding-inline: 9px;
-  border-radius: 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
   color: var(--brand-muted);
   font-size: 11px;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
 }
-.chat-sidebar :deep(.antd-conversations-item:hover),
-.chat-sidebar :deep(.antd-conversations-item-active) {
+.chat-sidebar :deep(.antd-conversations-item:hover) {
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
 }
-
+.chat-sidebar :deep(.antd-conversations-item-active) {
+  border-color: color-mix(in srgb, var(--brand-primary) 18%, transparent);
+  background: color-mix(in srgb, var(--brand-primary) 9%, var(--brand-sidebar));
+  color: var(--brand-foreground);
+  font-weight: 600;
+}
+.chat-sidebar :deep(.antd-conversations-item:focus-visible) {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 1px;
+}
 .chat-sidebar :deep(.antd-conversations-icon) {
-  width: 17px;
-  min-width: 17px;
+  width: 18px;
+  min-width: 18px;
+  color: var(--brand-muted);
   font-size: 14px;
+}
+.chat-sidebar :deep(.antd-conversations-item-active .antd-conversations-icon) {
+  color: var(--brand-primary);
+}
+.chat-sidebar :deep(.conversation-menu-trigger) {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--brand-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease;
+}
+.chat-sidebar :deep(.conversation-menu-trigger svg) {
+  width: 16px;
+  height: 16px;
+}
+.chat-sidebar :deep(.antd-conversations-item:hover .conversation-menu-trigger),
+.chat-sidebar :deep(.antd-conversations-item-active .conversation-menu-trigger),
+.chat-sidebar :deep(.conversation-menu-trigger:focus-visible) {
+  opacity: 1;
+}
+.chat-sidebar :deep(.conversation-menu-trigger:hover) {
+  background: var(--brand-surface-subtle);
+  color: var(--brand-foreground);
+}
+.chat-sidebar.is-collapsed :deep(.conversation-menu-trigger) {
+  display: none;
 }
 .search-empty {
   display: flex;

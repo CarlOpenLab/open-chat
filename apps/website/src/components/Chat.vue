@@ -631,8 +631,8 @@ const handleRenameConversation = (title: string) => {
   schedulePersistState();
 };
 
-const handlePinConversation = () => {
-  const conversation = getCurrentConversation();
+const handlePinConversation = (conversationKey: string = currentConversationKey.value) => {
+  const conversation = conversationList.value.find((item) => String(item.key) === conversationKey);
   if (!conversation) return;
   conversation.group = conversation.group === "置顶" ? "今天" : "置顶";
   schedulePersistState();
@@ -647,24 +647,39 @@ const resetAfterRemovingConversation = () => {
   schedulePersistState();
 };
 
-const handleArchiveConversation = () => {
-  if (!currentConversationKey.value) return;
+const handleArchiveConversation = (conversationKey: string = currentConversationKey.value) => {
+  if (!conversationKey) return;
   conversationList.value = conversationList.value.filter(
-    (conversation) => String(conversation.key) !== currentConversationKey.value,
+    (conversation) => String(conversation.key) !== conversationKey,
   );
-  resetAfterRemovingConversation();
+  if (conversationKey === currentConversationKey.value) {
+    resetAfterRemovingConversation();
+  } else {
+    schedulePersistState();
+  }
   message.success("对话已归档");
 };
 
-const handleDeleteConversation = () => {
-  if (currentConversationKey.value) {
-    conversationList.value = conversationList.value.filter(
-      (conversation) => String(conversation.key) !== currentConversationKey.value,
-    );
-  }
+const handleDeleteConversation = (conversationKey: string = currentConversationKey.value) => {
+  if (!conversationKey) return;
+  conversationList.value = conversationList.value.filter(
+    (conversation) => String(conversation.key) !== conversationKey,
+  );
   deleteOpen.value = false;
-  resetAfterRemovingConversation();
+  if (conversationKey === currentConversationKey.value) {
+    resetAfterRemovingConversation();
+  } else {
+    schedulePersistState();
+  }
   message.success("对话已删除");
+};
+
+const handleSidebarRename = (conversationKey: string, title: string) => {
+  const conversation = conversationList.value.find((item) => String(item.key) === conversationKey);
+  if (!conversation) return;
+  conversation.label = title;
+  schedulePersistState();
+  message.success("对话名称已更新");
 };
 
 const handleClearCurrentMessages = () => {
@@ -707,6 +722,10 @@ const copyShareLink = async () => {
       @toggle-theme="emit('toggleTheme')"
       @new-conversation="handleNewConversation"
       @active-change="handleActiveChange"
+      @rename="handleSidebarRename"
+      @pin="handlePinConversation"
+      @archive="handleArchiveConversation"
+      @delete="handleDeleteConversation"
     />
 
     <div class="chat-main">
