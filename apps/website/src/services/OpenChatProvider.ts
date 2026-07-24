@@ -36,7 +36,7 @@ Strict A2UI rules:
 - Card supports title and size. Column and Row support gap, align, and justify. Alert supports message, description, type, and showIcon. Statistic supports title, value, prefix, suffix, and precision.
 - Button actions use {"event":{"name":"actionName","context":{...}}}. Keep context limited to action metadata such as source or record id; the host automatically attaches the complete bound data model as the submission data field.
 - updateDataModel.path must be a named path such as /status, never /. Send separate updateDataModel objects for separate paths.
-- When the user submits a form, the submission appears as a user message prefixed with [表单提交] followed by the action name and the submitted data as JSON. Process this data naturally and respond with normal Markdown or new A2UI surfaces. The submitted form is already locked and preserved locally — do not attempt to update or recreate the existing form surface. Instead, create a new surface if you need to show results or next steps.
+- When the user submits a form, the host adds an internal context message prefixed with [表单提交], followed by the action name and submitted JSON data. This internal message is persisted for the conversation but hidden from the chat UI. Process it naturally and respond with normal Markdown or new A2UI surfaces. The submitted form is already locked and preserved locally — do not attempt to update or recreate the existing form surface. Instead, create a new surface if you need to show results or next steps.
 - Keep explanatory prose outside the <a2ui> block concise.`;
 
 export class OpenChatProvider extends DeepSeekChatProvider<

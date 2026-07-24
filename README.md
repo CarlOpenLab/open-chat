@@ -38,18 +38,23 @@ open-chat/
 vp install
 ```
 
-### 2. Configure API Key
+### 2. Configure Providers
 
-Edit `apps/server/.env` and add your AI provider API key:
+Copy `apps/server/config/providers.example.toml` to `apps/server/config/providers.toml`, then configure each upstream provider:
 
-```env
-OPENAI_API_KEY=your_actual_api_key_here
-OPENAI_BASE_URL=https://api.openai.com/v1
-PORT=3001
-HOST=localhost
+```toml
+[[providers]]
+name = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key = "replace-with-your-key"
+api = "chat/completions"
+
+[[providers.models]]
+id = "openai/gpt-4o-mini"
+name = "GPT-4o Mini"
 ```
 
-You can use any OpenAI-compatible API provider (OpenAI, DeepSeek, etc.).
+`api` controls the upstream protocol and supports `"chat/completions"` (the default) or `"responses"`. The gateway normalizes both protocols behind its public `/api/chat/completions` endpoint.
 
 ### 3. Development
 

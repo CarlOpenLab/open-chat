@@ -13,6 +13,8 @@ cors_allowed_origins = ["http://localhost:3000"]
 name = "xfyun-maas"
 base_url = "https://maas-coding-api.cn-huabei-1.xf-yun.com/v2"
 api_key = "replace-with-xfyun-maas-key"
+# Optional; defaults to "chat/completions".
+api = "chat/completions"
 
 [[providers.models]]
 id = "xsparkx2flash"
@@ -45,8 +47,22 @@ context_length = 131072
 # name = "openrouter"
 # base_url = "https://openrouter.ai/api/v1"
 # api_key = "replace-with-openrouter-key"
+# api = "chat/completions"
 #
 # [[providers.models]]
 # id = "openai/gpt-4o-mini"
 # name = "GPT-4o Mini via OpenRouter"
 # context_length = 128000
+#
+# A provider that only exposes the OpenAI Responses API:
+#
+# [[providers]]
+# name = "openai-responses"
+# base_url = "https://api.openai.com/v1"
+# api_key = "replace-with-openai-key"
+# api = "responses"
+#
+# [[providers.models]]
+# id = "gpt-5.1"
+# name = "GPT-5.1"
+# context_length = 400000

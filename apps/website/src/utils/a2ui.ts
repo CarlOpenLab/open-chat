@@ -2,6 +2,8 @@ import type { XCardCommand } from "@antdv-next/x-card";
 
 const A2UI_OPEN_TAG = "<a2ui>";
 const A2UI_CLOSE_TAG = "</a2ui>";
+const A2UI_SUBMISSION_PREFIX = "[表单提交] ";
+export const A2UI_SUBMISSION_MESSAGE_KIND = "a2ui-submission";
 const FENCE = /^[\t ]{0,3}(`{3,}|~{3,})/;
 
 export interface ParsedA2UIContent {
@@ -194,13 +196,25 @@ export function createA2UISubmission(
   };
 }
 
-/** Format a form submission as a normal user message so the AI can process
- *  the data naturally. The submitted form is already locked locally — the AI
- *  should respond with normal Markdown or new A2UI surfaces, not update the
- *  existing form. */
+/** Format a form submission as an internal user-context message so the model
+ *  can process it. The host persists this message but does not render it as a
+ *  chat bubble. */
 export function formatA2UISubmissionAsUserMessage(submission: A2UISubmission): string {
   const dataJson = JSON.stringify(submission.data, null, 2);
-  return `[表单提交] ${submission.action.name}\n\n${dataJson}`;
+  return `${A2UI_SUBMISSION_PREFIX}${submission.action.name}\n\n${dataJson}`;
+}
+
+/** Identify A2UI submission messages that should remain in model context but
+ *  not be rendered as chat bubbles. */
+export function isA2UISubmissionContextMessage(
+  modelMessage: { role?: unknown },
+  extraInfo?: Record<string, unknown>,
+): boolean {
+  return (
+    modelMessage.role === "user" &&
+    extraInfo?.kind === A2UI_SUBMISSION_MESSAGE_KIND &&
+    extraInfo.hidden === true
+  );
 }
 
 function validateCommand(value: unknown): value is XCardCommand {

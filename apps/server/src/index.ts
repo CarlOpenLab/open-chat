@@ -93,7 +93,7 @@ function main(): void {
     console.log(`Models:      http://${host}:${port}/api/models`);
     console.log(`Chat:        http://${host}:${port}/api/chat/completions`);
     console.log(`Gateway auth: ${config.gatewayApiKey ? "enabled" : "disabled"}`);
-    console.log(`Providers:   ${config.providers.map((p) => p.name).join(", ")}`);
+    console.log(`Providers:   ${config.providers.map((p) => `${p.name} (${p.api})`).join(", ")}`);
   });
 
   process.on("SIGTERM", () => {

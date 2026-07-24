@@ -9,8 +9,10 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { aiService, API_BASE_URL, GATEWAY_API_KEY, type ModelsProvider } from "../services/ai";
 import { OpenChatProvider } from "../services/OpenChatProvider";
 import {
+  A2UI_SUBMISSION_MESSAGE_KIND,
   createA2UISubmission,
   formatA2UISubmissionAsUserMessage,
+  isA2UISubmissionContextMessage,
   type A2UIActionPayload,
   type A2UISubmission,
 } from "../utils/a2ui";
@@ -185,7 +187,6 @@ const currentConversationMessages = computed<DefaultMessageInfo<XModelMessage>[]
 const currentA2UISubmissions = computed(() => getCurrentConversation()?.a2uiSubmissions ?? []);
 const formatSubmissionTime = (timestamp: number) =>
   new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(timestamp);
-const formatSubmissionData = (data: Record<string, unknown>) => JSON.stringify(data, null, 2);
 
 const updateConversationMessages = (
   conversationKey: string,
@@ -199,7 +200,9 @@ const updateConversationMessages = (
 
   // 如果有消息，更新对话标题为首条用户消息摘要
   if (newMessages.length > 0 && conv.label === "新对话") {
-    const firstUserMessage = newMessages.find((m) => m.message.role === "user");
+    const firstUserMessage = newMessages.find(
+      (m) => m.message.role === "user" && !isA2UISubmissionContextMessage(m.message, m.extraInfo),
+    );
     if (firstUserMessage) {
       const contentStr =
         typeof firstUserMessage.message.content === "string"
@@ -252,7 +255,10 @@ const applyPersistedState = (persistedState: PersistedChatState) => {
   conversationList.value = persistedState.conversationList.map((conv) => {
     if (conv.label === "默认对话") {
       if (conv.messages?.length) {
-        const firstUserMessage = conv.messages.find((m) => m.message.role === "user");
+        const firstUserMessage = conv.messages.find(
+          (m) =>
+            m.message.role === "user" && !isA2UISubmissionContextMessage(m.message, m.extraInfo),
+        );
         if (firstUserMessage && typeof firstUserMessage.message.content === "string") {
           return { ...conv, label: getMessagePreview(firstUserMessage.message.content) };
         }
@@ -497,13 +503,18 @@ onBeforeUnmount(() => {
 // ============ 消息转换 ============
 
 const bubbleItems = computed<BubbleItemType[]>(() => {
-  return currentConversationMessages.value.map(({ id, message: modelMessage, status }) => ({
-    key: id,
-    role: modelMessage.role,
-    status,
-    loading: status === "loading",
-    content: typeof modelMessage.content === "string" ? modelMessage.content : "",
-  }));
+  return currentConversationMessages.value
+    .filter(
+      ({ message: modelMessage, extraInfo }) =>
+        !isA2UISubmissionContextMessage(modelMessage, extraInfo),
+    )
+    .map(({ id, message: modelMessage, status }) => ({
+      key: id,
+      role: modelMessage.role,
+      status,
+      loading: status === "loading",
+      content: typeof modelMessage.content === "string" ? modelMessage.content : "",
+    }));
 });
 
 // ============ 事件处理 ============
@@ -520,7 +531,10 @@ const handleChange = (value: string) => {
   content.value = value;
 };
 
-const handleSubmit = (nextContent: string) => {
+const handleSubmit = (
+  nextContent: string,
+  options: { extraInfo?: Record<string, unknown> } = {},
+) => {
   if (!nextContent || !nextContent.trim()) return;
 
   // 草稿态首次发送时，才创建真实会话并写入侧栏
@@ -534,12 +548,15 @@ const handleSubmit = (nextContent: string) => {
   activeRequestConversationKey.value = currentConversationKey.value;
 
   showWelcome.value = false;
-  onRequest({
-    messages: [{ role: "user", content: nextContent }],
-    model: currentModel.value,
-    enable_thinking: thinkingEnabled.value,
-    thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
-  });
+  onRequest(
+    {
+      messages: [{ role: "user", content: nextContent }],
+      model: currentModel.value,
+      enable_thinking: thinkingEnabled.value,
+      thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
+    },
+    options.extraInfo ? { extraInfo: options.extraInfo } : undefined,
+  );
   // 清空输入框
   setTimeout(() => {
     content.value = "";
@@ -572,7 +589,13 @@ const handleA2UIAction = (payload: A2UIActionPayload) => {
   conversation.a2uiSubmissions = [...(conversation.a2uiSubmissions ?? []), submission];
   pendingA2UISurfaceId.value = payload.surfaceId;
   schedulePersistState();
-  handleSubmit(formatA2UISubmissionAsUserMessage(submission));
+  handleSubmit(formatA2UISubmissionAsUserMessage(submission), {
+    extraInfo: {
+      hidden: true,
+      kind: A2UI_SUBMISSION_MESSAGE_KIND,
+      submissionId: submission.submissionId,
+    },
+  });
 };
 
 const handleModelChange = (key: string) => {
@@ -766,7 +789,7 @@ const copyShareLink = async () => {
               </time>
             </header>
             <small>{{ submission.surfaceId }} · revision {{ submission.surfaceRevision }}</small>
-            <pre>{{ formatSubmissionData(submission.data) }}</pre>
+            <p class="context-submission-note">表单数据已保存，不在聊天界面中展示。</p>
           </article>
         </section>
         <section>
@@ -778,7 +801,7 @@ const copyShareLink = async () => {
             </div>
             <div>
               <dt>消息</dt>
-              <dd>{{ currentConversationMessages.length }}</dd>
+              <dd>{{ bubbleItems.length }}</dd>
             </div>
             <div>
               <dt>存储</dt>
@@ -1072,23 +1095,11 @@ const copyShareLink = async () => {
   color: var(--brand-muted);
   font-size: 10px;
 }
-.context-submission pre {
-  max-height: 220px;
-  padding: 9px;
+.context-submission-note {
   margin: 0;
-  overflow: auto;
-  border: 1px solid var(--brand-border);
-  border-radius: 4px;
-  background: var(--brand-surface);
-  color: var(--brand-foreground);
-  font:
-    11px/1.55 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Consolas,
-    monospace;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  color: var(--brand-muted);
+  font-size: 10px;
+  line-height: 1.6;
 }
 .context-content dl div {
   display: flex;

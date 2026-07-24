@@ -17,10 +17,13 @@ export interface ModelConfig {
   contextLength?: number;
 }
 
+export type ProviderApi = "chat/completions" | "responses";
+
 export interface ProviderConfig {
   name: string;
   baseUrl: string;
   apiKey: string;
+  api: ProviderApi;
   models: ModelConfig[];
 }
 
@@ -43,6 +46,7 @@ interface RawProviderConfig {
   name?: unknown;
   base_url?: unknown;
   api_key?: unknown;
+  api?: unknown;
   models?: unknown;
 }
 
@@ -120,8 +124,17 @@ function parseProvider(raw: RawProviderConfig, index: number): ProviderConfig {
   const name = requiredString(raw.name, `providers[${index}].name is required`);
   const baseUrl = requiredString(raw.base_url, `providers[${index}].base_url is required`);
   const apiKey = requiredString(raw.api_key, `providers[${index}].api_key is required`);
+  const api = parseProviderApi(raw.api, index);
   const models = parseModels(raw.models, index);
-  return { name, baseUrl, apiKey, models };
+  return { name, baseUrl, apiKey, api, models };
+}
+
+function parseProviderApi(value: unknown, providerIndex: number): ProviderApi {
+  const api = optionalString(value) ?? "chat/completions";
+  if (api === "chat/completions" || api === "responses") return api;
+  throw GatewayError.invalidRequest(
+    `providers[${providerIndex}].api must be "chat/completions" or "responses"`,
+  );
 }
 
 function parseModels(rawModels: unknown, providerIndex: number): ModelConfig[] {

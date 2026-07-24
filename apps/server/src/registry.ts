@@ -5,23 +5,23 @@
  */
 import type { AppConfig } from "./config";
 import { GatewayError } from "./error";
-import { OpenAiCompatibleProvider } from "./provider";
+import { createProvider, type ChatProvider } from "./provider";
 
 export interface ProviderRoute {
   model: string;
-  provider: OpenAiCompatibleProvider;
+  provider: ChatProvider;
 }
 
 export class ProviderRegistry {
   private readonly defaultModel: string;
-  private readonly providersByModel: Map<string, OpenAiCompatibleProvider>;
+  private readonly providersByModel: Map<string, ChatProvider>;
 
-  readonly providers: OpenAiCompatibleProvider[];
+  readonly providers: ChatProvider[];
 
   private constructor(
     defaultModel: string,
-    providersByModel: Map<string, OpenAiCompatibleProvider>,
-    providers: OpenAiCompatibleProvider[],
+    providersByModel: Map<string, ChatProvider>,
+    providers: ChatProvider[],
   ) {
     this.defaultModel = defaultModel;
     this.providersByModel = providersByModel;
@@ -29,15 +29,11 @@ export class ProviderRegistry {
   }
 
   static fromConfig(config: AppConfig): ProviderRegistry {
-    const providersByModel = new Map<string, OpenAiCompatibleProvider>();
-    const providers: OpenAiCompatibleProvider[] = [];
+    const providersByModel = new Map<string, ChatProvider>();
+    const providers: ChatProvider[] = [];
 
     for (const providerConfig of config.providers) {
-      const provider = new OpenAiCompatibleProvider(
-        providerConfig.name,
-        providerConfig.baseUrl,
-        providerConfig.apiKey,
-      );
+      const provider = createProvider(providerConfig);
       providers.push(provider);
 
       for (const model of providerConfig.models) {
