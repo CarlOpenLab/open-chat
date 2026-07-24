@@ -399,12 +399,24 @@ watch(
 }
 .messages-wrapper :deep(.antd-bubble-list) {
   width: min(100%, 780px);
+  min-width: 0;
+  max-width: 100%;
   margin: 0 auto;
 }
+.messages-wrapper :deep(.antd-bubble-list-scroll-box) {
+  min-width: 0;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+}
 .messages-wrapper :deep(.antd-bubble-list-scroll-content) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding-inline: 0;
 }
 .messages-wrapper :deep(.antd-bubble) {
+  min-width: 0;
+  max-width: 100%;
   padding-block: 15px;
 }
 .messages-wrapper :deep(.antd-bubble-start) {
@@ -442,8 +454,16 @@ watch(
 }
 .assistant-content-stack {
   display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   flex-direction: column;
   gap: 12px;
+}
+.messages-wrapper :deep(.antd-bubble-body),
+.messages-wrapper :deep(.antd-bubble-content) {
+  min-width: 0;
+  max-width: 100%;
 }
 .messages-wrapper :deep(.antd-bubble-start .antd-bubble-body) {
   width: min(100%, 737px);
@@ -481,9 +501,30 @@ watch(
   height: 14px;
 }
 .messages-wrapper :deep(.x-markdown-light) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   color: var(--brand-foreground);
   font-size: 13px;
   line-height: 1.82;
+  overflow-wrap: anywhere;
+}
+.messages-wrapper :deep(.x-markdown-light pre),
+.messages-wrapper :deep(.x-markdown-light table),
+.messages-wrapper :deep(.antd-code-highlighter) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.messages-wrapper :deep(.x-markdown-light pre),
+.messages-wrapper :deep(.x-markdown-light table) {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.messages-wrapper :deep(.antd-code-highlighter-content),
+.messages-wrapper :deep(.antd-code-highlighter-code) {
+  min-width: 0;
+  max-width: 100%;
 }
 .messages-wrapper :deep(.x-markdown-light p) {
   margin: 0 0 13px;
