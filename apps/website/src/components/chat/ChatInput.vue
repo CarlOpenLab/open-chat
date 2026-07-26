@@ -6,14 +6,11 @@ import {
   ChevronDown,
   GitBranch,
   Lightbulb,
-  FileText,
   FolderOpen,
   Globe2,
-  Paperclip,
   Sparkles,
   SlidersHorizontal,
   Square,
-  X,
 } from "@lucide/vue";
 import {
   Badge,
@@ -54,8 +51,6 @@ interface Emits {
 
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
-const fileInput = ref<HTMLInputElement>();
-const selectedFile = ref<File>();
 const toolsOpen = ref(false);
 const voiceActive = ref(false);
 
@@ -110,24 +105,9 @@ const handleChange = (value: string) => {
 };
 
 const handleSubmit = (value: string) => {
-  const prompt =
-    value.trim() || (selectedFile.value ? `请分析附件 ${selectedFile.value.name}` : "");
+  const prompt = value.trim();
   if (!prompt) return;
   emit("submit", prompt);
-  selectedFile.value = undefined;
-  if (fileInput.value) fileInput.value.value = "";
-};
-
-const handleFileChange = (event: Event) => {
-  const input = event.target as HTMLInputElement;
-  selectedFile.value = input.files?.[0];
-  if (selectedFile.value) message.success("附件已添加");
-};
-
-const formatSize = (bytes: number) => {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 };
 
 const toggleVoice = () => {
@@ -138,17 +118,6 @@ const toggleVoice = () => {
 
 <template>
   <section class="chat-footer" aria-label="消息输入区">
-    <div v-if="selectedFile" class="attachment-preview">
-      <div class="file-chip">
-        <span class="file-icon"><FileText /></span>
-        <span
-          ><strong>{{ selectedFile.name }}</strong
-          ><small>{{ formatSize(selectedFile.size) }}</small></span
-        >
-        <button type="button" aria-label="移除附件" @click="selectedFile = undefined"><X /></button>
-      </div>
-    </div>
-
     <div v-if="showStarterPrompts && !loading" class="starter-prompts">
       <Prompts
         :items="starterPromptItems"
@@ -175,13 +144,6 @@ const toggleVoice = () => {
       <template #footer="{ defaultNode }">
         <div class="sender-footer">
           <div class="composer-tools">
-            <Tooltip title="添加附件">
-              <Button type="text" shape="circle" aria-label="添加附件" @click="fileInput?.click()"
-                ><Paperclip
-              /></Button>
-            </Tooltip>
-            <input ref="fileInput" class="file-input" type="file" @change="handleFileChange" />
-
             <Popover v-model:open="toolsOpen" placement="topLeft" :arrow="false" trigger="click">
               <template #content>
                 <div class="tools-menu">
@@ -270,72 +232,6 @@ const toggleVoice = () => {
     var(--brand-workspace) 32px,
     var(--brand-workspace) 100%
   );
-}
-.attachment-preview {
-  width: 100%;
-  max-width: 780px;
-  margin: 0 auto 7px;
-}
-.file-chip {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 28px;
-  align-items: center;
-  gap: 9px;
-  width: fit-content;
-  max-width: 100%;
-  min-height: 48px;
-  padding: 6px 7px;
-  border: 1px solid var(--brand-border);
-  border-radius: 6px;
-  background: var(--brand-surface);
-  box-shadow: var(--brand-shadow-xs);
-}
-.file-icon {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border-radius: 5px;
-  background: var(--brand-surface-subtle);
-}
-.file-icon :deep(svg) {
-  width: 15px;
-  height: 15px;
-}
-.file-chip > span:nth-child(2) {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-.file-chip strong {
-  overflow: hidden;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.file-chip small {
-  color: var(--brand-muted);
-  font-size: 9px;
-}
-.file-chip button {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--brand-muted);
-  cursor: pointer;
-}
-.file-chip button:hover {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.file-chip button :deep(svg) {
-  width: 13px;
-  height: 13px;
 }
 /* 工具按钮角标：count=0 时自动隐藏 */
 .composer-tools :deep(.tools-badge) {
@@ -483,13 +379,6 @@ const toggleVoice = () => {
 .composer-tools :deep(.ant-btn.tool-active) {
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
-}
-.file-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
 }
 .model-button {
   display: flex;
@@ -643,13 +532,6 @@ const toggleVoice = () => {
   }
   .chat-footer :deep(textarea) {
     font-size: 16px;
-  }
-  .file-chip {
-    grid-template-columns: 34px minmax(0, 1fr) 44px;
-  }
-  .file-chip button {
-    width: 44px;
-    height: 44px;
   }
 }
 @media (max-width: 560px) {
