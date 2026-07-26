@@ -183,31 +183,16 @@ onBeforeUnmount(() => {
         @toggle-theme="toggleTheme"
       />
       <template #fallback>
-        <main class="route-loading" aria-busy="true" aria-label="页面加载中"><span></span></main>
+        <main
+          class="route-loading grid min-h-[100dvh] w-full place-items-center bg-background"
+          aria-busy="true"
+          aria-label="页面加载中"
+        >
+          <span
+            class="h-7 w-7 animate-[spin_700ms_linear_infinite] rounded-full border-2 border-solid border-border border-t-foreground"
+          ></span>
+        </main>
       </template>
     </Suspense>
   </XProvider>
 </template>
-
-<style scoped>
-.route-loading {
-  display: grid;
-  width: 100%;
-  min-height: 100dvh;
-  place-items: center;
-  background: var(--background);
-}
-.route-loading span {
-  width: 28px;
-  height: 28px;
-  border: 2px solid var(--border);
-  border-top-color: var(--foreground);
-  border-radius: 50%;
-  animation: route-spin 700ms linear infinite;
-}
-@keyframes route-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-</style>

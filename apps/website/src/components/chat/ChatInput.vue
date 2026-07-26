@@ -1,28 +1,18 @@
 <script setup lang="ts">
-import { Prompts, Sender, type PromptsItemType } from "@antdv-next/x";
+import { Sender } from "@antdv-next/x";
 import {
   AudioLines,
   BrainCircuit,
   ChevronDown,
-  GitBranch,
-  Lightbulb,
   FolderOpen,
   Globe2,
-  Sparkles,
   SlidersHorizontal,
   Square,
 } from "@lucide/vue";
-import {
-  Badge,
-  Button,
-  Dropdown,
-  Popover,
-  Switch,
-  Tooltip,
-  message,
-  type MenuProps,
-} from "antdv-next";
+import { Badge, Button, Dropdown, Popover, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, ref } from "vue";
+import ComposerToolsMenu from "./ComposerToolsMenu.vue";
+import StarterPrompts from "./StarterPrompts.vue";
 
 interface Props {
   modelValue: string;
@@ -54,39 +44,6 @@ const emit = defineEmits<Emits>();
 const toolsOpen = ref(false);
 const voiceActive = ref(false);
 
-// ============ 推荐提示词（深度思考位置） ============
-
-const starterPromptItems: PromptsItemType[] = [
-  {
-    key: "ticket-branch",
-    label: "生成工单分支",
-    description: "填写工单 ID 和项目名称，生成 Git 分支",
-  },
-  {
-    key: "placeholder-idea",
-    label: "梳理一个想法",
-    description: "快速整理目标、边界和下一步",
-  },
-  {
-    key: "placeholder-review",
-    label: "检查一段内容",
-    description: "发现问题并给出简洁建议",
-  },
-];
-
-// 真实发送的提示词文本，按 key 查表，避免污染 Prompts 项的 DOM 属性
-const starterPromptText: Record<string, string> = {
-  "ticket-branch": "请启动工单分支生成流程，先用表单收集工单 ID 和项目名称。",
-  "placeholder-idea": "帮我把这个想法整理成目标、范围和下一步行动。",
-  "placeholder-review": "帮我检查一段内容，指出最需要改进的三个地方。",
-};
-
-const handlePromptItemClick = (info: { data: { key: string | number } }) => {
-  const key = String(info.data.key);
-  const prompt = starterPromptText[key];
-  if (prompt) emit("promptClick", { data: { key, description: prompt } });
-};
-
 const modelMenu = computed<MenuProps>(() => ({
   items: props.modelItems,
   selectedKeys: [props.currentModel],
@@ -117,20 +74,14 @@ const toggleVoice = () => {
 </script>
 
 <template>
-  <section class="chat-footer" aria-label="消息输入区">
-    <div v-if="showStarterPrompts && !loading" class="starter-prompts">
-      <Prompts
-        :items="starterPromptItems"
-        class="starter-prompts-inner"
-        @item-click="handlePromptItemClick"
-      >
-        <template #iconRender="{ item }">
-          <GitBranch v-if="item.key === 'ticket-branch'" />
-          <Lightbulb v-else-if="item.key === 'placeholder-idea'" />
-          <Sparkles v-else />
-        </template>
-      </Prompts>
-    </div>
+  <section
+    class="chat-footer relative z-12 pt-[26px] px-[max(24px,calc((100%_-_780px)/2))] pb-[max(8px,env(safe-area-inset-bottom))] bg-[linear-gradient(to_bottom,transparent_0,var(--brand-workspace)_32px,var(--brand-workspace)_100%)] lt-md:px-[18px] lt-sm:px-[10px]"
+    aria-label="消息输入区"
+  >
+    <StarterPrompts
+      v-if="showStarterPrompts && !loading"
+      @prompt-click="emit('promptClick', $event)"
+    />
 
     <Sender
       :value="modelValue"
@@ -142,35 +93,26 @@ const toggleVoice = () => {
       :suffix="false"
     >
       <template #footer="{ defaultNode }">
-        <div class="sender-footer">
-          <div class="composer-tools">
+        <div class="flex w-full min-h-[34px] items-center justify-between gap-3">
+          <div class="composer-tools flex items-center gap-[3px] lt-sm:gap-0">
             <Popover v-model:open="toolsOpen" placement="topLeft" :arrow="false" trigger="click">
               <template #content>
-                <div class="tools-menu">
-                  <p>增强回答</p>
-                  <button
-                    v-if="props.searchAvailable"
-                    type="button"
-                    @click="emit('searchChange', !props.searchEnabled)"
-                  >
-                    <span><Globe2 /></span
-                    ><span><strong>联网搜索</strong><small>查找并引用最新信息</small></span
-                    ><Switch :checked="props.searchEnabled" size="small" />
-                  </button>
-                  <button type="button" @click="emit('thinkingChange', !thinkingEnabled)">
-                    <span><BrainCircuit /></span
-                    ><span><strong>深度思考</strong><small>为复杂问题投入更多时间</small></span
-                    ><Switch :checked="thinkingEnabled" size="small" />
-                  </button>
-                  <button type="button" @click="emit('fileModeChange', !fileModeEnabled)">
-                    <span><FolderOpen /></span
-                    ><span><strong>文件</strong><small>生成可预览和下载的文件</small></span
-                    ><Switch :checked="fileModeEnabled" size="small" />
-                  </button>
-                </div>
+                <ComposerToolsMenu
+                  :search-available="props.searchAvailable"
+                  :search-enabled="props.searchEnabled"
+                  :thinking-enabled="thinkingEnabled"
+                  :file-mode-enabled="fileModeEnabled"
+                  @search-change="emit('searchChange', $event)"
+                  @thinking-change="emit('thinkingChange', $event)"
+                  @file-mode-change="emit('fileModeChange', $event)"
+                />
               </template>
               <Tooltip title="工具">
-                <Badge :count="activeTools.length" :offset="[-4, 4]" class="tools-badge">
+                <Badge
+                  :count="activeTools.length"
+                  :offset="[-4, 4]"
+                  class="tools-badge inline-flex"
+                >
                   <Button
                     type="text"
                     shape="circle"
@@ -184,32 +126,39 @@ const toggleVoice = () => {
             </Popover>
           </div>
 
-          <div class="composer-submit-group">
+          <div class="flex items-center gap-[3px] lt-sm:gap-0">
             <Dropdown :menu="modelMenu" :trigger="['click']" placement="topRight">
-              <button class="model-button" type="button">
-                <span>{{ currentModelLabel || "选择模型" }}</span
-                ><ChevronDown />
+              <button
+                type="button"
+                class="flex min-h-[32px] items-center gap-[5px] py-0 px-2 border-0 rounded-[5px] bg-transparent text-brand-muted text-[10px] font-600 cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground lt-md:min-h-[44px] lt-sm:max-w-[104px] lt-sm:px-[5px]"
+              >
+                <span class="lt-sm:truncate">{{ currentModelLabel || "选择模型" }}</span
+                ><ChevronDown class="w-3 h-3" />
               </button>
             </Dropdown>
             <Tooltip :title="voiceActive ? '停止语音输入' : '语音输入'">
               <button
-                class="voice-button"
-                :class="{ active: voiceActive }"
                 type="button"
+                class="grid w-[34px] h-[34px] place-items-center p-0 border-0 rounded-md cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground lt-md:w-[44px] lt-md:min-w-[44px] lt-md:h-[44px] lt-md:flex-[0_0_44px] lt-sm:hidden"
+                :class="
+                  voiceActive
+                    ? 'bg-brand-surface-subtle text-brand-foreground'
+                    : 'bg-transparent text-brand-muted'
+                "
                 aria-label="语音输入"
                 @click="toggleVoice"
               >
-                <AudioLines />
+                <AudioLines class="w-[15px] h-[15px]" />
               </button>
             </Tooltip>
             <Tooltip v-if="loading" title="停止生成">
               <button
-                class="stop-button"
                 type="button"
+                class="grid w-[34px] h-[34px] place-items-center p-0 border-0 rounded-md cursor-pointer bg-brand-primary text-brand-primary-foreground lt-md:w-[44px] lt-md:min-w-[44px] lt-md:h-[44px] lt-md:flex-[0_0_44px]"
                 aria-label="停止生成"
                 @click="emit('cancel')"
               >
-                <Square />
+                <Square class="w-3 h-3 fill-current" />
               </button>
             </Tooltip>
             <component v-else :is="defaultNode" />
@@ -217,26 +166,16 @@ const toggleVoice = () => {
         </div>
       </template>
     </Sender>
-    <p class="ai-disclaimer">Open Chat 可能会出错，请核查重要信息。</p>
+    <p class="mt-[6px] mx-auto mb-0 text-brand-muted text-[9px] text-center">
+      Open Chat 可能会出错，请核查重要信息。
+    </p>
   </section>
 </template>
 
 <style scoped>
-.chat-footer {
-  position: relative;
-  z-index: 12;
-  padding: 26px max(24px, calc((100% - 780px) / 2)) max(8px, env(safe-area-inset-bottom));
-  background: linear-gradient(
-    to bottom,
-    transparent 0,
-    var(--brand-workspace) 32px,
-    var(--brand-workspace) 100%
-  );
-}
+/* 以下均为 :deep() 覆盖 antd / antd-x 内部类，按迁移规范保留在 scoped CSS 中 */
+
 /* 工具按钮角标：count=0 时自动隐藏 */
-.composer-tools :deep(.tools-badge) {
-  display: inline-flex;
-}
 .composer-tools :deep(.tools-badge .ant-badge-count) {
   min-width: 16px;
   height: 16px;
@@ -247,67 +186,6 @@ const toggleVoice = () => {
   font-size: 9px;
   font-weight: 600;
   line-height: 16px;
-}
-.starter-prompts {
-  width: 100%;
-  max-width: 780px;
-  margin: 0 auto 7px;
-}
-.starter-prompts :deep(.antd-prompts) {
-  width: 100%;
-}
-.starter-prompts :deep(.antd-prompts-list) {
-  gap: 8px;
-}
-.starter-prompts :deep(.antd-prompts-item) {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 60px;
-  padding: 10px 12px;
-  border: 1px solid var(--brand-border);
-  border-radius: 7px;
-  background: var(--brand-surface);
-  transition:
-    background 160ms ease,
-    border-color 160ms ease;
-}
-.starter-prompts :deep(.antd-prompts-item:hover) {
-  background: var(--brand-surface-muted);
-  border-color: var(--brand-border-strong);
-}
-.starter-prompts :deep(.antd-prompts-item:active) {
-  background: var(--brand-surface-subtle);
-}
-.starter-prompts :deep(.antd-prompts-icon) {
-  display: grid;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 1px solid var(--brand-border);
-  border-radius: 5px;
-  background: var(--brand-surface-subtle);
-}
-.starter-prompts :deep(.antd-prompts-icon svg) {
-  width: 14px;
-  height: 14px;
-}
-.starter-prompts :deep(.antd-prompts-content) {
-  gap: 2px;
-}
-.starter-prompts :deep(.antd-prompts-label) {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--brand-foreground);
-}
-.starter-prompts :deep(.antd-prompts-desc) {
-  overflow: hidden;
-  max-width: 100%;
-  color: var(--brand-muted);
-  font-size: 9px;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .chat-footer :deep(.antd-sender) {
   width: 100%;
@@ -354,20 +232,6 @@ const toggleVoice = () => {
   color: var(--brand-muted);
   opacity: 1;
 }
-.sender-footer {
-  display: flex;
-  min-height: 34px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-}
-.composer-tools,
-.composer-submit-group {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
 .composer-tools :deep(.ant-btn) {
   width: 34px;
   min-width: 34px;
@@ -379,61 +243,6 @@ const toggleVoice = () => {
 .composer-tools :deep(.ant-btn.tool-active) {
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
-}
-.model-button {
-  display: flex;
-  min-height: 32px;
-  align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--brand-muted);
-  font-size: 10px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.model-button:hover {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.model-button :deep(svg) {
-  width: 12px;
-  height: 12px;
-}
-.voice-button,
-.stop-button {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.voice-button {
-  background: transparent;
-  color: var(--brand-muted);
-}
-.voice-button:hover,
-.voice-button.active {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.voice-button :deep(svg) {
-  width: 15px;
-  height: 15px;
-}
-.stop-button {
-  background: var(--brand-primary);
-  color: var(--brand-primary-foreground);
-}
-.stop-button :deep(svg) {
-  width: 12px;
-  height: 12px;
-  fill: currentColor;
 }
 .chat-footer :deep(.antd-sender-actions-btn) {
   width: 34px;
@@ -447,98 +256,19 @@ const toggleVoice = () => {
 .chat-footer :deep(.antd-sender-actions-btn:disabled) {
   opacity: 0.26;
 }
-.ai-disclaimer {
-  margin: 6px auto 0;
-  color: var(--brand-muted);
-  font-size: 9px;
-  text-align: center;
-}
-.tools-menu {
-  width: 302px;
-  padding: 5px;
-}
-.tools-menu > p {
-  margin: 3px 7px 6px;
-  color: var(--brand-muted);
-  font-size: 10px;
-  font-weight: 600;
-}
-.tools-menu > button {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 30px;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 58px;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--brand-foreground);
-  text-align: left;
-  cursor: pointer;
-}
-.tools-menu > button:hover {
-  background: var(--brand-surface-subtle);
-}
-.tools-menu > button > span:first-child {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border: 1px solid var(--brand-border);
-  border-radius: 5px;
-  background: var(--brand-surface);
-}
-.tools-menu > button > span:nth-child(2) {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-.tools-menu strong {
-  font-size: 11px;
-}
-.tools-menu small {
-  color: var(--brand-muted);
-  font-size: 9px;
-}
-.tools-menu :deep(svg) {
-  width: 15px;
-  height: 15px;
-}
-:global(.ant-popover-inner:has(.tools-menu)) {
-  padding: 0 !important;
-  border: 1px solid var(--brand-border);
-  border-radius: 7px !important;
-  background: var(--brand-surface) !important;
-  box-shadow: var(--shadow-xl) !important;
-}
 @media (max-width: 820px) {
-  .chat-footer {
-    padding-left: 18px;
-    padding-right: 18px;
-  }
   .composer-tools :deep(.ant-btn),
-  .voice-button,
-  .stop-button,
   .chat-footer :deep(.antd-sender-actions-btn) {
     width: 44px;
     min-width: 44px;
     height: 44px;
     flex: 0 0 44px;
   }
-  .model-button {
-    min-height: 44px;
-  }
   .chat-footer :deep(textarea) {
     font-size: 16px;
   }
 }
 @media (max-width: 560px) {
-  .chat-footer {
-    padding-left: 10px;
-    padding-right: 10px;
-  }
   .chat-footer :deep(.antd-sender-main) {
     min-height: 102px;
     padding: 0;
@@ -549,32 +279,6 @@ const toggleVoice = () => {
   }
   .chat-footer :deep(.antd-sender-footer) {
     padding-inline: 8px;
-  }
-  .composer-tools,
-  .composer-submit-group {
-    gap: 0;
-  }
-  .model-button {
-    max-width: 104px;
-    padding: 0 5px;
-  }
-  .model-button span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .voice-button {
-    display: none;
-  }
-  .tools-menu {
-    width: min(302px, calc(100vw - 20px));
-  }
-  .starter-prompts :deep(.antd-prompts-item) {
-    flex: 0 0 auto;
-    width: 196px;
-  }
-  .starter-prompts :deep(.antd-prompts-desc) {
-    white-space: normal;
   }
 }
 </style>

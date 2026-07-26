@@ -1,18 +1,11 @@
 <script setup lang="ts">
-import type { BubbleItemType, ConversationItemType, ConversationsProps } from "@antdv-next/x";
+import type { BubbleItemType, ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest, useXChat } from "@antdv-next/x-sdk";
-import { Copy, Trash2 } from "@lucide/vue";
-import { Button, Input, Modal, Switch, message, type MenuProps } from "antdv-next";
+import { message } from "antdv-next";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
-import {
-  aiService,
-  API_BASE_URL,
-  GATEWAY_API_KEY,
-  type ModelsProvider,
-  type WebSearchSourceItem,
-} from "../services/ai";
+import { API_BASE_URL, GATEWAY_API_KEY, type WebSearchSourceItem } from "../services/ai";
 import {
   OpenChatProvider,
   WEB_SEARCHING_MARKER,
@@ -25,27 +18,26 @@ import {
   formatA2UISubmissionAsUserMessage,
   isA2UISubmissionContextMessage,
   type A2UIActionPayload,
-  type A2UISubmission,
 } from "../utils/a2ui";
 import {
   FILE_WORKSPACE_SYSTEM_PROMPT,
   collectFileWorkspaceState,
   type EditableWorkspaceFile,
-  type WorkspaceFileDraft,
 } from "../utils/fileWorkspace";
+import { loadChatState } from "../services/chatStorage";
+import { useChatModels } from "../composables/useChatModels";
 import {
-  clearChatState,
-  loadChatState,
-  normalizePersistedChatState,
-  saveChatState,
-  type PersistedChatState,
-  type PersistedConversation,
-} from "../services/chatStorage";
+  getMessagePreview,
+  useChatPersistence,
+  type OpenChatConversation,
+} from "../composables/useChatPersistence";
 import ChatSidebar from "./chat/ChatSidebar.vue";
 import ChatHeader from "./chat/ChatHeader.vue";
 import ChatMessages from "./chat/ChatMessages.vue";
 import ChatInput from "./chat/ChatInput.vue";
 import FileWorkspace from "./chat/FileWorkspace.vue";
+import ShareConversationModal from "./chat/ShareConversationModal.vue";
+import DeleteConversationModal from "./chat/DeleteConversationModal.vue";
 
 interface Props {
   dark: boolean;
@@ -56,44 +48,26 @@ interface Emits {
   (e: "toggleTheme"): void;
 }
 
-interface OpenChatConversation extends ConversationItemType {
-  a2uiSubmissions?: A2UISubmission[];
-  workspaceDrafts?: WorkspaceFileDraft[];
-  systemPrompt?: string;
-}
-
 defineProps<Props>();
 const emit = defineEmits<Emits>();
 
 // ============ 响应式状态 ============
 
-const models = ref<ModelsProvider[]>([]);
-const defaultModelId = ref("");
 const content = ref("");
 const conversationsOpen = ref(true);
 const shareOpen = ref(false);
 const deleteOpen = ref(false);
-const allowSharedCopy = ref(true);
 const currentConversationKey = ref<string>("");
-const currentModel = ref("");
 const thinkingEnabled = ref(true);
 const fileModeEnabled = ref(false);
 const workspaceOpen = ref(false);
 const selectedWorkspacePath = ref<string[]>([]);
 const searchEnabled = ref(false);
-const searchAvailable = ref(false);
 const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const pendingA2UISurfaceId = ref("");
 const showWelcome = ref(true);
 const isHydrating = ref(true);
 const activeRequestConversationKey = ref<string>("");
-let persistTimer: ReturnType<typeof setTimeout> | null = null;
-
-const getMessagePreview = (content: string, maxLength: number = 20): string => {
-  const normalized = content.replace(/\s+/g, " ").trim();
-  if (!normalized) return "新对话";
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
-};
 
 const createNewConversation = (systemPrompt: string = ""): OpenChatConversation => ({
   key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -107,101 +81,18 @@ const createNewConversation = (systemPrompt: string = ""): OpenChatConversation 
 
 const conversationList = ref<OpenChatConversation[]>([]);
 
-const toPersistedConversations = (list: OpenChatConversation[]): PersistedConversation[] => {
-  return list
-    .filter((conversation) => {
-      const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
-      return messages.length > 0;
-    })
-    .map((conversation, index) => {
-      const normalizedLabel =
-        typeof conversation.label === "string" && conversation.label.trim()
-          ? conversation.label
-          : "新对话";
-      const normalizedGroup = typeof conversation.group === "string" ? conversation.group : "今天";
+// ============ 模型加载 ============
 
-      const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
-      const normalizedMessages = messages.map((item, messageIndex) => {
-        const fallbackId = `${Date.now()}-${index}-${messageIndex}`;
-        return {
-          id: item.id ?? fallbackId,
-          status: item.status,
-          message:
-            typeof item.message === "object" && item.message !== null
-              ? { ...item.message }
-              : ({ role: "assistant", content: String(item.message ?? "") } as XModelMessage),
-          ...(item.extraInfo ? { extraInfo: item.extraInfo } : {}),
-        };
-      });
+const {
+  currentModel,
+  searchAvailable,
+  modelDropdownItems,
+  currentModelLabel,
+  reconcileCurrentModel,
+  loadModels,
+} = useChatModels();
 
-      return {
-        key: String(conversation.key),
-        label: normalizedLabel,
-        group: normalizedGroup,
-        messages: normalizedMessages,
-        a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
-          ? conversation.a2uiSubmissions
-          : [],
-        workspaceDrafts: Array.isArray(conversation.workspaceDrafts)
-          ? conversation.workspaceDrafts
-          : [],
-        systemPrompt:
-          typeof conversation.systemPrompt === "string" ? conversation.systemPrompt : "",
-      };
-    });
-};
-
-// ============ 计算属性 ============
-
-const allModelIds = computed(() =>
-  models.value.flatMap((provider) => provider.models.map((model) => model.id)),
-);
-
-const modelById = computed<Record<string, { id: string; name: string; provider: string }>>(() => {
-  const map: Record<string, { id: string; name: string; provider: string }> = {};
-  for (const provider of models.value) {
-    for (const model of provider.models) {
-      map[model.id] = {
-        id: model.id,
-        name: model.name || model.id,
-        provider: provider.name,
-      };
-    }
-  }
-  return map;
-});
-
-const modelOptions = computed(() =>
-  models.value.flatMap((provider) =>
-    provider.models.map((model) => ({
-      label: model.name || model.id,
-      value: model.id,
-    })),
-  ),
-);
-
-const modelDropdownItems = computed<MenuProps["items"]>(() => {
-  return modelOptions.value.map((opt) => ({
-    key: opt.value,
-    label: opt.label,
-  }));
-});
-
-const currentModelLabel = computed(
-  () => modelById.value[currentModel.value]?.name || currentModel.value || "选择模型",
-);
-
-function reconcileCurrentModel() {
-  if (allModelIds.value.length === 0) return;
-  if (!currentModel.value || !allModelIds.value.includes(currentModel.value)) {
-    // Only trust defaultModelId when it actually maps to a configured model;
-    // otherwise fall back to the first available model so a stale or mistyped
-    // `default_model` in providers.toml can't silently break every request.
-    currentModel.value = allModelIds.value.includes(defaultModelId.value)
-      ? defaultModelId.value
-      : allModelIds.value[0];
-  }
-}
+loadModels();
 
 // ============ 对话管理 ============
 
@@ -320,145 +211,6 @@ const closeSidebar = () => {
   conversationsOpen.value = false;
 };
 
-const resetToDraftConversation = () => {
-  activeRequestConversationKey.value = "";
-  conversationList.value = [];
-  currentConversationKey.value = "";
-  showWelcome.value = true;
-};
-
-const applyPersistedState = (persistedState: PersistedChatState) => {
-  conversationList.value = persistedState.conversationList.map((conv) => {
-    if (conv.label === "默认对话") {
-      if (conv.messages?.length) {
-        const firstUserMessage = conv.messages.find(
-          (m) =>
-            m.message.role === "user" && !isA2UISubmissionContextMessage(m.message, m.extraInfo),
-        );
-        if (firstUserMessage && typeof firstUserMessage.message.content === "string") {
-          return { ...conv, label: getMessagePreview(firstUserMessage.message.content) };
-        }
-      }
-      return { ...conv, label: "新对话" };
-    }
-    return {
-      ...conv,
-      key: String(conv.key),
-      label: typeof conv.label === "string" && conv.label.trim() ? conv.label : "新对话",
-    };
-  });
-  currentModel.value = persistedState.currentModel;
-  reconcileCurrentModel();
-
-  // 导入后保持草稿态，历史会话保留在侧栏供手动打开
-  currentConversationKey.value = "";
-  setMessages([]);
-  showWelcome.value = true;
-};
-
-const handleClearLocalHistory = async () => {
-  const confirmed = window.confirm("确定清空本地聊天记录吗？此操作不可恢复。");
-  if (!confirmed) return;
-
-  if (isRequesting.value) {
-    message.warning("回答生成中，请先手动停止后再清空历史");
-    return;
-  }
-
-  await clearChatState();
-  resetToDraftConversation();
-};
-
-const schedulePersistState = () => {
-  if (isHydrating.value) return;
-
-  if (persistTimer) {
-    clearTimeout(persistTimer);
-  }
-
-  persistTimer = setTimeout(() => {
-    const state = {
-      version: 2 as const,
-      currentConversationKey: currentConversationKey.value,
-      currentModel: currentModel.value,
-      conversationList: toPersistedConversations(conversationList.value),
-    };
-    void saveChatState(state);
-  }, 250);
-};
-
-const handleExportLocalHistory = () => {
-  const state: PersistedChatState = {
-    version: 2,
-    currentConversationKey: currentConversationKey.value,
-    currentModel: currentModel.value,
-    conversationList: toPersistedConversations(conversationList.value),
-  };
-  const payload = JSON.stringify(state, null, 2);
-  const blob = new Blob([payload], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `open-chat-logs-${timestamp}.json`;
-  link.click();
-  URL.revokeObjectURL(url);
-  message.success("日志导出成功");
-};
-
-const handleImportLocalHistory = async (file: File) => {
-  if (!file.name.toLowerCase().endsWith(".json")) {
-    message.error("仅支持导入 JSON 日志文件");
-    return;
-  }
-
-  const shouldOverwrite = window.confirm("导入会覆盖当前本地聊天记录，是否继续？");
-  if (!shouldOverwrite) return;
-
-  try {
-    const text = await file.text();
-    const raw = JSON.parse(text) as unknown;
-    const importedState = normalizePersistedChatState(raw);
-
-    if (!importedState) {
-      message.error("日志文件格式不正确，导入失败");
-      return;
-    }
-
-    if (isRequesting.value) {
-      message.warning("回答生成中，请先手动停止后再导入日志");
-      return;
-    }
-
-    applyPersistedState(importedState);
-    await saveChatState({
-      ...importedState,
-      currentConversationKey: "",
-      conversationList: toPersistedConversations(conversationList.value),
-    });
-    message.success(`日志导入成功，共 ${conversationList.value.length} 条会话`);
-  } catch (error) {
-    console.error("Failed to import chat history:", error);
-    message.error("日志导入失败，请检查文件内容");
-  }
-};
-
-// ============ 模型加载 ============
-
-const loadModels = async () => {
-  try {
-    const data = await aiService.getModels();
-    models.value = data.providers;
-    defaultModelId.value = data.defaultModel;
-    searchAvailable.value = !!data.search?.enabled;
-    reconcileCurrentModel();
-  } catch (e) {
-    console.error("Failed to load models:", e);
-  }
-};
-
-loadModels();
-
 // ============ XChat 配置 ============
 
 const createProvider = () => {
@@ -492,13 +244,6 @@ const getInitialMessages = (): DefaultMessageInfo<XModelMessage>[] => {
   return conv?.messages || [];
 };
 
-// 监听模型变化，持久化选择（model 通过 onRequest 按请求传入，无需重建 provider）
-watch(currentModel, () => {
-  schedulePersistState();
-});
-
-watch(models, () => reconcileCurrentModel());
-
 const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useXChat<
   XModelMessage,
   XModelMessage,
@@ -522,6 +267,20 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
     };
   },
   requestPlaceholder: () => ({ content: "请稍候...", role: "assistant" }),
+});
+
+// ============ 会话持久化 ============
+
+const { applyPersistedState, schedulePersistState, handleExportLocalHistory } = useChatPersistence({
+  conversationList,
+  currentConversationKey,
+  currentModel,
+  showWelcome,
+  isHydrating,
+  activeRequestConversationKey,
+  isRequesting,
+  setMessages,
+  reconcileCurrentModel,
 });
 
 /** Attach sources received mid-stream to the assistant message that produced them. */
@@ -554,14 +313,6 @@ watch(
   (newMessages) => {
     const conversationWriteKey = activeRequestConversationKey.value || currentConversationKey.value;
     updateConversationMessages(conversationWriteKey, newMessages);
-    schedulePersistState();
-  },
-  { deep: true },
-);
-
-watch(
-  [conversationList, currentConversationKey],
-  () => {
     schedulePersistState();
   },
   { deep: true },
@@ -624,10 +375,6 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleWorkspaceKeydown);
-  if (persistTimer) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
 });
 
 // ============ 消息转换 ============
@@ -882,23 +629,16 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
   schedulePersistState();
   message.success("对话名称已更新");
 };
-
-const copyShareLink = async () => {
-  try {
-    await navigator.clipboard.writeText("https://openchat.dev/share/current");
-    message.success("分享链接已复制");
-  } catch {
-    message.warning("无法访问剪贴板，请手动复制");
-  }
-};
 </script>
 
 <template>
-  <div class="chat-layout">
+  <div
+    class="chat-layout relative flex h-screen min-h-[100dvh] overflow-hidden bg-brand-background text-brand-foreground selection:bg-brand-surface-subtle selection:text-brand-foreground"
+  >
     <a class="skip-link" href="#chat-content">跳到消息内容</a>
     <button
       v-if="conversationsOpen"
-      class="sidebar-backdrop"
+      class="sidebar-backdrop absolute inset-0 z-backdrop border-0 bg-[rgba(9,9,11,0.4)]"
       type="button"
       aria-label="关闭对话侧栏"
       @click="closeSidebar"
@@ -919,7 +659,7 @@ const copyShareLink = async () => {
       @delete="handleDeleteConversation"
     />
 
-    <div class="chat-main">
+    <div class="chat-main flex min-w-0 flex-1 flex-col overflow-hidden bg-brand-workspace">
       <ChatHeader
         :title="currentConversationTitle"
         :sidebar-open="conversationsOpen"
@@ -987,240 +727,25 @@ const copyShareLink = async () => {
       @accept-incoming="clearWorkspaceDraft($event, '已采用 AI 新版本')"
     />
 
-    <Modal
-      v-model:open="shareOpen"
-      :footer="null"
-      centered
-      :width="470"
-      wrap-class-name="share-dialog-wrap"
-    >
-      <div class="share-dialog-content">
-        <header>
-          <h2>分享这段对话</h2>
-          <p>拥有链接的人可以查看当前内容。</p>
-        </header>
-        <label
-          ><span>公开链接</span
-          ><Input readonly value="https://openchat.dev/share/current"
-            ><template #suffix
-              ><Button size="small" @click="copyShareLink"><Copy />复制</Button></template
-            ></Input
-          ></label
-        >
-        <div class="permission-row">
-          <span><strong>允许继续对话</strong><small>访客可以从分享内容创建副本</small></span
-          ><Switch v-model:checked="allowSharedCopy" />
-        </div>
-        <footer>
-          <Button @click="shareOpen = false">取消</Button
-          ><Button
-            type="primary"
-            @click="
-              shareOpen = false;
-              message.success('分享设置已保存');
-            "
-            >完成</Button
-          >
-        </footer>
-      </div>
-    </Modal>
+    <ShareConversationModal v-model:open="shareOpen" />
 
-    <Modal
-      v-model:open="deleteOpen"
-      :footer="null"
-      centered
-      :width="410"
-      wrap-class-name="delete-dialog-wrap"
-    >
-      <div class="delete-dialog-content">
-        <span><Trash2 /></span>
-        <h2>删除这段对话？</h2>
-        <p>删除后无法恢复，对话中的消息和本地记录都会被移除。</p>
-        <footer>
-          <Button @click="deleteOpen = false">取消</Button
-          ><Button danger type="primary" @click="handleDeleteConversation">删除对话</Button>
-        </footer>
-      </div>
-    </Modal>
+    <DeleteConversationModal v-model:open="deleteOpen" @confirm="handleDeleteConversation" />
   </div>
 </template>
 
 <style scoped>
-.chat-layout {
-  position: relative;
-  display: flex;
-  min-height: 100dvh;
-  height: 100vh;
-  overflow: hidden;
-  background: var(--brand-background);
-  color: var(--brand-foreground);
-}
-
-.chat-layout::selection {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-
+/* 767px 为非常规断点（与脚本中 matchMedia 保持一致），display 切换整体保留在 CSS 中 */
 .sidebar-backdrop {
   display: none;
 }
 
-.chat-main {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--brand-workspace);
-}
-
-.share-dialog-content > header h2 {
-  margin: 0;
-  font-size: 16px;
-}
-.share-dialog-content > header p {
-  margin: 5px 0 0;
-  color: var(--brand-muted);
-  font-size: 11px;
-}
-.share-dialog-content > label {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin-top: 22px;
-  font-size: 10px;
-  font-weight: 600;
-}
-.share-dialog-content > label :deep(.ant-input-affix-wrapper) {
-  min-height: 42px;
-  margin-top: 7px;
-}
-.share-dialog-content > label :deep(.ant-btn) {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.share-dialog-content > label :deep(svg) {
-  width: 12px;
-  height: 12px;
-}
-.permission-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
-  align-items: center;
-  gap: 14px;
-  min-height: 62px;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--brand-border);
-}
-.permission-row > span {
-  display: flex;
-  flex-direction: column;
-}
-.permission-row :deep(.ant-switch) {
-  position: relative;
-  min-width: 44px;
-}
-.permission-row :deep(.ant-switch)::after {
-  position: absolute;
-  inset: -11px 0;
-  content: "";
-}
-.permission-row strong {
-  font-size: 10px;
-}
-.permission-row small {
-  color: var(--brand-muted);
-  font-size: 9px;
-}
-.share-dialog-content > footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 22px;
-}
-:global(.share-dialog-wrap .ant-modal-content) {
-  padding: 20px;
-  border: 1px solid var(--brand-border);
-  border-radius: 8px;
-}
-:global(.share-dialog-wrap .ant-modal-close) {
-  top: 13px;
-  right: 13px;
-}
-.delete-dialog-content > span {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  margin-bottom: 14px;
-  border-radius: 6px;
-  background: var(--brand-danger-subtle);
-  color: var(--brand-danger);
-}
-.delete-dialog-content > span :deep(svg) {
-  width: 17px;
-  height: 17px;
-}
-.delete-dialog-content h2 {
-  margin: 0;
-  font-size: 16px;
-}
-.delete-dialog-content p {
-  margin: 5px 0 0;
-  color: var(--brand-muted);
-  font-size: 11px;
-  line-height: 1.6;
-}
-.delete-dialog-content footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 22px;
-}
-:global(.delete-dialog-wrap .ant-modal-content) {
-  padding: 20px;
-  border: 1px solid var(--brand-border);
-  border-radius: 8px;
-}
-
 @media (max-width: 767px) {
   .sidebar-backdrop {
-    position: absolute;
-    z-index: var(--z-backdrop);
-    inset: 0;
     display: block;
-    border: 0;
-    background: rgba(9, 9, 11, 0.4);
   }
 
   .chat-main {
     width: 100%;
-  }
-}
-
-@media (max-width: 560px) {
-  :global(.share-dialog-wrap .ant-modal) {
-    max-width: 100%;
-    margin: 0;
-    padding-bottom: 0;
-    top: auto;
-  }
-  :global(.share-dialog-wrap .ant-modal-wrap) {
-    display: flex;
-    align-items: flex-end;
-  }
-  :global(.share-dialog-wrap .ant-modal-content),
-  :global(.delete-dialog-wrap .ant-modal-content) {
-    border-width: 1px 0 0;
-    border-radius: 8px 8px 0 0;
-  }
-  :global(.delete-dialog-wrap .ant-modal) {
-    max-width: 100%;
-    margin: 0;
-    padding-bottom: 0;
-    top: auto;
   }
 }
 </style>

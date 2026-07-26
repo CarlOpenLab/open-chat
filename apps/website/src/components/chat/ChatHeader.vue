@@ -39,6 +39,9 @@ const editing = ref(false);
 const draftTitle = ref(props.title);
 const titleInput = ref<HTMLInputElement>();
 
+const iconButtonClass =
+  "h-9 w-9 min-w-9 place-items-center border border-solid border-transparent rounded-md bg-transparent p-0 text-brand-muted cursor-pointer [transition:background_160ms_ease,color_160ms_ease,transform_160ms_ease] hover:bg-brand-surface-subtle hover:text-brand-foreground active:translate-y-[1px] lt-md:h-11 lt-md:min-h-11 lt-md:w-11 lt-md:min-w-11";
+
 watch(
   () => props.title,
   (title) => {
@@ -86,11 +89,14 @@ const titleMenu = computed<MenuProps>(() => ({
 </script>
 
 <template>
-  <header class="chat-header">
-    <div class="header-leading">
+  <header
+    class="relative z-20 flex min-h-[58px] min-w-0 items-center justify-between gap-4 border-b border-b-solid border-brand-border px-4 [background:color-mix(in_srgb,var(--brand-workspace)_90%,transparent)] backdrop-blur-[16px] lt-md:min-h-14 lt-md:px-[10px]"
+  >
+    <div class="flex min-w-0 items-center gap-[9px]">
       <Tooltip v-if="!sidebarOpen" title="展开侧边栏">
         <button
-          class="header-icon-button sidebar-open-button"
+          class="hidden lt-md:inline-grid"
+          :class="iconButtonClass"
           type="button"
           aria-label="展开侧边栏"
           @click="emit('toggleSidebar')"
@@ -98,35 +104,52 @@ const titleMenu = computed<MenuProps>(() => ({
           <PanelLeftOpen />
         </button>
       </Tooltip>
-      <span v-if="!sidebarOpen" class="header-divider" aria-hidden="true"></span>
+      <span
+        v-if="!sidebarOpen"
+        class="hidden h-5 w-px bg-brand-border lt-md:block"
+        aria-hidden="true"
+      ></span>
       <input
         v-if="editing"
         ref="titleInput"
         v-model="draftTitle"
-        class="title-input"
+        class="h-8 w-[min(38vw,460px)] border border-solid border-brand-border-strong rounded-[5px] bg-brand-surface px-[6px] py-0 text-[13px] font-650 text-brand-foreground outline-0 focus:border-brand-foreground focus:shadow-[0_0_0_2px_var(--brand-ring)] lt-md:min-h-11"
         aria-label="重命名对话"
         @blur="finishRename"
         @keydown.enter.prevent="finishRename"
         @keydown.esc.prevent="cancelRename"
       />
       <Dropdown v-else :menu="titleMenu" :trigger="['click']">
-        <button class="conversation-heading" type="button" aria-label="对话选项">
-          <span>{{ title }}</span
-          ><ChevronDown />
+        <button
+          class="conversation-heading flex min-h-8 min-w-0 items-center gap-[2px] border-0 rounded bg-transparent py-0 pl-0 pr-1 text-brand-foreground cursor-pointer hover:bg-brand-surface-subtle lt-md:min-h-11"
+          type="button"
+          aria-label="对话选项"
+        >
+          <span
+            class="max-w-[min(38vw,460px)] truncate pl-[6px] text-[13px] font-650 lt-md:max-w-[36vw] lt-sm:max-w-[42vw] lt-sm:text-[12px]"
+            >{{ title }}</span
+          ><ChevronDown class="!h-3.5 !w-3.5 text-brand-muted" />
         </button>
       </Dropdown>
     </div>
 
-    <div class="header-actions" aria-label="对话工具">
-      <span class="sync-status" :class="{ saving: syncing }"
-        ><Cloud /><span>{{ syncing ? "保存中" : "已同步" }}</span></span
+    <div class="flex min-w-0 items-center gap-1" aria-label="对话工具">
+      <span class="mr-[6px] flex items-center gap-[6px] text-[10px] text-brand-muted lt-md:hidden"
+        ><Cloud class="!h-[13px] !w-[13px]" :class="{ 'sync-pulse': syncing }" /><span>{{
+          syncing ? "保存中" : "已同步"
+        }}</span></span
       >
-      <button class="header-button" type="button" @click="emit('share')">
-        <Share2 /><span>分享</span>
+      <button
+        class="inline-flex min-h-9 items-center gap-[7px] border border-solid border-transparent rounded-md bg-transparent px-[11px] text-[11px] font-580 text-brand-muted cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground lt-md:h-11 lt-md:min-h-11 lt-md:w-11 lt-md:min-w-11 lt-sm:justify-center lt-sm:p-0"
+        type="button"
+        @click="emit('share')"
+      >
+        <Share2 class="!h-[15px] !w-[15px]" /><span class="lt-sm:hidden">分享</span>
       </button>
       <Tooltip v-if="workspaceAvailable" title="文件工作区">
         <button
-          class="header-icon-button"
+          class="inline-grid aria-pressed:bg-brand-surface-subtle aria-pressed:text-brand-foreground"
+          :class="iconButtonClass"
           type="button"
           :aria-label="workspaceOpen ? '关闭文件工作区' : '打开文件工作区'"
           :aria-pressed="workspaceOpen"
@@ -140,201 +163,16 @@ const titleMenu = computed<MenuProps>(() => ({
 </template>
 
 <style scoped>
-.chat-header {
-  position: relative;
-  z-index: 20;
-  display: flex;
-  min-width: 0;
-  min-height: 58px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--brand-border);
-  background: color-mix(in srgb, var(--brand-workspace) 90%, transparent);
-  backdrop-filter: blur(16px);
-}
-.header-leading,
-.header-actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-}
-.header-leading {
-  gap: 9px;
-}
-.header-actions {
-  gap: 4px;
-}
-.header-divider {
-  width: 1px;
-  height: 20px;
-  background: var(--brand-border);
-}
-.header-icon-button {
-  display: inline-grid;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  place-items: center;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--brand-muted);
-  cursor: pointer;
-  transition:
-    background 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
-}
-.header-icon-button:hover,
-.header-icon-button[aria-pressed="true"] {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.header-icon-button:active {
-  transform: translateY(1px);
-}
-.header-icon-button :deep(svg) {
-  width: var(--icon-md);
-  height: var(--icon-md);
-}
-.sidebar-open-button,
-.header-divider {
-  display: none;
-}
-.conversation-heading {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 2px;
-  min-height: 32px;
-  padding: 0 4px 0 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--brand-foreground);
-  cursor: pointer;
-}
-.conversation-heading:hover {
-  background: var(--brand-surface-subtle);
-}
-.conversation-heading span {
-  max-width: min(38vw, 460px);
-  overflow: hidden;
-  padding-left: 6px;
-  font-size: 13px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.title-input {
-  width: min(38vw, 460px);
-  height: 32px;
-  padding: 0 6px;
-  border: 1px solid var(--brand-border-strong);
-  border-radius: 5px;
-  outline: 0;
-  background: var(--brand-surface);
-  color: var(--brand-foreground);
-  font-size: 13px;
-  font-weight: 650;
-}
-.title-input:focus {
-  border-color: var(--brand-foreground);
-  box-shadow: 0 0 0 2px var(--brand-ring);
-}
-.conversation-heading :deep(svg) {
-  width: 14px;
-  height: 14px;
-  color: var(--brand-muted);
-}
-.sync-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: 6px;
-  color: var(--brand-muted);
-  font-size: 10px;
-}
-.sync-status :deep(svg) {
-  width: 13px;
-  height: 13px;
-}
-.sync-status.saving :deep(svg) {
+/* 保留：@keyframes 动画 */
+.sync-pulse {
   animation: soft-pulse 900ms ease-in-out infinite;
-}
-.header-button {
-  display: inline-flex;
-  min-height: 36px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 11px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--brand-muted);
-  font-size: 11px;
-  font-weight: 580;
-  cursor: pointer;
-}
-.header-button:hover {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.header-button :deep(svg) {
-  width: 15px;
-  height: 15px;
 }
 @keyframes soft-pulse {
   50% {
     opacity: 0.35;
   }
 }
-@media (max-width: 820px) {
-  .chat-header {
-    min-height: 56px;
-    padding: 0 10px;
-  }
-  .header-icon-button,
-  .header-button {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    min-height: 44px;
-  }
-  .sidebar-open-button {
-    display: inline-grid;
-  }
-  .header-divider {
-    display: block;
-  }
-  .conversation-heading,
-  .title-input {
-    min-height: 44px;
-  }
-  .sync-status {
-    display: none;
-  }
-  .conversation-heading span {
-    max-width: 36vw;
-  }
-}
-@media (max-width: 560px) {
-  .header-button {
-    width: 44px;
-    padding: 0;
-    justify-content: center;
-  }
-  .header-button span {
-    display: none;
-  }
-  .conversation-heading span {
-    max-width: 42vw;
-    font-size: 12px;
-  }
-}
+/* 保留：非常规断点 390px */
 @media (max-width: 390px) {
   .conversation-heading span {
     max-width: 38vw;

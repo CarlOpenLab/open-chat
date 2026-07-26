@@ -143,7 +143,8 @@ a {
   color: inherit;
 }
 
-svg.lucide {
+/* :where() 保持零特异性，让 Uno 工具类（如 w-[15px]）可以直接覆盖默认图标尺寸 */
+:where(svg.lucide) {
   width: var(--icon-md);
   height: var(--icon-md);
   flex: 0 0 auto;

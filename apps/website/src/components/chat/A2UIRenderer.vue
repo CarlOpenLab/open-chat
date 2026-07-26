@@ -176,7 +176,11 @@ const A2UIText = defineComponent({
       const level = headingLevels[componentProps.variant];
 
       if (level) {
-        return h(TypographyTitle, { level, class: "a2ui-title" }, { default: () => content });
+        return h(
+          TypographyTitle,
+          { level, class: "!m-0 tracking-[0]" },
+          { default: () => content },
+        );
       }
 
       const textTypes = {
@@ -190,7 +194,11 @@ const A2UIText = defineComponent({
 
       return h(
         TypographyText,
-        { class: "a2ui-copy", strong: componentProps.strong, type },
+        {
+          class: "a2ui-copy min-w-0 [overflow-wrap:anywhere]",
+          strong: componentProps.strong,
+          type,
+        },
         { default: () => content },
       );
     };
@@ -211,7 +219,7 @@ const createLayoutComponent = (name: string, direction: "row" | "column") =>
         h(
           Flex,
           {
-            class: "a2ui-layout",
+            class: "w-full min-w-0",
             vertical: direction === "column",
             wrap: direction === "row" && componentProps.wrap,
             align: layoutValue(componentProps.align, direction === "row" ? "center" : "stretch"),
@@ -272,13 +280,13 @@ const A2UITextField = defineComponent({
     return () =>
       h(
         Flex,
-        { class: "a2ui-field", vertical: true, gap: 6 },
+        { class: "w-full min-w-0", vertical: true, gap: 6 },
         {
           default: () => [
             componentProps.label &&
               h(
                 TypographyText,
-                { class: "a2ui-field-label", strong: true },
+                { class: "leading-[1.4]", strong: true },
                 { default: () => componentProps.label },
               ),
             h(Input, {
@@ -300,7 +308,7 @@ const A2UIDivider = defineComponent({
   setup(componentProps) {
     return () =>
       h(Divider, {
-        class: "a2ui-divider",
+        class: "w-full min-w-0",
         size: "small",
         vertical: componentProps.axis === "vertical",
       });
@@ -600,7 +608,10 @@ registerCatalog(catalog);
 </script>
 
 <template>
-  <div v-if="surfaceIds.length || pending || errors.length" class="a2ui-renderer">
+  <div
+    v-if="surfaceIds.length || pending || errors.length"
+    class="a2ui-renderer mt-1 flex w-full flex-col items-start gap-3"
+  >
     <XCardBox
       v-if="surfaceIds.length"
       :commands="rendererCommands"
@@ -610,13 +621,19 @@ registerCatalog(catalog);
       <XCardCard v-for="surfaceId in surfaceIds" :id="surfaceId" :key="surfaceId" />
     </XCardBox>
 
-    <Card v-if="pending" class="a2ui-pending" size="small" role="status" aria-label="界面生成中">
+    <Card
+      v-if="pending"
+      class="w-[min(100%,560px)] py-2"
+      size="small"
+      role="status"
+      aria-label="界面生成中"
+    >
       <Skeleton active :paragraph="{ rows: 3 }" />
     </Card>
     <Alert
       v-for="error in errors"
       :key="error"
-      class="a2ui-error"
+      class="w-[min(100%,560px)]"
       type="error"
       show-icon
       :message="error"
@@ -625,36 +642,12 @@ registerCatalog(catalog);
 </template>
 
 <style scoped>
-.a2ui-renderer {
-  display: flex;
-  width: 100%;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-  margin-top: 4px;
-}
+/* :deep() 覆盖 antd 内部类，无法用工具类表达，保留 */
 .a2ui-renderer :deep(.ant-card) {
   width: min(100%, 560px);
 }
 .a2ui-renderer :deep(.ant-card-body) {
   min-width: 0;
-}
-.a2ui-layout,
-.a2ui-field,
-.a2ui-divider {
-  width: 100%;
-  min-width: 0;
-}
-.a2ui-title {
-  margin: 0 !important;
-  letter-spacing: 0;
-}
-.a2ui-copy {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.a2ui-field-label {
-  line-height: 1.4;
 }
 .a2ui-renderer :deep(.a2ui-button.ant-btn-primary) {
   border-color: var(--brand-primary) !important;
@@ -668,12 +661,5 @@ registerCatalog(catalog);
   border-color: var(--brand-primary-hover) !important;
   background: var(--brand-primary-hover) !important;
   color: var(--brand-primary-foreground) !important;
-}
-.a2ui-pending,
-.a2ui-error {
-  width: min(100%, 560px);
-}
-.a2ui-pending {
-  padding-block: 8px;
 }
 </style>

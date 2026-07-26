@@ -153,16 +153,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="host" class="workspace-code-editor"></div>
+  <div ref="host" class="workspace-code-editor h-full min-h-0 w-full overflow-hidden"></div>
 </template>
 
 <style scoped>
-.workspace-code-editor {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
+/* 保留：:deep() 覆盖 CodeMirror 内部类 */
 .workspace-code-editor :deep(.cm-editor) {
   height: 100%;
   font-size: 12px;

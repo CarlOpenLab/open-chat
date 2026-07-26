@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { Folder, type FolderTreeData, type PreviewFileInfo } from "@antdv-next/x";
 import { XMarkdown } from "@antdv-next/x-markdown";
-import { Copy, Download, FileText, LoaderCircle, RotateCcw, Sparkles, X } from "@lucide/vue";
-import { Segmented, Tooltip, message } from "antdv-next";
+import { FileText, LoaderCircle } from "@lucide/vue";
+import { message } from "antdv-next";
 import {
   computed,
   defineAsyncComponent,
@@ -14,6 +14,8 @@ import {
 } from "vue";
 import type { EditableWorkspaceFile } from "../../utils/fileWorkspace";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
+import WorkspaceHeaderBar from "./WorkspaceHeaderBar.vue";
+import WorkspacePreviewTitle from "./WorkspacePreviewTitle.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 
 const WorkspaceCodeEditor = defineAsyncComponent(() => import("./WorkspaceCodeEditor.vue"));
@@ -46,7 +48,9 @@ const emit = defineEmits<Emits>();
 const markdownView = ref<"edit" | "preview">("edit");
 const directoryTreeWidth = ref(190);
 const markdownTheme = computed<MarkdownTheme>(() => (props.dark ? "dark" : "light"));
-const markdownClassName = computed(() => `workspace-markdown x-markdown-${markdownTheme.value}`);
+const markdownClassName = computed(
+  () => `workspace-markdown min-w-0 px-6 pt-5 pb-10 lt-sm:p-4 x-markdown-${markdownTheme.value}`,
+);
 provide(markdownThemeKey, markdownTheme);
 
 const markdownComponents: Record<string, Component> = {
@@ -89,13 +93,6 @@ const resolvePreviewFile = (file: PreviewFileInfo) =>
 const isMarkdownFile = (file: Pick<EditableWorkspaceFile, "language" | "path">) =>
   file.language === "md" || file.language === "markdown" || file.path.endsWith(".md");
 
-const getFileStatusLabel = (file?: EditableWorkspaceFile) => {
-  if (file?.hasIncomingChange) return "AI 有新版本";
-  if (file?.status === "streaming") return "生成中 · 只读";
-  if (file?.dirty) return "已保存";
-  return "AI 原始版本";
-};
-
 const copySelectedFile = async () => {
   if (!selectedFile.value) return;
   try {
@@ -136,56 +133,28 @@ const downloadSelectedFile = () => {
 </script>
 
 <template>
-  <aside class="file-workspace" :class="{ open }" :aria-hidden="!open" aria-label="文件工作区">
-    <header class="workspace-header">
-      <div class="workspace-title">
-        <FileText />
-        <span>
-          <strong>文件工作区</strong>
-          <small>
-            {{ files.length }} 个文件<template v-if="dirtyFileCount">
-              · {{ dirtyFileCount }} 项已编辑</template
-            >
-          </small>
-        </span>
-        <LoaderCircle v-if="pending" class="workspace-spinner" />
-      </div>
-      <div class="workspace-actions">
-        <Tooltip v-if="selectedFile?.hasIncomingChange" title="采用 AI 新版本">
-          <button
-            type="button"
-            aria-label="采用 AI 新版本"
-            @click="emit('acceptIncoming', selectedFile.path)"
-          >
-            <Sparkles />
-          </button>
-        </Tooltip>
-        <Tooltip v-if="selectedFile?.dirty" title="恢复 AI 版本">
-          <button
-            type="button"
-            aria-label="恢复 AI 版本"
-            @click="emit('resetFile', selectedFile.path)"
-          >
-            <RotateCcw />
-          </button>
-        </Tooltip>
-        <Tooltip title="下载文件">
-          <button
-            type="button"
-            aria-label="下载当前文件"
-            :disabled="!selectedFile"
-            @click="downloadSelectedFile"
-          >
-            <Download />
-          </button>
-        </Tooltip>
-        <Tooltip title="关闭文件工作区">
-          <button type="button" aria-label="关闭文件工作区" @click="emit('close')"><X /></button>
-        </Tooltip>
-      </div>
-    </header>
+  <aside
+    class="file-workspace relative z-24 flex h-[100dvh] flex-col overflow-hidden border-l-solid border-l-brand-border bg-brand-sidebar [transition:width_220ms_ease,min-width_220ms_ease,opacity_180ms_ease,transform_220ms_ease]"
+    :class="
+      open
+        ? 'open w-[clamp(560px,48vw,820px)] min-w-[clamp(560px,48vw,820px)] border-l-1 opacity-100 pointer-events-auto translate-x-0'
+        : 'w-0 min-w-0 border-l-0 opacity-0 pointer-events-none translate-x-[18px]'
+    "
+    :aria-hidden="!open"
+    aria-label="文件工作区"
+  >
+    <WorkspaceHeaderBar
+      :file-count="files.length"
+      :dirty-count="dirtyFileCount"
+      :pending="pending"
+      :selected-file="selectedFile"
+      @close="emit('close')"
+      @download="downloadSelectedFile"
+      @accept="emit('acceptIncoming', $event)"
+      @reset="emit('resetFile', $event)"
+    />
 
-    <div v-if="files.length" class="workspace-browser">
+    <div v-if="files.length" class="workspace-browser min-h-0 flex-1 overflow-hidden">
       <Folder
         :key="directoryTreeWidth"
         :tree-data="treeData"
@@ -196,40 +165,17 @@ const downloadSelectedFile = () => {
       >
         <template #directoryTitle>文件</template>
         <template #previewTitle="{ title, path }">
-          <div class="workspace-preview-title">
-            <div class="workspace-preview-heading">
-              <strong>{{ title }}</strong>
-              <span
-                class="workspace-file-status"
-                :class="{
-                  incoming: files.find((item) => item.path === path.join('/'))?.hasIncomingChange,
-                  saved: files.find((item) => item.path === path.join('/'))?.dirty,
-                }"
-              >
-                {{ getFileStatusLabel(files.find((item) => item.path === path.join("/"))) }}
-              </span>
-            </div>
-            <div class="workspace-preview-actions">
-              <Segmented
-                v-if="isMarkdownFile(files.find((item) => item.path === path.join('/'))!)"
-                v-model:value="markdownView"
-                size="small"
-                :options="[
-                  { label: '编辑', value: 'edit' },
-                  { label: '预览', value: 'preview' },
-                ]"
-              />
-              <Tooltip title="复制文件内容">
-                <button type="button" aria-label="复制文件内容" @click="copySelectedFile">
-                  <Copy />
-                </button>
-              </Tooltip>
-            </div>
-          </div>
+          <WorkspacePreviewTitle
+            v-model:view="markdownView"
+            :title="title"
+            :file="files.find((item) => item.path === path.join('/'))"
+            :markdown="isMarkdownFile(files.find((item) => item.path === path.join('/'))!)"
+            @copy="copySelectedFile"
+          />
         </template>
         <template #previewRender="{ file }">
-          <div v-if="resolvePreviewFile(file)" class="workspace-file-view">
-            <div class="workspace-editor-content">
+          <div v-if="resolvePreviewFile(file)" class="flex h-full min-h-0 w-full flex-col">
+            <div class="min-h-0 flex-1 overflow-auto">
               <XMarkdown
                 v-if="isMarkdownFile(resolvePreviewFile(file)!) && markdownView === 'preview'"
                 :content="resolvePreviewFile(file)?.content ?? ''"
@@ -257,16 +203,20 @@ const downloadSelectedFile = () => {
       </Folder>
     </div>
 
-    <div v-else class="workspace-empty" role="status">
-      <LoaderCircle v-if="pending" class="workspace-spinner" />
-      <FileText v-else />
+    <div
+      v-else
+      class="grid min-h-0 flex-1 place-content-center justify-items-center gap-[10px] text-[11px] text-brand-muted"
+      role="status"
+    >
+      <LoaderCircle v-if="pending" class="workspace-spinner !h-5 !w-5" />
+      <FileText v-else class="!h-5 !w-5" />
       <span>{{ pending ? "正在生成文件" : "暂无文件" }}</span>
     </div>
   </aside>
 
   <button
     v-if="open"
-    class="workspace-scrim"
+    class="workspace-scrim hidden"
     type="button"
     aria-label="关闭文件工作区"
     @click="emit('close')"
@@ -274,102 +224,7 @@ const downloadSelectedFile = () => {
 </template>
 
 <style scoped>
-.file-workspace {
-  position: relative;
-  z-index: 24;
-  display: flex;
-  width: 0;
-  min-width: 0;
-  height: 100dvh;
-  flex-direction: column;
-  overflow: hidden;
-  border-left: 0 solid var(--brand-border);
-  background: var(--brand-sidebar);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(18px);
-  transition:
-    width 220ms ease,
-    min-width 220ms ease,
-    opacity 180ms ease,
-    transform 220ms ease;
-}
-.file-workspace.open {
-  width: clamp(560px, 48vw, 820px);
-  min-width: clamp(560px, 48vw, 820px);
-  border-left-width: 1px;
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateX(0);
-}
-.workspace-header {
-  display: flex;
-  height: 58px;
-  flex: 0 0 58px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 11px 0 16px;
-  border-bottom: 1px solid var(--brand-border);
-}
-.workspace-title,
-.workspace-actions,
-.workspace-title > span {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-}
-.workspace-title {
-  gap: 9px;
-}
-.workspace-title > span {
-  flex-direction: column;
-  align-items: flex-start;
-}
-.workspace-title > svg {
-  width: 16px;
-  height: 16px;
-  color: var(--brand-muted);
-}
-.workspace-title strong {
-  font-size: 12px;
-}
-.workspace-title small {
-  color: var(--brand-muted);
-  font-size: 9px;
-}
-.workspace-actions {
-  gap: 2px;
-}
-.workspace-actions button {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--brand-muted);
-  cursor: pointer;
-}
-.workspace-actions button:hover:not(:disabled) {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.workspace-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-.workspace-actions button :deep(svg) {
-  width: var(--icon-md);
-  height: var(--icon-md);
-}
-.workspace-browser {
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
-}
+/* 保留：:deep() 覆盖 antd/x Folder 内部类 */
 .workspace-browser :deep(.antd-folder) {
   height: 100%;
   border: 0;
@@ -384,104 +239,16 @@ const downloadSelectedFile = () => {
   min-height: 0;
   overflow: hidden;
 }
-.workspace-file-view {
-  display: flex;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  flex-direction: column;
-}
-.workspace-preview-title,
-.workspace-preview-heading,
-.workspace-preview-actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-}
-.workspace-preview-title {
-  width: 100%;
-  justify-content: space-between;
-  gap: 12px;
-}
-.workspace-preview-heading {
-  gap: 7px;
-  overflow: hidden;
-}
-.workspace-preview-heading strong {
-  overflow: hidden;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.workspace-file-status {
-  flex: 0 0 auto;
-  color: var(--brand-muted);
-  font-size: 9px;
-}
-.workspace-file-status.saved {
-  color: var(--brand-primary);
-}
-.workspace-file-status.incoming {
-  color: var(--brand-warning, #b7791f);
-}
-.workspace-preview-actions {
-  flex: 0 0 auto;
-  gap: 5px;
-}
-.workspace-preview-actions button {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--brand-muted);
-  cursor: pointer;
-}
-.workspace-preview-actions button:hover {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.workspace-preview-actions button :deep(svg) {
-  width: 13px;
-  height: 13px;
-}
-.workspace-editor-content {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
-}
-.workspace-markdown {
-  min-width: 0;
-  padding: 20px 24px 40px;
-}
-.workspace-empty {
-  display: grid;
-  min-height: 0;
-  flex: 1;
-  place-content: center;
-  justify-items: center;
-  gap: 10px;
-  color: var(--brand-muted);
-  font-size: 11px;
-}
-.workspace-empty > svg {
-  width: 20px;
-  height: 20px;
-}
+/* 保留：@keyframes 动画 */
 .workspace-spinner {
   animation: workspace-spin 900ms linear infinite;
-}
-.workspace-scrim {
-  display: none;
 }
 @keyframes workspace-spin {
   to {
     transform: rotate(360deg);
   }
 }
+/* 保留：非常规断点 1180px / 767px */
 @media (max-width: 1180px) {
   .file-workspace,
   .file-workspace.open {
@@ -510,25 +277,6 @@ const downloadSelectedFile = () => {
   .file-workspace,
   .file-workspace.open {
     width: 100%;
-  }
-  .workspace-header {
-    height: 56px;
-    flex-basis: 56px;
-  }
-  .workspace-actions button {
-    width: 44px;
-    height: 44px;
-  }
-}
-@media (max-width: 560px) {
-  .workspace-title small {
-    max-width: 112px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .workspace-markdown {
-    padding: 16px;
   }
 }
 </style>

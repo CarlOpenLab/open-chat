@@ -1,5 +1,7 @@
-import { defineConfig, presetUno, presetIcons, presetTypography } from "unocss";
+import { defineConfig, presetIcons, presetTypography, presetUno } from "unocss";
 
+// 主题 token 全部映射到 style.css 中的 CSS 变量，
+// 亮/暗主题通过 html[data-theme] 切换变量值即可生效。
 export default defineConfig({
   presets: [
     presetUno(),
@@ -9,65 +11,83 @@ export default defineConfig({
     }),
     presetTypography(),
   ],
-  shortcuts: {
-    // Layout shortcuts
-    "chat-layout": "flex h-screen bg-brand-page text-brand-900",
-    "chat-sidebar":
-      "w-70 border-r border-brand-100 bg-brand-subtle transition-transform duration-300",
-    "chat-sidebar-closed": "translate-x-0",
-    "chat-main": "flex-1 flex flex-col overflow-hidden",
-    "chat-header": "flex items-center gap-4 px-5 py-3 border-b border-brand-100 bg-brand-page",
-    "messages-wrapper": "flex-1 overflow-hidden p-5",
-    "chat-footer": "border-t border-brand-100 p-4 bg-brand-page",
-    // Button shortcuts
-    "menu-toggle":
-      "flex items-center justify-center p-2 border-none bg-transparent cursor-pointer rounded-2 hover:bg-brand-100 text-brand-500 transition-colors",
-    // Model selector
-    "model-selector":
-      "flex items-center justify-center p-2 cursor-pointer rounded-2 transition-all hover:bg-brand-100 active:bg-brand-100",
-    "model-icon-wrapper": "flex items-center justify-center w-8 h-8 rounded-2 transition-all",
-    // Welcome screen
-    "welcome-container": "flex flex-col items-center justify-center h-full gap-6",
-    "prompts-wrapper": "flex flex-wrap items-center justify-center gap-2",
-    // Bubble list
-    "bubble-list": "h-full",
-    // Markdown
-    "markdown-content": "text-14px leading-1.6",
-  },
-  rules: [
-    // Custom rules if needed
-  ],
   theme: {
+    // 对齐既有媒体查询：lt-md => max-width 820px，lt-sm => max-width 560px
+    breakpoints: {
+      sm: "561px",
+      md: "821px",
+      lg: "1025px",
+    },
     colors: {
+      background: "var(--background)",
+      foreground: "var(--foreground)",
+      subtle: "var(--subtle)",
+      muted: {
+        DEFAULT: "var(--muted)",
+        foreground: "var(--muted-foreground)",
+      },
+      border: {
+        DEFAULT: "var(--border)",
+        strong: "var(--border-strong)",
+      },
+      input: "var(--input)",
+      success: {
+        DEFAULT: "var(--success)",
+        subtle: "var(--success-subtle)",
+      },
+      danger: {
+        DEFAULT: "var(--danger)",
+        subtle: "var(--danger-subtle)",
+      },
       brand: {
-        page: "#ffffff",
-        subtle: "#fafafa",
-        50: "#fafafa",
-        100: "#ebebeb",
-        400: "#808080",
-        500: "#666666",
-        600: "#4d4d4d",
-        900: "#171717",
+        background: "var(--brand-background)",
+        surface: {
+          DEFAULT: "var(--brand-surface)",
+          muted: "var(--brand-surface-muted)",
+          subtle: "var(--brand-surface-subtle)",
+        },
+        workspace: "var(--brand-workspace)",
+        sidebar: {
+          DEFAULT: "var(--brand-sidebar)",
+          muted: "var(--brand-sidebar-muted)",
+          foreground: "var(--brand-sidebar-foreground)",
+          hover: "var(--brand-sidebar-hover)",
+          active: "var(--brand-sidebar-active)",
+        },
+        foreground: "var(--brand-foreground)",
+        muted: {
+          DEFAULT: "var(--brand-muted)",
+          strong: "var(--brand-muted-strong)",
+        },
+        border: {
+          DEFAULT: "var(--brand-border)",
+          strong: "var(--brand-border-strong)",
+        },
+        primary: {
+          DEFAULT: "var(--brand-primary)",
+          hover: "var(--brand-primary-hover)",
+          foreground: "var(--brand-primary-foreground)",
+        },
+        danger: {
+          DEFAULT: "var(--brand-danger)",
+          subtle: "var(--brand-danger-subtle)",
+        },
+        ring: "var(--brand-ring)",
       },
-      workflow: {
-        develop: "#0a72ef",
-        preview: "#de1d8d",
-        ship: "#ff5b4f",
-      },
-      interactive: {
-        link: "#0072f5",
-        focus: "#0075f5",
-      },
-      badge: {
-        blue: "#0068d6",
-        "blue-bg": "#ebf5ff",
-      },
-      console: {
-        blue: "#0070f3",
-        purple: "#7928ca",
-        pink: "#eb367f",
-      },
-      primary: "#0072f5",
+    },
+    boxShadow: {
+      sm: "var(--shadow-sm)",
+      lg: "var(--shadow-lg)",
+      xl: "var(--shadow-xl)",
+      "brand-xs": "var(--brand-shadow-xs)",
+      "brand-sm": "var(--brand-shadow-sm)",
+      "brand-float": "var(--brand-shadow-float)",
+    },
+    zIndex: {
+      backdrop: "var(--z-backdrop)",
+      sidebar: "var(--z-sidebar)",
+      popover: "var(--z-popover)",
+      modal: "var(--z-modal)",
     },
   },
 });

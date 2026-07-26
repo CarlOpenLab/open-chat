@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import type { BubbleItemType, BubbleListProps, ThoughtChainItemType } from "@antdv-next/x";
-import { BubbleList, Sources, Think, ThoughtChain, Welcome } from "@antdv-next/x";
+import type { BubbleItemType, BubbleListProps } from "@antdv-next/x";
+import { BubbleList, Welcome } from "@antdv-next/x";
 import type { XCardCommand } from "@antdv-next/x-card";
-import { XMarkdown } from "@antdv-next/x-markdown";
-import { Globe2, RotateCcw, Sparkles } from "@lucide/vue";
+import { RotateCcw, Sparkles } from "@lucide/vue";
 import { Button, Tooltip } from "antdv-next";
-import { computed, provide, ref, watch, type Component } from "vue";
+import { computed, provide, ref, watch } from "vue";
 import {
   getA2UISurfaceId,
   parseA2UIContent,
@@ -14,8 +13,7 @@ import {
 } from "../../utils/a2ui";
 import type { WebSearchSourceItem } from "../../services/ai";
 import { parseFileWorkspaceContent } from "../../utils/fileWorkspace";
-import A2UIRenderer from "./A2UIRenderer.vue";
-import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
+import AssistantMessageContent from "./AssistantMessageContent.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 
 interface Props {
@@ -64,10 +62,6 @@ const isStreamingStatus = (status: unknown): boolean =>
 const roleConfig: BubbleListProps["role"] = {
   assistant: { placement: "start" },
   user: { placement: "end" },
-};
-
-const markdownComponents: Record<string, Component> = {
-  code: MarkdownCodeRenderer,
 };
 
 const parseThinkContent = (value: string): ParsedThinkContent | null => {
@@ -183,65 +177,6 @@ const displayItems = computed<BubbleItemType[]>(() => {
   });
 });
 
-const handleSourceClick = (item: WebSearchSourceItem) => {
-  if (item.url) window.open(item.url, "_blank", "noopener,noreferrer");
-};
-
-const getFaviconUrl = (url: string): string => {
-  try {
-    const { hostname } = new URL(url);
-    return `https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://${hostname}&size=32`;
-  } catch {
-    return "";
-  }
-};
-
-const failedFavicons = ref<Set<string>>(new Set());
-const onFaviconError = (url: string) => {
-  if (failedFavicons.value.has(url)) return;
-  const next = new Set(failedFavicons.value);
-  next.add(url);
-  failedFavicons.value = next;
-};
-
-const getMarkdownStreaming = (item: BubbleItemType) => ({
-  hasNextChunk: isStreamingStatus(item.status),
-  enableAnimation: false,
-});
-
-const getWorkspaceThoughtItems = (item: BubbleItemType): ThoughtChainItemType[] => {
-  const parsed = item.extraInfo?.parsedWorkspace;
-  if (!parsed?.hasWorkspaceBlock) return [];
-
-  const streaming = isStreamingStatus(item.status);
-  const fileItems = parsed.files.map((file: { path: string; status: string }) => ({
-    key: `file-${file.path}`,
-    title: file.status === "streaming" && streaming ? `正在生成 ${file.path}` : file.path,
-    description: file.status === "streaming" && streaming ? "写入中" : "已生成",
-    status: file.status === "streaming" && streaming ? ("loading" as const) : ("success" as const),
-    collapsible: false,
-  }));
-  const errorItems = streaming
-    ? []
-    : parsed.errors.map((error: string, index: number) => ({
-        key: `workspace-error-${index}`,
-        title: "文件生成异常",
-        description: error,
-        status: "error" as const,
-        collapsible: false,
-      }));
-
-  if (fileItems.length || errorItems.length) return [...fileItems, ...errorItems];
-  return [
-    {
-      key: "workspace-preparing",
-      title: streaming ? "正在准备文件" : "文件生成未完成",
-      status: streaming ? "loading" : "error",
-      collapsible: false,
-    },
-  ];
-};
-
 const isA2UIActionPending = (commands: XCardCommand[]) =>
   Boolean(props.a2uiPendingSurfaceId) &&
   commands.some((command) => getA2UISurfaceId(command) === props.a2uiPendingSurfaceId);
@@ -298,119 +233,59 @@ watch(
 <template>
   <main
     id="chat-content"
-    class="messages-wrapper"
-    :class="{ 'is-empty': showWelcome }"
+    class="messages-wrapper min-h-0 flex-1 overflow-hidden bg-brand-workspace pt-[38px] pb-6 px-[max(28px,calc((100%_-_780px)/2))] lt-md:pt-7 lt-md:px-6 lt-md:pb-6 lt-sm:pt-[22px] lt-sm:px-[15px] lt-sm:pb-5"
+    :class="showWelcome ? 'flex flex-col justify-center' : ''"
     tabindex="-1"
   >
-    <section v-if="showWelcome" class="empty-state">
+    <section v-if="showWelcome" class="empty-state m-auto w-[min(100%,700px)] p-0 text-center">
       <Welcome
-        class="welcome-hero"
+        class="welcome-hero flex-col items-center text-center"
         variant="borderless"
         title="今天想一起完成什么？"
         description="从一个问题开始，或者把正在处理的内容交给 Open Chat。"
       >
-        <template #icon><Sparkles /></template>
+        <template #icon><Sparkles class="!h-[19px] !w-[19px]" /></template>
       </Welcome>
     </section>
 
-    <BubbleList
-      v-else
-      :style="{ height: '100%' }"
-      :role="roleConfig"
-      :items="displayItems"
-      :auto-scroll="true"
-      class="bubble-list"
-    >
+    <BubbleList v-else class="h-full" :role="roleConfig" :items="displayItems" :auto-scroll="true">
       <template #avatar="{ role }">
         <span
-          class="message-avatar"
-          :class="`message-avatar-${role}`"
+          class="grid h-[30px] w-[30px] place-items-center border border-solid rounded-md text-[10px] font-700 shadow-brand-xs"
+          :class="
+            role === 'assistant'
+              ? 'border-brand-primary bg-brand-primary text-brand-primary-foreground'
+              : 'border-brand-border bg-brand-surface text-brand-foreground'
+          "
           :title="role === 'assistant' ? 'Open Chat' : 'Carl Chen'"
         >
-          <Sparkles v-if="role === 'assistant'" />
+          <Sparkles v-if="role === 'assistant'" class="!h-[15px] !w-[15px]" />
           <span v-else>CC</span>
         </span>
       </template>
 
       <template #contentRender="{ content, item }">
-        <div v-if="item.role === 'assistant'" class="assistant-content-stack">
-          <template v-if="item.extraInfo?.parsedThink">
-            <Think
-              v-if="item.extraInfo.parsedThink.thinkContent"
-              :title="item.extraInfo.parsedThink.thinkDone ? '思考过程' : '思考中...'"
-              :loading="!item.extraInfo.parsedThink.thinkDone"
-              :expanded="isThinkExpanded(item.key, item.extraInfo.parsedThink.thinkDone)"
-              :blink="!item.extraInfo.parsedThink.thinkDone"
-              @update:expanded="setThinkExpanded(item.key, $event)"
-            >
-              <XMarkdown
-                :content="item.extraInfo.parsedThink.thinkContent"
-                :components="markdownComponents"
-                :streaming="getMarkdownStreaming(item)"
-                :class-name="markdownClassName"
-              />
-            </Think>
-            <XMarkdown
-              v-if="item.extraInfo.parsedThink.answerContent"
-              :content="item.extraInfo.parsedThink.answerContent"
-              :components="markdownComponents"
-              :streaming="getMarkdownStreaming(item)"
-              :class-name="markdownClassName"
-            />
-          </template>
-          <XMarkdown
-            v-else-if="String(content).trim()"
-            :content="String(content)"
-            :components="markdownComponents"
-            :streaming="getMarkdownStreaming(item)"
-            :class-name="markdownClassName"
-          />
-          <ThoughtChain
-            v-if="item.extraInfo?.parsedWorkspace?.hasWorkspaceBlock"
-            class="workspace-thought-chain"
-            :items="getWorkspaceThoughtItems(item)"
-            line="solid"
-          />
-          <A2UIRenderer
-            v-if="
-              item.extraInfo?.parsedA2UI &&
-              (item.extraInfo.parsedA2UI.commands.length ||
-                item.extraInfo.parsedA2UI.errors.length ||
-                item.extraInfo.parsedA2UI.hasPendingBlock)
-            "
-            :commands="item.extraInfo.parsedA2UI.commands"
-            :errors="item.extraInfo.parsedA2UI.errors"
-            :pending="item.extraInfo.parsedA2UI.hasPendingBlock"
-            :action-pending="isA2UIActionPending(item.extraInfo.parsedA2UI.commands)"
-            :owner-message-id="String(item.key)"
-            :submissions="submissionsForMessage(item.key)"
-            @action="emit('a2uiAction', $event)"
-          />
-          <Sources
-            v-if="searchResultsByMessageId?.[String(item.key)]?.length"
-            class="assistant-sources"
-            :items="searchResultsByMessageId[String(item.key)]"
-            title="来源"
-            :on-click="handleSourceClick"
-          >
-            <template #title="{ originNode }">
-              <span class="source-title">
-                <Globe2 class="source-title-icon" />{{ originNode }}
-              </span>
-            </template>
-            <template #iconRender="{ item }">
-              <img
-                v-if="item.url && !failedFavicons.has(item.url)"
-                class="source-favicon"
-                :src="getFaviconUrl(item.url)"
-                :alt="String(item.title)"
-                loading="lazy"
-                @error="onFaviconError(item.url)"
-              />
-              <Globe2 v-else class="source-favicon-fallback" />
-            </template>
-          </Sources>
-        </div>
+        <AssistantMessageContent
+          v-if="item.role === 'assistant'"
+          :item="item"
+          :content="String(content)"
+          :markdown-class-name="markdownClassName"
+          :streaming="isStreamingStatus(item.status)"
+          :think-expanded="
+            item.extraInfo?.parsedThink
+              ? isThinkExpanded(item.key, item.extraInfo.parsedThink.thinkDone)
+              : false
+          "
+          :a2ui-action-pending="
+            item.extraInfo?.parsedA2UI
+              ? isA2UIActionPending(item.extraInfo.parsedA2UI.commands)
+              : false
+          "
+          :submissions="submissionsForMessage(item.key)"
+          :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
+          @a2ui-action="emit('a2uiAction', $event)"
+          @update:think-expanded="setThinkExpanded(item.key, $event)"
+        />
         <span v-else>{{ content }}</span>
       </template>
 
@@ -424,12 +299,13 @@ watch(
           title="重新生成"
         >
           <Button
+            class="h-[30px] w-[30px] min-w-[30px] rounded-1 p-0 text-brand-muted"
             size="small"
             type="text"
             aria-label="重新生成回答"
             @click="emit('reload', item.key)"
           >
-            <RotateCcw />
+            <RotateCcw class="!h-3.5 !w-3.5" />
           </Button>
         </Tooltip>
       </template>
@@ -438,31 +314,12 @@ watch(
 </template>
 
 <style scoped>
-.messages-wrapper {
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
-  padding: 38px max(28px, calc((100% - 780px) / 2)) 24px;
-  background: var(--brand-workspace);
-}
-.messages-wrapper.is-empty {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
+/* 保留：@keyframes 及引用它的 animation 声明（scoped 会重写 keyframes 名，二者需同处） */
 .empty-state {
-  width: min(100%, 700px);
-  margin: auto;
-  padding: 0;
-  text-align: center;
   animation: empty-in 360ms ease-out both;
 }
+/* 保留：:deep() 覆盖 antd/x 组件内部类，无法用工具类表达 */
 /* Welcome 组件：覆盖为居中纵向布局，匹配空态 hero */
-.welcome-hero {
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-}
 .welcome-hero :deep(.antd-welcome-content-wrapper) {
   align-items: center;
 }
@@ -477,10 +334,6 @@ watch(
   background: var(--brand-primary);
   color: var(--brand-primary-foreground);
   box-shadow: var(--brand-shadow-sm);
-}
-.welcome-hero :deep(.antd-welcome-icon svg) {
-  width: 19px;
-  height: 19px;
 }
 .welcome-hero :deep(.antd-welcome-title) {
   margin: 0;
@@ -529,86 +382,6 @@ watch(
 .messages-wrapper :deep(.antd-bubble-avatar) {
   min-width: 32px;
 }
-.message-avatar {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid var(--brand-border);
-  border-radius: 6px;
-  box-shadow: var(--brand-shadow-xs);
-  font-size: 10px;
-  font-weight: 700;
-}
-.message-avatar-assistant {
-  border-color: var(--brand-primary);
-  background: var(--brand-primary);
-  color: var(--brand-primary-foreground);
-}
-.message-avatar-user {
-  background: var(--brand-surface);
-  color: var(--brand-foreground);
-}
-.message-avatar :deep(svg) {
-  width: 15px;
-  height: 15px;
-}
-.assistant-content-stack {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  flex-direction: column;
-  gap: 12px;
-}
-.assistant-sources {
-  width: 100%;
-}
-.assistant-sources :deep(.antdx-sources-title) {
-  font-size: 12px;
-}
-.assistant-sources :deep(.antdx-sources-list-item) {
-  padding-block: 4px;
-}
-.assistant-sources :deep(.antdx-sources-link) {
-  gap: 8px;
-}
-.assistant-sources :deep(.antdx-sources-link-title) {
-  font-size: 12px;
-  min-width: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.assistant-sources :deep(.antdx-sources-link-description) {
-  display: none;
-}
-.source-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.source-title-icon {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  color: var(--brand-primary);
-}
-.source-favicon {
-  display: block;
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-.source-favicon-fallback {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  color: var(--brand-muted);
-}
 .messages-wrapper :deep(.antd-bubble-body),
 .messages-wrapper :deep(.antd-bubble-content) {
   min-width: 0;
@@ -636,18 +409,6 @@ watch(
 }
 .messages-wrapper :deep(.antd-bubble-footer) {
   margin-top: 8px;
-}
-.messages-wrapper :deep(.antd-bubble-footer .ant-btn) {
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  padding: 0;
-  border-radius: 4px;
-  color: var(--brand-muted);
-}
-.messages-wrapper :deep(.antd-bubble-footer .ant-btn svg) {
-  width: 14px;
-  height: 14px;
 }
 .messages-wrapper :deep(.chat-markdown) {
   width: 100%;
@@ -693,9 +454,6 @@ watch(
   }
 }
 @media (max-width: 820px) {
-  .messages-wrapper {
-    padding: 28px 24px 24px;
-  }
   .messages-wrapper :deep(.antd-bubble) {
     padding-block: 12px;
   }
@@ -704,9 +462,6 @@ watch(
   }
 }
 @media (max-width: 560px) {
-  .messages-wrapper {
-    padding: 22px 15px 20px;
-  }
   .welcome-hero :deep(.antd-welcome-title) {
     font-size: 24px;
   }
