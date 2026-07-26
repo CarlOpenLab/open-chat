@@ -4,6 +4,7 @@ import {
   ChevronDown,
   Cloud,
   Download,
+  FolderOpen,
   PanelLeftOpen,
   Pencil,
   Pin,
@@ -16,11 +17,14 @@ import { computed, h, nextTick, ref, watch } from "vue";
 interface Props {
   title: string;
   sidebarOpen: boolean;
+  workspaceAvailable?: boolean;
+  workspaceOpen?: boolean;
   syncing?: boolean;
 }
 
 interface Emits {
   (e: "toggleSidebar"): void;
+  (e: "toggleWorkspace"): void;
   (e: "share"): void;
   (e: "export"): void;
   (e: "rename", title: string): void;
@@ -120,6 +124,17 @@ const titleMenu = computed<MenuProps>(() => ({
       <button class="header-button" type="button" @click="emit('share')">
         <Share2 /><span>分享</span>
       </button>
+      <Tooltip v-if="workspaceAvailable" title="文件工作区">
+        <button
+          class="header-icon-button"
+          type="button"
+          :aria-label="workspaceOpen ? '关闭文件工作区' : '打开文件工作区'"
+          :aria-pressed="workspaceOpen"
+          @click="emit('toggleWorkspace')"
+        >
+          <FolderOpen />
+        </button>
+      </Tooltip>
     </div>
   </header>
 </template>

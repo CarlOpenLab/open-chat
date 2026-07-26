@@ -28,6 +28,12 @@ import {
   type A2UISubmission,
 } from "../utils/a2ui";
 import {
+  FILE_WORKSPACE_SYSTEM_PROMPT,
+  collectFileWorkspaceState,
+  type EditableWorkspaceFile,
+  type WorkspaceFileDraft,
+} from "../utils/fileWorkspace";
+import {
   clearChatState,
   loadChatState,
   normalizePersistedChatState,
@@ -39,6 +45,7 @@ import ChatSidebar from "./chat/ChatSidebar.vue";
 import ChatHeader from "./chat/ChatHeader.vue";
 import ChatMessages from "./chat/ChatMessages.vue";
 import ChatInput from "./chat/ChatInput.vue";
+import FileWorkspace from "./chat/FileWorkspace.vue";
 
 interface Props {
   dark: boolean;
@@ -51,6 +58,7 @@ interface Emits {
 
 interface OpenChatConversation extends ConversationItemType {
   a2uiSubmissions?: A2UISubmission[];
+  workspaceDrafts?: WorkspaceFileDraft[];
   systemPrompt?: string;
 }
 
@@ -69,6 +77,9 @@ const allowSharedCopy = ref(true);
 const currentConversationKey = ref<string>("");
 const currentModel = ref("");
 const thinkingEnabled = ref(true);
+const fileModeEnabled = ref(false);
+const workspaceOpen = ref(false);
+const selectedWorkspacePath = ref<string[]>([]);
 const searchEnabled = ref(false);
 const searchAvailable = ref(false);
 const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
@@ -90,6 +101,7 @@ const createNewConversation = (systemPrompt: string = ""): OpenChatConversation 
   group: "今天",
   messages: [],
   a2uiSubmissions: [],
+  workspaceDrafts: [],
   systemPrompt,
 });
 
@@ -129,6 +141,9 @@ const toPersistedConversations = (list: OpenChatConversation[]): PersistedConver
         messages: normalizedMessages,
         a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
           ? conversation.a2uiSubmissions
+          : [],
+        workspaceDrafts: Array.isArray(conversation.workspaceDrafts)
+          ? conversation.workspaceDrafts
           : [],
         systemPrompt:
           typeof conversation.systemPrompt === "string" ? conversation.systemPrompt : "",
@@ -220,6 +235,34 @@ const searchResultsByMessageId = computed<Record<string, WebSearchSourceItem[]>>
   return map;
 });
 const currentA2UISubmissions = computed(() => getCurrentConversation()?.a2uiSubmissions ?? []);
+const currentFileWorkspace = computed(() =>
+  collectFileWorkspaceState(
+    currentConversationMessages.value.map(({ id, message }) => ({
+      id,
+      role: message.role,
+      content: message.content,
+    })),
+  ),
+);
+const editableWorkspaceFiles = computed<EditableWorkspaceFile[]>(() => {
+  const drafts = getCurrentConversation()?.workspaceDrafts ?? [];
+  return currentFileWorkspace.value.files.map((file) => {
+    const draft = drafts.find((item) => item.path === file.path);
+    const content = draft?.content ?? file.content;
+    return {
+      ...file,
+      content,
+      originalContent: file.content,
+      dirty: content !== file.content,
+      hasIncomingChange: Boolean(
+        draft && draft.baseContent !== file.content && draft.content !== file.content,
+      ),
+    };
+  });
+});
+const workspaceAvailable = computed(
+  () => fileModeEnabled.value || currentFileWorkspace.value.hasWorkspace,
+);
 
 const updateConversationMessages = (
   conversationKey: string,
@@ -524,8 +567,33 @@ watch(
   { deep: true },
 );
 
+watch(
+  currentFileWorkspace,
+  (workspace, previousWorkspace) => {
+    const selected = selectedWorkspacePath.value.join("/");
+    if (!workspace.files.some((file) => file.path === selected)) {
+      selectedWorkspacePath.value = workspace.files[0]?.path.split("/") ?? [];
+    }
+    const hasNewRevision = workspace.files.some((file) => {
+      const previousFile = previousWorkspace?.files.find((item) => item.path === file.path);
+      return previousFile && previousFile.ownerMessageId !== file.ownerMessageId;
+    });
+    if (
+      workspace.hasWorkspace &&
+      (!previousWorkspace?.hasWorkspace ||
+        workspace.files.length > previousWorkspace.files.length ||
+        hasNewRevision ||
+        (workspace.pending && !previousWorkspace.pending))
+    ) {
+      workspaceOpen.value = true;
+    }
+  },
+  { deep: true },
+);
+
 const handleWorkspaceKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape") {
+    workspaceOpen.value = false;
     shareOpen.value = false;
     deleteOpen.value = false;
   }
@@ -599,6 +667,11 @@ const handleChange = (value: string) => {
   content.value = value;
 };
 
+const getRequestSystemPrompt = (baseSystemPrompt: string) =>
+  [baseSystemPrompt.trim(), fileModeEnabled.value ? FILE_WORKSPACE_SYSTEM_PROMPT : ""]
+    .filter(Boolean)
+    .join("\n\n");
+
 const handleSubmit = (
   nextContent: string,
   options: { extraInfo?: Record<string, unknown>; systemPrompt?: string } = {},
@@ -627,7 +700,7 @@ const handleSubmit = (
     {
       messages: [{ role: "user", content: nextContent }],
       model: currentModel.value,
-      systemPrompt: conversation.systemPrompt ?? "",
+      systemPrompt: getRequestSystemPrompt(conversation.systemPrompt ?? ""),
       enable_thinking: thinkingEnabled.value,
       thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
       ...(searchEnabled.value ? { web_search: true } : {}),
@@ -683,6 +756,45 @@ const handleThinkingChange = (value: boolean) => {
   thinkingEnabled.value = value;
 };
 
+const handleFileModeChange = (value: boolean) => {
+  fileModeEnabled.value = value;
+  if (value) workspaceOpen.value = true;
+  else if (!currentFileWorkspace.value.hasWorkspace) workspaceOpen.value = false;
+};
+
+const handleWorkspaceFileChange = (payload: { path: string; content: string }) => {
+  const conversation = getCurrentConversation();
+  const sourceFile = currentFileWorkspace.value.files.find((file) => file.path === payload.path);
+  if (!conversation || !sourceFile || sourceFile.status === "streaming") return;
+
+  const drafts = conversation.workspaceDrafts ?? [];
+  const existing = drafts.find((draft) => draft.path === payload.path);
+  if (payload.content === sourceFile.content) {
+    conversation.workspaceDrafts = drafts.filter((draft) => draft.path !== payload.path);
+  } else {
+    conversation.workspaceDrafts = [
+      ...drafts.filter((draft) => draft.path !== payload.path),
+      {
+        path: payload.path,
+        baseContent: existing?.baseContent ?? sourceFile.content,
+        content: payload.content,
+        updatedAt: Date.now(),
+      },
+    ];
+  }
+  schedulePersistState();
+};
+
+const clearWorkspaceDraft = (path: string, successMessage: string) => {
+  const conversation = getCurrentConversation();
+  if (!conversation) return;
+  conversation.workspaceDrafts = (conversation.workspaceDrafts ?? []).filter(
+    (draft) => draft.path !== path,
+  );
+  schedulePersistState();
+  message.success(successMessage);
+};
+
 const handleSearchChange = (value: boolean) => {
   if (value && !searchAvailable.value) {
     message.warning("未配置联网搜索能力");
@@ -709,7 +821,7 @@ const handleReloadMessage = (messageId: string | number) => {
   const baseSystemPrompt = getCurrentConversation()?.systemPrompt ?? "";
   onReload(messageId, {
     model: currentModel.value,
-    systemPrompt: baseSystemPrompt,
+    systemPrompt: getRequestSystemPrompt(baseSystemPrompt),
     ...(searchEnabled.value ? { web_search: true } : {}),
   });
 };
@@ -811,8 +923,11 @@ const copyShareLink = async () => {
       <ChatHeader
         :title="currentConversationTitle"
         :sidebar-open="conversationsOpen"
+        :workspace-available="workspaceAvailable"
+        :workspace-open="workspaceOpen"
         :syncing="isRequesting"
         @toggle-sidebar="handleSidebarToggle"
+        @toggle-workspace="workspaceOpen = !workspaceOpen"
         @share="shareOpen = true"
         @export="handleExportLocalHistory"
         @rename="handleRenameConversation"
@@ -840,6 +955,7 @@ const copyShareLink = async () => {
         :current-model-label="currentModelLabel"
         :model-items="modelDropdownItems ?? []"
         :thinking-enabled="thinkingEnabled"
+        :file-mode-enabled="fileModeEnabled"
         :search-enabled="searchEnabled"
         :search-available="searchAvailable"
         :show-starter-prompts="showWelcome && currentConversationMessages.length === 0"
@@ -848,10 +964,28 @@ const copyShareLink = async () => {
         @submit="handleSubmit"
         @model-change="handleModelChange"
         @thinking-change="handleThinkingChange"
+        @file-mode-change="handleFileModeChange"
         @search-change="handleSearchChange"
         @prompt-click="handlePromptClick"
       />
     </div>
+
+    <FileWorkspace
+      :open="workspaceOpen"
+      :files="editableWorkspaceFiles"
+      :pending="
+        isRequesting &&
+        fileModeEnabled &&
+        (currentFileWorkspace.pending || currentFileWorkspace.files.length === 0)
+      "
+      :dark="dark"
+      :selected-path="selectedWorkspacePath"
+      @close="workspaceOpen = false"
+      @update:selected-path="selectedWorkspacePath = $event"
+      @file-change="handleWorkspaceFileChange"
+      @reset-file="clearWorkspaceDraft($event, '已恢复 AI 版本')"
+      @accept-incoming="clearWorkspaceDraft($event, '已采用 AI 新版本')"
+    />
 
     <Modal
       v-model:open="shareOpen"

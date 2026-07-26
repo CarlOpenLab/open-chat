@@ -7,6 +7,7 @@ import {
   GitBranch,
   Lightbulb,
   FileText,
+  FolderOpen,
   Globe2,
   Paperclip,
   Sparkles,
@@ -33,6 +34,7 @@ interface Props {
   currentModelLabel?: string;
   modelItems: NonNullable<MenuProps["items"]>;
   thinkingEnabled: boolean;
+  fileModeEnabled: boolean;
   searchEnabled: boolean;
   searchAvailable: boolean;
   showStarterPrompts: boolean;
@@ -45,6 +47,7 @@ interface Emits {
   (e: "submit", value: string): void;
   (e: "modelChange", key: string): void;
   (e: "thinkingChange", value: boolean): void;
+  (e: "fileModeChange", value: boolean): void;
   (e: "searchChange", value: boolean): void;
   (e: "promptClick", info: { data: { key: string; description: string } }): void;
 }
@@ -98,6 +101,7 @@ const modelMenu = computed<MenuProps>(() => ({
 const activeTools = computed(() => [
   ...(props.searchEnabled ? [{ key: "search", label: "联网搜索", icon: Globe2 }] : []),
   ...(props.thinkingEnabled ? [{ key: "reason", label: "深度思考", icon: BrainCircuit }] : []),
+  ...(props.fileModeEnabled ? [{ key: "files", label: "文件", icon: FolderOpen }] : []),
 ]);
 
 const handleChange = (value: string) => {
@@ -195,6 +199,11 @@ const toggleVoice = () => {
                     <span><BrainCircuit /></span
                     ><span><strong>深度思考</strong><small>为复杂问题投入更多时间</small></span
                     ><Switch :checked="thinkingEnabled" size="small" />
+                  </button>
+                  <button type="button" @click="emit('fileModeChange', !fileModeEnabled)">
+                    <span><FolderOpen /></span
+                    ><span><strong>文件</strong><small>生成可预览和下载的文件</small></span
+                    ><Switch :checked="fileModeEnabled" size="small" />
                   </button>
                 </div>
               </template>

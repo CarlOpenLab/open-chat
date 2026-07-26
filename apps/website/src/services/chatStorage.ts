@@ -1,6 +1,7 @@
 import type { ConversationItemType } from "@antdv-next/x";
 import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
 import { isValidA2UISubmission, type A2UISubmission } from "../utils/a2ui";
+import { isValidWorkspaceFileDraft, type WorkspaceFileDraft } from "../utils/fileWorkspace";
 
 const DB_NAME = "open-chat";
 const DB_VERSION = 1;
@@ -10,6 +11,7 @@ const CHAT_STATE_KEY = "chat-state-v1";
 export interface PersistedConversation extends Omit<ConversationItemType, "messages"> {
   messages: DefaultMessageInfo<XModelMessage>[];
   a2uiSubmissions?: A2UISubmission[];
+  workspaceDrafts?: WorkspaceFileDraft[];
   systemPrompt?: string;
 }
 
@@ -108,6 +110,9 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
         a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
           ? conversation.a2uiSubmissions.filter(isValidA2UISubmission)
           : [],
+        ...(Array.isArray(conversation.workspaceDrafts)
+          ? { workspaceDrafts: conversation.workspaceDrafts.filter(isValidWorkspaceFileDraft) }
+          : {}),
         ...(typeof systemPrompt === "string" ? { systemPrompt } : {}),
       };
     }),

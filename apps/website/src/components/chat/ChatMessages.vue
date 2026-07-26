@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { BubbleItemType, BubbleListProps } from "@antdv-next/x";
-import { BubbleList, Sources, Think, Welcome } from "@antdv-next/x";
+import type { BubbleItemType, BubbleListProps, ThoughtChainItemType } from "@antdv-next/x";
+import { BubbleList, Sources, Think, ThoughtChain, Welcome } from "@antdv-next/x";
 import type { XCardCommand } from "@antdv-next/x-card";
 import { XMarkdown } from "@antdv-next/x-markdown";
 import { Globe2, RotateCcw, Sparkles } from "@lucide/vue";
@@ -13,6 +13,7 @@ import {
   type A2UISubmission,
 } from "../../utils/a2ui";
 import type { WebSearchSourceItem } from "../../services/ai";
+import { parseFileWorkspaceContent } from "../../utils/fileWorkspace";
 import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
@@ -91,17 +92,23 @@ const parseThinkContent = (value: string): ParsedThinkContent | null => {
 
 const displayItems = computed<BubbleItemType[]>(() => {
   const preparedItems = props.bubbleItems.map((item) => {
-    const parsedA2UI =
+    const parsedWorkspace =
       item.role === "assistant" && typeof item.content === "string"
-        ? parseA2UIContent(item.content)
+        ? parseFileWorkspaceContent(item.content)
         : null;
-    const displayContent = parsedA2UI?.markdown ?? item.content;
+    const workspaceMarkdown = parsedWorkspace?.markdown ?? item.content;
+    const parsedA2UI =
+      item.role === "assistant" && typeof workspaceMarkdown === "string"
+        ? parseA2UIContent(workspaceMarkdown)
+        : null;
+    const displayContent = parsedA2UI?.markdown ?? workspaceMarkdown;
 
     return {
       ...item,
       content: displayContent,
       extraInfo: {
         ...item.extraInfo,
+        parsedWorkspace,
         parsedA2UI,
         parsedThink:
           item.role === "assistant" && typeof displayContent === "string"
@@ -159,8 +166,10 @@ const displayItems = computed<BubbleItemType[]>(() => {
     const hasVisibleText = typeof item.content !== "string" || item.content.trim().length > 0;
     const hasVisibleA2UI =
       parsedA2UI.commands.length > 0 || parsedA2UI.errors.length > 0 || parsedA2UI.hasPendingBlock;
+    const hasVisibleWorkspace = Boolean(item.extraInfo?.parsedWorkspace?.hasWorkspaceBlock);
 
-    if (item.role === "assistant" && !hasVisibleText && !hasVisibleA2UI) return [];
+    if (item.role === "assistant" && !hasVisibleText && !hasVisibleA2UI && !hasVisibleWorkspace)
+      return [];
 
     return [
       {
@@ -199,6 +208,39 @@ const getMarkdownStreaming = (item: BubbleItemType) => ({
   hasNextChunk: isStreamingStatus(item.status),
   enableAnimation: false,
 });
+
+const getWorkspaceThoughtItems = (item: BubbleItemType): ThoughtChainItemType[] => {
+  const parsed = item.extraInfo?.parsedWorkspace;
+  if (!parsed?.hasWorkspaceBlock) return [];
+
+  const streaming = isStreamingStatus(item.status);
+  const fileItems = parsed.files.map((file: { path: string; status: string }) => ({
+    key: `file-${file.path}`,
+    title: file.status === "streaming" && streaming ? `正在生成 ${file.path}` : file.path,
+    description: file.status === "streaming" && streaming ? "写入中" : "已生成",
+    status: file.status === "streaming" && streaming ? ("loading" as const) : ("success" as const),
+    collapsible: false,
+  }));
+  const errorItems = streaming
+    ? []
+    : parsed.errors.map((error: string, index: number) => ({
+        key: `workspace-error-${index}`,
+        title: "文件生成异常",
+        description: error,
+        status: "error" as const,
+        collapsible: false,
+      }));
+
+  if (fileItems.length || errorItems.length) return [...fileItems, ...errorItems];
+  return [
+    {
+      key: "workspace-preparing",
+      title: streaming ? "正在准备文件" : "文件生成未完成",
+      status: streaming ? "loading" : "error",
+      collapsible: false,
+    },
+  ];
+};
 
 const isA2UIActionPending = (commands: XCardCommand[]) =>
   Boolean(props.a2uiPendingSurfaceId) &&
@@ -317,11 +359,17 @@ watch(
             />
           </template>
           <XMarkdown
-            v-else
+            v-else-if="String(content).trim()"
             :content="String(content)"
             :components="markdownComponents"
             :streaming="getMarkdownStreaming(item)"
             :class-name="markdownClassName"
+          />
+          <ThoughtChain
+            v-if="item.extraInfo?.parsedWorkspace?.hasWorkspaceBlock"
+            class="workspace-thought-chain"
+            :items="getWorkspaceThoughtItems(item)"
+            line="solid"
           />
           <A2UIRenderer
             v-if="
