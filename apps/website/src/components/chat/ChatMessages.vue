@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { BubbleItemType, BubbleListProps } from "@antdv-next/x";
-import { BubbleList, Think, Welcome } from "@antdv-next/x";
+import { BubbleList, Sources, Think, Welcome } from "@antdv-next/x";
 import type { XCardCommand } from "@antdv-next/x-card";
 import { XMarkdown } from "@antdv-next/x-markdown";
-import { RotateCcw, Sparkles } from "@lucide/vue";
+import { Globe2, RotateCcw, Sparkles } from "@lucide/vue";
 import { Button, Tooltip } from "antdv-next";
 import { computed, provide, ref, watch, type Component } from "vue";
 import {
@@ -12,6 +12,7 @@ import {
   type A2UIActionPayload,
   type A2UISubmission,
 } from "../../utils/a2ui";
+import type { WebSearchSourceItem } from "../../services/ai";
 import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
@@ -23,6 +24,7 @@ interface Props {
   conversationKey: string;
   a2uiPendingSurfaceId?: string;
   a2uiSubmissions?: A2UISubmission[];
+  searchResultsByMessageId?: Record<string, WebSearchSourceItem[]>;
 }
 
 interface Emits {
@@ -45,6 +47,7 @@ interface ParsedThinkContent {
 const props = withDefaults(defineProps<Props>(), {
   a2uiPendingSurfaceId: "",
   a2uiSubmissions: () => [],
+  searchResultsByMessageId: () => ({}),
 });
 const emit = defineEmits<Emits>();
 const markdownTheme = computed<MarkdownTheme>(() => (props.dark ? "dark" : "light"));
@@ -170,6 +173,27 @@ const displayItems = computed<BubbleItemType[]>(() => {
     ];
   });
 });
+
+const handleSourceClick = (item: WebSearchSourceItem) => {
+  if (item.url) window.open(item.url, "_blank", "noopener,noreferrer");
+};
+
+const getFaviconUrl = (url: string): string => {
+  try {
+    const { hostname } = new URL(url);
+    return `https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://${hostname}&size=32`;
+  } catch {
+    return "";
+  }
+};
+
+const failedFavicons = ref<Set<string>>(new Set());
+const onFaviconError = (url: string) => {
+  if (failedFavicons.value.has(url)) return;
+  const next = new Set(failedFavicons.value);
+  next.add(url);
+  failedFavicons.value = next;
+};
 
 const getMarkdownStreaming = (item: BubbleItemType) => ({
   hasNextChunk: isStreamingStatus(item.status),
@@ -314,6 +338,30 @@ watch(
             :submissions="submissionsForMessage(item.key)"
             @action="emit('a2uiAction', $event)"
           />
+          <Sources
+            v-if="searchResultsByMessageId?.[String(item.key)]?.length"
+            class="assistant-sources"
+            :items="searchResultsByMessageId[String(item.key)]"
+            title="来源"
+            :on-click="handleSourceClick"
+          >
+            <template #title="{ originNode }">
+              <span class="source-title">
+                <Globe2 class="source-title-icon" />{{ originNode }}
+              </span>
+            </template>
+            <template #iconRender="{ item }">
+              <img
+                v-if="item.url && !failedFavicons.has(item.url)"
+                class="source-favicon"
+                :src="getFaviconUrl(item.url)"
+                :alt="String(item.title)"
+                loading="lazy"
+                @error="onFaviconError(item.url)"
+              />
+              <Globe2 v-else class="source-favicon-fallback" />
+            </template>
+          </Sources>
         </div>
         <span v-else>{{ content }}</span>
       </template>
@@ -464,6 +512,54 @@ watch(
   max-width: 100%;
   flex-direction: column;
   gap: 12px;
+}
+.assistant-sources {
+  width: 100%;
+}
+.assistant-sources :deep(.antdx-sources-title) {
+  font-size: 12px;
+}
+.assistant-sources :deep(.antdx-sources-list-item) {
+  padding-block: 4px;
+}
+.assistant-sources :deep(.antdx-sources-link) {
+  gap: 8px;
+}
+.assistant-sources :deep(.antdx-sources-link-title) {
+  font-size: 12px;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.assistant-sources :deep(.antdx-sources-link-description) {
+  display: none;
+}
+.source-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.source-title-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--brand-primary);
+}
+.source-favicon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.source-favicon-fallback {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--brand-muted);
 }
 .messages-wrapper :deep(.antd-bubble-body),
 .messages-wrapper :deep(.antd-bubble-content) {

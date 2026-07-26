@@ -23,7 +23,16 @@ export interface ModelsProvider {
 
 export interface ModelsResponse {
   defaultModel: string;
+  search: { enabled: boolean; provider: string };
   providers: ModelsProvider[];
+}
+
+/** Display-ready source item consumed by the `Sources` UI component. */
+export interface WebSearchSourceItem {
+  key: string;
+  title: string;
+  url: string;
+  description: string;
 }
 
 /**
@@ -38,7 +47,7 @@ export const GATEWAY_API_KEY = import.meta.env.VITE_GATEWAY_API_KEY || "";
 
 export const aiService = {
   /**
-   * 获取支持的模型列表
+   * 获取支持的模型列表（含联网搜索可用性）
    */
   async getModels(): Promise<ModelsResponse> {
     const response = await fetch(`${API_BASE_URL}/api/models`);

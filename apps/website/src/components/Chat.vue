@@ -6,9 +6,16 @@ import { XRequest, useXChat } from "@antdv-next/x-sdk";
 import { Copy, Download, FileText, Link2, Plus, Trash2, X } from "@lucide/vue";
 import { Button, Input, Modal, Switch, message, type MenuProps } from "antdv-next";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
-import { aiService, API_BASE_URL, GATEWAY_API_KEY, type ModelsProvider } from "../services/ai";
+import {
+  aiService,
+  API_BASE_URL,
+  GATEWAY_API_KEY,
+  type ModelsProvider,
+  type WebSearchSourceItem,
+} from "../services/ai";
 import {
   OpenChatProvider,
+  WEB_SEARCHING_MARKER,
   createTicketBranchSystemPrompt,
   type OpenChatParams,
 } from "../services/OpenChatProvider";
@@ -64,6 +71,9 @@ const memoryEnabled = ref(true);
 const currentConversationKey = ref<string>("");
 const currentModel = ref("");
 const thinkingEnabled = ref(true);
+const searchEnabled = ref(false);
+const searchAvailable = ref(false);
+const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const pendingA2UISurfaceId = ref("");
 const showWelcome = ref(true);
 const isHydrating = ref(true);
@@ -171,7 +181,12 @@ const currentModelLabel = computed(
 function reconcileCurrentModel() {
   if (allModelIds.value.length === 0) return;
   if (!currentModel.value || !allModelIds.value.includes(currentModel.value)) {
-    currentModel.value = defaultModelId.value || allModelIds.value[0];
+    // Only trust defaultModelId when it actually maps to a configured model;
+    // otherwise fall back to the first available model so a stale or mistyped
+    // `default_model` in providers.toml can't silently break every request.
+    currentModel.value = allModelIds.value.includes(defaultModelId.value)
+      ? defaultModelId.value
+      : allModelIds.value[0];
   }
 }
 
@@ -191,6 +206,20 @@ const currentConversationTitle = computed(() => {
 const currentConversationMessages = computed<DefaultMessageInfo<XModelMessage>[]>(() => {
   const conv = getCurrentConversation();
   return conv?.messages ?? [];
+});
+
+/** Maps an assistant message id to the web-search sources attached to it.
+ * Sources are stored on the assistant message's `extraInfo.webSearchResults`. */
+const searchResultsByMessageId = computed<Record<string, WebSearchSourceItem[]>>(() => {
+  const map: Record<string, WebSearchSourceItem[]> = {};
+  for (const msg of currentConversationMessages.value) {
+    if (msg.message.role !== "assistant") continue;
+    const results = (msg.extraInfo as { webSearchResults?: unknown } | undefined)?.webSearchResults;
+    if (Array.isArray(results) && results.length > 0) {
+      map[String(msg.id)] = results as WebSearchSourceItem[];
+    }
+  }
+  return map;
 });
 const currentA2UISubmissions = computed(() => getCurrentConversation()?.a2uiSubmissions ?? []);
 const formatSubmissionTime = (timestamp: number) =>
@@ -382,6 +411,7 @@ const loadModels = async () => {
     const data = await aiService.getModels();
     models.value = data.providers;
     defaultModelId.value = data.defaultModel;
+    searchAvailable.value = !!data.search?.enabled;
     reconcileCurrentModel();
   } catch (e) {
     console.error("Failed to load models:", e);
@@ -404,6 +434,19 @@ const createProvider = () => {
 };
 
 const provider = createProvider();
+provider.onWebSearchSources = (sources) => {
+  // A single request may run several search rounds; accumulate every round's
+  // sources (with re-keyed indices to keep them unique) so the Sources UI
+  // shows all results instead of only the last round.
+  const prev = pendingSearchSources.value ?? [];
+  pendingSearchSources.value = [
+    ...prev,
+    ...sources.map((source, index) => ({
+      ...source,
+      key: String(prev.length + index),
+    })),
+  ];
+};
 
 const getInitialMessages = (): DefaultMessageInfo<XModelMessage>[] => {
   const conv = getCurrentConversation();
@@ -427,11 +470,10 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
   defaultMessages: getInitialMessages,
   requestFallback: (_, { error, errorInfo, messageInfo }) => {
     if (error.name === "AbortError") {
+      const existing =
+        typeof messageInfo?.message?.content === "string" ? messageInfo.message.content : "";
       return {
-        content:
-          typeof messageInfo?.message?.content === "string"
-            ? messageInfo.message.content
-            : "请求已中止",
+        content: existing && existing !== WEB_SEARCHING_MARKER ? existing : "请求已中止",
         role: "assistant",
       };
     }
@@ -443,8 +485,25 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
   requestPlaceholder: () => ({ content: "请稍候...", role: "assistant" }),
 });
 
+/** Attach sources received mid-stream to the assistant message that produced them. */
+const attachPendingSearchSources = () => {
+  const sources = pendingSearchSources.value;
+  pendingSearchSources.value = null;
+  if (!sources || sources.length === 0) return;
+  setMessages((msgs) => {
+    const lastAssistant = [...msgs].reverse().find((m) => m.message.role === "assistant");
+    if (!lastAssistant) return msgs;
+    return msgs.map((m) =>
+      m.id === lastAssistant.id
+        ? { ...m, extraInfo: { ...m.extraInfo, webSearchResults: sources } }
+        : m,
+    );
+  });
+};
+
 watch(isRequesting, (requesting) => {
   if (!requesting) {
+    attachPendingSearchSources();
     activeRequestConversationKey.value = "";
     pendingA2UISurfaceId.value = "";
   }
@@ -537,6 +596,10 @@ const handlePromptClick = (info: { data: { key?: string; description?: string } 
   });
 };
 
+const handleCancel = () => {
+  abort();
+};
+
 const handleChange = (value: string) => {
   content.value = value;
 };
@@ -546,6 +609,7 @@ const handleSubmit = (
   options: { extraInfo?: Record<string, unknown>; systemPrompt?: string } = {},
 ) => {
   if (!nextContent || !nextContent.trim()) return;
+  if (isRequesting.value) return;
 
   // 草稿态首次发送时，才创建真实会话并写入侧栏
   if (isInDraftMode.value) {
@@ -571,6 +635,7 @@ const handleSubmit = (
       systemPrompt: conversation.systemPrompt ?? "",
       enable_thinking: thinkingEnabled.value,
       thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
+      ...(searchEnabled.value ? { web_search: true } : {}),
     },
     options.extraInfo ? { extraInfo: options.extraInfo } : undefined,
   );
@@ -623,6 +688,14 @@ const handleThinkingChange = (value: boolean) => {
   thinkingEnabled.value = value;
 };
 
+const handleSearchChange = (value: boolean) => {
+  if (value && !searchAvailable.value) {
+    message.warning("未配置联网搜索能力");
+    return;
+  }
+  searchEnabled.value = value;
+};
+
 const handleReloadMessage = (messageId: string | number) => {
   const lastAssistantMessage = [...currentConversationMessages.value]
     .reverse()
@@ -638,9 +711,11 @@ const handleReloadMessage = (messageId: string | number) => {
   }
 
   setMessages(currentConversationMessages.value);
+  const baseSystemPrompt = getCurrentConversation()?.systemPrompt ?? "";
   onReload(messageId, {
     model: currentModel.value,
-    systemPrompt: getCurrentConversation()?.systemPrompt ?? "",
+    systemPrompt: baseSystemPrompt,
+    ...(searchEnabled.value ? { web_search: true } : {}),
   });
 };
 
@@ -770,6 +845,7 @@ const copyShareLink = async () => {
         :conversation-key="currentConversationKey"
         :a2ui-pending-surface-id="pendingA2UISurfaceId"
         :a2ui-submissions="currentA2UISubmissions"
+        :search-results-by-message-id="searchResultsByMessageId"
         @a2ui-action="handleA2UIAction"
         @reload="handleReloadMessage"
       />
@@ -781,12 +857,15 @@ const copyShareLink = async () => {
         :current-model-label="currentModelLabel"
         :model-items="modelDropdownItems ?? []"
         :thinking-enabled="thinkingEnabled"
+        :search-enabled="searchEnabled"
+        :search-available="searchAvailable"
         :show-starter-prompts="showWelcome && currentConversationMessages.length === 0"
         @change="handleChange"
-        @cancel="abort"
+        @cancel="handleCancel"
         @submit="handleSubmit"
         @model-change="handleModelChange"
         @thinking-change="handleThinkingChange"
+        @search-change="handleSearchChange"
         @prompt-click="handlePromptClick"
       />
     </div>

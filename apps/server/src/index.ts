@@ -12,6 +12,8 @@ import {
 import { GatewayError } from "./error";
 import type { ChatCompletionRequest } from "./provider";
 import { ProviderRegistry } from "./registry";
+import { createSearchProvider, type SearchProvider } from "./search";
+import { runSearchAgentLoop } from "./search-agent";
 
 const DEFAULT_CONFIG_PATH = "config/providers.toml";
 
@@ -24,9 +26,11 @@ function main(): void {
 
   let config: AppConfig;
   let registry: ProviderRegistry;
+  let searchProvider: SearchProvider | null;
   try {
     config = loadConfigFile(configPath);
     registry = ProviderRegistry.fromConfig(config);
+    searchProvider = createSearchProvider(config.search);
   } catch (err) {
     if (err instanceof GatewayError) {
       console.error(`Failed to load config from ${configPath}: ${err.message}`);
@@ -49,7 +53,7 @@ function main(): void {
   });
 
   app.get("/api/models", (_req: Request, res: Response) => {
-    res.json(buildModelsResponse(config));
+    res.json(buildModelsResponse(config, searchProvider));
   });
 
   app.post("/api/chat/completions", async (req: Request, res: Response) => {
@@ -65,14 +69,36 @@ function main(): void {
       const route = registry.resolveModel(body.model);
       const stream = body.stream === true;
 
-      if (stream) {
-        const upstream = await route.provider.chatStream(body, route.model);
-        await pipeSseStream(req, res, upstream);
+      // The client declares a `web_search` tool in `tools` when it wants the
+      // model to be able to search. Detect it and route through the agent loop
+      // that intercepts the tool call and executes the search provider.
+      const canSearch =
+        stream && route.provider.api === "chat/completions" && hasWebSearchTool(body.tools);
+
+      if (canSearch && searchProvider) {
+        await runSearchAgentLoop(req, res, route, body, searchProvider);
       } else {
-        const data = await route.provider.chat(body, route.model);
-        res.json(data);
+        // No search backend: strip the tool so the model doesn't attempt to
+        // call a function nobody will execute.
+        if (canSearch) stripWebSearchTool(body);
+        if (stream) {
+          const upstream = await route.provider.chatStream(body, route.model);
+          await pipeSseStream(req, res, upstream);
+        } else {
+          const data = await route.provider.chat(body, route.model);
+          res.json(data);
+        }
       }
     } catch (err) {
+      if (res.headersSent) {
+        console.error("Chat API error after headers sent:", err);
+        try {
+          res.end();
+        } catch {
+          // response already ended
+        }
+        return;
+      }
       if (err instanceof GatewayError) {
         return sendGatewayError(res, err);
       }
@@ -94,6 +120,7 @@ function main(): void {
     console.log(`Chat:        http://${host}:${port}/api/chat/completions`);
     console.log(`Gateway auth: ${config.gatewayApiKey ? "enabled" : "disabled"}`);
     console.log(`Providers:   ${config.providers.map((p) => `${p.name} (${p.api})`).join(", ")}`);
+    console.log(`Web search:  ${searchProvider ? searchProvider.name : "disabled"}`);
   });
 
   process.on("SIGTERM", () => {
@@ -127,8 +154,12 @@ function gatewayAuthMiddleware(apiKey: string) {
   };
 }
 
-function buildModelsResponse(config: AppConfig): {
+function buildModelsResponse(
+  config: AppConfig,
+  searchProvider: SearchProvider | null,
+): {
   defaultModel: string;
+  search: { enabled: boolean; provider: string };
   providers: {
     name: string;
     models: ModelConfig[];
@@ -136,6 +167,7 @@ function buildModelsResponse(config: AppConfig): {
 } {
   return {
     defaultModel: config.defaultModel,
+    search: { enabled: !!searchProvider, provider: searchProvider?.name ?? "" },
     providers: config.providers.map((provider: ProviderConfig) => ({
       name: provider.name,
       models: provider.models,
@@ -192,6 +224,29 @@ async function pipeSseStream(
 
 function sendGatewayError(res: Response, err: GatewayError): void {
   res.status(err.status).json(err.toResponse());
+}
+
+/** True when the request `tools` array declares a `web_search` function tool. */
+function isWebSearchTool(tool: unknown): boolean {
+  if (typeof tool !== "object" || tool === null) return false;
+  const fn = (tool as { function?: unknown }).function;
+  return typeof fn === "object" && fn !== null && (fn as { name?: unknown }).name === "web_search";
+}
+
+function hasWebSearchTool(tools: unknown): boolean {
+  return Array.isArray(tools) && tools.some(isWebSearchTool);
+}
+
+/** Remove the `web_search` tool from the request (used when no search backend). */
+function stripWebSearchTool(body: ChatCompletionRequest): void {
+  const tools = body.tools;
+  if (!Array.isArray(tools)) return;
+  const filtered = tools.filter((tool) => !isWebSearchTool(tool));
+  if (filtered.length === 0) {
+    delete body.tools;
+  } else {
+    body.tools = filtered;
+  }
 }
 
 main();

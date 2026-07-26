@@ -34,6 +34,8 @@ interface Props {
   currentModelLabel?: string;
   modelItems: NonNullable<MenuProps["items"]>;
   thinkingEnabled: boolean;
+  searchEnabled: boolean;
+  searchAvailable: boolean;
   showStarterPrompts: boolean;
 }
 
@@ -44,6 +46,7 @@ interface Emits {
   (e: "submit", value: string): void;
   (e: "modelChange", key: string): void;
   (e: "thinkingChange", value: boolean): void;
+  (e: "searchChange", value: boolean): void;
   (e: "promptClick", info: { data: { key: string; description: string } }): void;
 }
 
@@ -52,7 +55,6 @@ const emit = defineEmits<Emits>();
 const fileInput = ref<HTMLInputElement>();
 const selectedFile = ref<File>();
 const toolsOpen = ref(false);
-const searchEnabled = ref(false);
 const canvasEnabled = ref(false);
 const voiceActive = ref(false);
 
@@ -96,7 +98,7 @@ const modelMenu = computed<MenuProps>(() => ({
 }));
 
 const activeTools = computed(() => [
-  ...(searchEnabled.value ? [{ key: "search", label: "联网搜索", icon: Globe2 }] : []),
+  ...(props.searchEnabled ? [{ key: "search", label: "联网搜索", icon: Globe2 }] : []),
   ...(props.thinkingEnabled ? [{ key: "reason", label: "深度思考", icon: BrainCircuit }] : []),
   ...(canvasEnabled.value ? [{ key: "canvas", label: "画布", icon: PanelTop }] : []),
 ]);
@@ -183,10 +185,14 @@ const toggleVoice = () => {
               <template #content>
                 <div class="tools-menu">
                   <p>增强回答</p>
-                  <button type="button" @click="searchEnabled = !searchEnabled">
+                  <button
+                    v-if="props.searchAvailable"
+                    type="button"
+                    @click="emit('searchChange', !props.searchEnabled)"
+                  >
                     <span><Globe2 /></span
                     ><span><strong>联网搜索</strong><small>查找并引用最新信息</small></span
-                    ><Switch :checked="searchEnabled" size="small" />
+                    ><Switch :checked="props.searchEnabled" size="small" />
                   </button>
                   <button type="button" @click="emit('thinkingChange', !thinkingEnabled)">
                     <span><BrainCircuit /></span

@@ -27,6 +27,15 @@ export interface ProviderConfig {
   models: ModelConfig[];
 }
 
+export interface SearchConfig {
+  /** Empty or "disabled" turns web search off. Currently supports "tavily". */
+  provider: string;
+  apiKey: string;
+  maxResults: number;
+  searchDepth: "basic" | "advanced";
+  includeAnswer: boolean;
+}
+
 export interface AppConfig {
   /** Empty string when authentication is disabled. */
   gatewayApiKey: string;
@@ -34,6 +43,7 @@ export interface AppConfig {
   defaultModel: string;
   corsAllowedOrigins: string[];
   providers: ProviderConfig[];
+  search: SearchConfig;
 }
 
 interface RawModelConfig {
@@ -50,12 +60,21 @@ interface RawProviderConfig {
   models?: unknown;
 }
 
+interface RawSearchConfig {
+  provider?: unknown;
+  api_key?: unknown;
+  max_results?: unknown;
+  search_depth?: unknown;
+  include_answer?: unknown;
+}
+
 interface RawGatewayConfig {
   gateway_api_key?: unknown;
   bind_addr?: unknown;
   default_model?: unknown;
   cors_allowed_origins?: unknown;
   providers?: unknown;
+  search?: unknown;
 }
 
 const DEFAULT_BIND_ADDR = "127.0.0.1:8082";
@@ -84,6 +103,7 @@ export function parseConfig(tomlStr: string): AppConfig {
   }
 
   const providers = parseProviders(raw.providers);
+  const search = parseSearch(raw.search);
   const gatewayApiKey = optionalString(raw.gateway_api_key) ?? "";
   const defaultModel = optionalString(raw.default_model) ?? providers[0].models[0].id;
   const bindAddr = optionalString(raw.bind_addr) ?? DEFAULT_BIND_ADDR;
@@ -95,6 +115,7 @@ export function parseConfig(tomlStr: string): AppConfig {
     defaultModel,
     corsAllowedOrigins,
     providers,
+    search,
   };
 }
 
@@ -161,6 +182,26 @@ function parseModels(rawModels: unknown, providerIndex: number): ModelConfig[] {
     });
   }
   return models;
+}
+
+function parseSearch(raw: unknown): SearchConfig {
+  if (raw === undefined || raw === null) {
+    return { provider: "", apiKey: "", maxResults: 5, searchDepth: "basic", includeAnswer: true };
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw GatewayError.invalidRequest("[search] must be a table");
+  }
+  const s = raw as RawSearchConfig;
+  const provider = optionalString(s.provider) ?? "";
+  const apiKey = optionalString(s.api_key) ?? "";
+  const maxResults =
+    typeof s.max_results === "number" && Number.isFinite(s.max_results) && s.max_results > 0
+      ? Math.floor(s.max_results)
+      : 5;
+  const depthRaw = optionalString(s.search_depth);
+  const searchDepth = depthRaw === "advanced" ? "advanced" : "basic";
+  const includeAnswer = typeof s.include_answer === "boolean" ? s.include_answer : true;
+  return { provider, apiKey, maxResults, searchDepth, includeAnswer };
 }
 
 /** Returns a trimmed non-empty string, or `undefined` when missing/blank. */
