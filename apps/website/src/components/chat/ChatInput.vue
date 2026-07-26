@@ -8,7 +8,6 @@ import {
   Lightbulb,
   FileText,
   Globe2,
-  PanelTop,
   Paperclip,
   Sparkles,
   SlidersHorizontal,
@@ -55,7 +54,6 @@ const emit = defineEmits<Emits>();
 const fileInput = ref<HTMLInputElement>();
 const selectedFile = ref<File>();
 const toolsOpen = ref(false);
-const canvasEnabled = ref(false);
 const voiceActive = ref(false);
 
 // ============ 推荐提示词（深度思考位置） ============
@@ -100,7 +98,6 @@ const modelMenu = computed<MenuProps>(() => ({
 const activeTools = computed(() => [
   ...(props.searchEnabled ? [{ key: "search", label: "联网搜索", icon: Globe2 }] : []),
   ...(props.thinkingEnabled ? [{ key: "reason", label: "深度思考", icon: BrainCircuit }] : []),
-  ...(canvasEnabled.value ? [{ key: "canvas", label: "画布", icon: PanelTop }] : []),
 ]);
 
 const handleChange = (value: string) => {
@@ -198,11 +195,6 @@ const toggleVoice = () => {
                     <span><BrainCircuit /></span
                     ><span><strong>深度思考</strong><small>为复杂问题投入更多时间</small></span
                     ><Switch :checked="thinkingEnabled" size="small" />
-                  </button>
-                  <button type="button" @click="canvasEnabled = !canvasEnabled">
-                    <span><PanelTop /></span
-                    ><span><strong>画布</strong><small>在独立空间编辑长内容</small></span
-                    ><Switch :checked="canvasEnabled" size="small" />
                   </button>
                 </div>
               </template>

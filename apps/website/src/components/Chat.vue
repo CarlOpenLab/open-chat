@@ -3,7 +3,7 @@ import type { BubbleItemType, ConversationItemType, ConversationsProps } from "@
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest, useXChat } from "@antdv-next/x-sdk";
-import { Copy, Download, FileText, Link2, Plus, Trash2, X } from "@lucide/vue";
+import { Copy, Trash2 } from "@lucide/vue";
 import { Button, Input, Modal, Switch, message, type MenuProps } from "antdv-next";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import {
@@ -63,11 +63,9 @@ const models = ref<ModelsProvider[]>([]);
 const defaultModelId = ref("");
 const content = ref("");
 const conversationsOpen = ref(true);
-const contextOpen = ref(false);
 const shareOpen = ref(false);
 const deleteOpen = ref(false);
 const allowSharedCopy = ref(true);
-const memoryEnabled = ref(true);
 const currentConversationKey = ref<string>("");
 const currentModel = ref("");
 const thinkingEnabled = ref(true);
@@ -222,8 +220,6 @@ const searchResultsByMessageId = computed<Record<string, WebSearchSourceItem[]>>
   return map;
 });
 const currentA2UISubmissions = computed(() => getCurrentConversation()?.a2uiSubmissions ?? []);
-const formatSubmissionTime = (timestamp: number) =>
-  new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(timestamp);
 
 const updateConversationMessages = (
   conversationKey: string,
@@ -530,7 +526,6 @@ watch(
 
 const handleWorkspaceKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape") {
-    contextOpen.value = false;
     shareOpen.value = false;
     deleteOpen.value = false;
   }
@@ -738,7 +733,6 @@ const resetAfterRemovingConversation = () => {
   setMessages([]);
   currentConversationKey.value = "";
   showWelcome.value = true;
-  contextOpen.value = false;
   schedulePersistState();
 };
 
@@ -775,16 +769,6 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
   conversation.label = title;
   schedulePersistState();
   message.success("对话名称已更新");
-};
-
-const handleClearCurrentMessages = () => {
-  const conversation = getCurrentConversation();
-  if (conversation) conversation.messages = [];
-  setMessages([]);
-  showWelcome.value = true;
-  contextOpen.value = false;
-  schedulePersistState();
-  message.success("当前对话已清空");
 };
 
 const copyShareLink = async () => {
@@ -827,11 +811,10 @@ const copyShareLink = async () => {
       <ChatHeader
         :title="currentConversationTitle"
         :sidebar-open="conversationsOpen"
-        :context-open="contextOpen"
         :syncing="isRequesting"
         @toggle-sidebar="handleSidebarToggle"
-        @toggle-context="contextOpen = !contextOpen"
         @share="shareOpen = true"
+        @export="handleExportLocalHistory"
         @rename="handleRenameConversation"
         @pin="handlePinConversation"
         @archive="handleArchiveConversation"
@@ -869,87 +852,6 @@ const copyShareLink = async () => {
         @prompt-click="handlePromptClick"
       />
     </div>
-
-    <aside
-      class="context-panel"
-      :class="{ open: contextOpen }"
-      :aria-hidden="!contextOpen"
-      aria-label="对话详情"
-    >
-      <header>
-        <strong>对话详情</strong
-        ><button type="button" aria-label="关闭对话详情" @click="contextOpen = false"><X /></button>
-      </header>
-      <div class="context-content">
-        <section>
-          <div class="context-heading">
-            <h2>上下文</h2>
-            <button type="button" @click="message.info('可在输入区添加附件')"><Plus />添加</button>
-          </div>
-          <div class="context-file">
-            <span><FileText /></span
-            ><span><strong>launch-plan.pdf</strong><small>12 页 · 2.4 MB</small></span>
-          </div>
-          <div class="context-file">
-            <span><Link2 /></span><span><strong>发布检查清单</strong><small>刚刚同步</small></span>
-          </div>
-        </section>
-        <section v-if="currentA2UISubmissions.length">
-          <div class="context-heading"><h2>结构化输入</h2></div>
-          <article
-            v-for="submission in currentA2UISubmissions"
-            :key="submission.submissionId"
-            class="context-submission"
-          >
-            <header>
-              <span>{{ submission.action.name }}</span>
-              <time :datetime="new Date(submission.submittedAt).toISOString()">
-                {{ formatSubmissionTime(submission.submittedAt) }}
-              </time>
-            </header>
-            <small>{{ submission.surfaceId }} · revision {{ submission.surfaceRevision }}</small>
-            <p class="context-submission-note">表单数据已保存，不在聊天界面中展示。</p>
-          </article>
-        </section>
-        <section>
-          <div class="context-heading"><h2>本次对话</h2></div>
-          <dl>
-            <div>
-              <dt>模型</dt>
-              <dd>{{ currentModelLabel }}</dd>
-            </div>
-            <div>
-              <dt>消息</dt>
-              <dd>{{ bubbleItems.length }}</dd>
-            </div>
-            <div>
-              <dt>存储</dt>
-              <dd>本地 IndexedDB</dd>
-            </div>
-          </dl>
-        </section>
-        <section>
-          <div class="context-heading">
-            <h2>记忆</h2>
-            <Switch v-model:checked="memoryEnabled" />
-          </div>
-          <p>Open Chat 会参考当前对话中的上下文，让后续回答保持一致。</p>
-        </section>
-      </div>
-      <footer>
-        <button type="button" @click="handleExportLocalHistory"><Download />导出对话</button>
-        <button class="destructive" type="button" @click="handleClearCurrentMessages">
-          <Trash2 />清空消息
-        </button>
-      </footer>
-    </aside>
-    <button
-      v-if="contextOpen"
-      class="context-scrim"
-      type="button"
-      aria-label="关闭对话详情"
-      @click="contextOpen = false"
-    ></button>
 
     <Modal
       v-model:open="shareOpen"
@@ -1038,245 +940,6 @@ const copyShareLink = async () => {
   background: var(--brand-workspace);
 }
 
-.context-panel {
-  position: relative;
-  z-index: 24;
-  display: flex;
-  width: 0;
-  min-width: 0;
-  height: 100dvh;
-  flex-direction: column;
-  overflow: hidden;
-  border-left: 0 solid var(--brand-border);
-  background: var(--brand-sidebar);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(18px);
-  transition:
-    width 220ms ease,
-    min-width 220ms ease,
-    opacity 180ms ease,
-    transform 220ms ease;
-}
-.context-panel.open {
-  width: 312px;
-  min-width: 312px;
-  border-left-width: 1px;
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateX(0);
-}
-.context-panel > header {
-  display: flex;
-  height: 58px;
-  flex: 0 0 58px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 11px 0 16px;
-  border-bottom: 1px solid var(--brand-border);
-}
-.context-panel > header strong {
-  font-size: 12px;
-}
-.context-panel button {
-  cursor: pointer;
-}
-.context-panel > header button {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--brand-muted);
-}
-.context-panel > header button:hover {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.context-panel > header button :deep(svg) {
-  width: var(--icon-md);
-  height: var(--icon-md);
-}
-.context-content {
-  min-height: 0;
-  flex: 1;
-  overflow-y: auto;
-  padding: 5px 16px 24px;
-}
-.context-content > section {
-  padding: 21px 0;
-  border-bottom: 1px solid var(--brand-border);
-}
-.context-content > section:last-child {
-  border-bottom: 0;
-}
-.context-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.context-heading h2 {
-  margin: 0;
-  font-size: 11px;
-}
-.context-heading > button {
-  display: flex;
-  min-height: 28px;
-  align-items: center;
-  gap: 5px;
-  padding: 0 7px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--brand-muted);
-  font-size: 9px;
-}
-.context-heading > button:hover {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.context-heading > button :deep(svg) {
-  width: 12px;
-  height: 12px;
-}
-.context-file {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  align-items: center;
-  gap: 9px;
-  min-height: 54px;
-  margin-bottom: 5px;
-  padding: 5px;
-  border-radius: 5px;
-}
-.context-file:hover {
-  background: var(--brand-surface-subtle);
-}
-.context-file > span:first-child {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border-radius: 5px;
-  background: var(--brand-surface-subtle);
-}
-.context-file > span:first-child :deep(svg) {
-  width: 15px;
-  height: 15px;
-}
-.context-file > span:nth-child(2) {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-.context-file strong {
-  overflow: hidden;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.context-file small {
-  color: var(--brand-muted);
-  font-size: 9px;
-}
-.context-content dl {
-  margin: 0;
-}
-.context-submission {
-  display: grid;
-  gap: 7px;
-  padding: 10px;
-  border: 1px solid var(--brand-border);
-  border-radius: 6px;
-  background: var(--brand-surface-subtle);
-}
-.context-submission + .context-submission {
-  margin-top: 8px;
-}
-.context-submission > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.context-submission > header span {
-  color: var(--brand-foreground);
-  font-size: 12px;
-  font-weight: 650;
-}
-.context-submission time,
-.context-submission small {
-  color: var(--brand-muted);
-  font-size: 10px;
-}
-.context-submission-note {
-  margin: 0;
-  color: var(--brand-muted);
-  font-size: 10px;
-  line-height: 1.6;
-}
-.context-content dl div {
-  display: flex;
-  min-height: 34px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-.context-content dt {
-  color: var(--brand-muted);
-  font-size: 10px;
-}
-.context-content dd {
-  margin: 0;
-  font-size: 10px;
-  text-align: right;
-}
-.context-content section > p {
-  margin: 0;
-  color: var(--brand-muted);
-  font-size: 10px;
-  line-height: 1.7;
-}
-.context-panel > footer {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px;
-  border-top: 1px solid var(--brand-border);
-}
-.context-panel > footer button {
-  display: flex;
-  min-height: 38px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--brand-muted);
-  font-size: 10px;
-  text-align: left;
-}
-.context-panel > footer button:hover {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.context-panel > footer button.destructive:hover {
-  background: var(--brand-danger-subtle);
-  color: var(--brand-danger);
-}
-.context-panel > footer button :deep(svg) {
-  width: 14px;
-  height: 14px;
-}
-.context-scrim {
-  display: none;
-}
 .share-dialog-content > header h2 {
   margin: 0;
   font-size: 16px;
@@ -1321,12 +984,10 @@ const copyShareLink = async () => {
   display: flex;
   flex-direction: column;
 }
-.context-panel :deep(.ant-switch),
 .permission-row :deep(.ant-switch) {
   position: relative;
   min-width: 44px;
 }
-.context-panel :deep(.ant-switch)::after,
 .permission-row :deep(.ant-switch)::after {
   position: absolute;
   inset: -11px 0;
@@ -1390,31 +1051,6 @@ const copyShareLink = async () => {
   border-radius: 8px;
 }
 
-@media (max-width: 1180px) {
-  .context-panel,
-  .context-panel.open {
-    position: fixed;
-    top: 0;
-    right: 0;
-    width: min(312px, calc(100% - 24px));
-    min-width: 0;
-    box-shadow: -18px 0 46px rgba(9, 9, 11, 0.14);
-    transform: translateX(102%);
-  }
-  .context-panel.open {
-    transform: translateX(0);
-  }
-  .context-scrim {
-    position: fixed;
-    z-index: 23;
-    inset: 0;
-    display: block;
-    padding: 0;
-    border: 0;
-    background: rgba(9, 9, 11, 0.24);
-  }
-}
-
 @media (max-width: 767px) {
   .sidebar-backdrop {
     position: absolute;
@@ -1427,18 +1063,6 @@ const copyShareLink = async () => {
 
   .chat-main {
     width: 100%;
-  }
-  .context-panel > header {
-    height: 56px;
-    flex-basis: 56px;
-  }
-  .context-panel > header button {
-    width: 44px;
-    height: 44px;
-  }
-  .context-heading > button,
-  .context-panel > footer button {
-    min-height: 44px;
   }
 }
 

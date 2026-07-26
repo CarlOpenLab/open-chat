@@ -3,8 +3,8 @@ import {
   Archive,
   ChevronDown,
   Cloud,
+  Download,
   PanelLeftOpen,
-  PanelRight,
   Pencil,
   Pin,
   Share2,
@@ -16,14 +16,13 @@ import { computed, h, nextTick, ref, watch } from "vue";
 interface Props {
   title: string;
   sidebarOpen: boolean;
-  contextOpen: boolean;
   syncing?: boolean;
 }
 
 interface Emits {
   (e: "toggleSidebar"): void;
-  (e: "toggleContext"): void;
   (e: "share"): void;
+  (e: "export"): void;
   (e: "rename", title: string): void;
   (e: "pin"): void;
   (e: "archive"): void;
@@ -68,6 +67,7 @@ const titleMenu = computed<MenuProps>(() => ({
     { key: "rename", label: "重命名", icon: h(Pencil) },
     { key: "pin", label: "置顶对话", icon: h(Pin) },
     { key: "archive", label: "归档对话", icon: h(Archive) },
+    { key: "export", label: "导出聊天记录", icon: h(Download) },
     { type: "divider" },
     { key: "delete", label: "删除对话", icon: h(Trash2), danger: true },
   ],
@@ -75,6 +75,7 @@ const titleMenu = computed<MenuProps>(() => ({
     if (key === "rename") beginRename();
     if (key === "pin") emit("pin");
     if (key === "archive") emit("archive");
+    if (key === "export") emit("export");
     if (key === "delete") emit("delete");
   },
 }));
@@ -119,17 +120,6 @@ const titleMenu = computed<MenuProps>(() => ({
       <button class="header-button" type="button" @click="emit('share')">
         <Share2 /><span>分享</span>
       </button>
-      <Tooltip title="对话详情">
-        <button
-          class="header-icon-button"
-          type="button"
-          aria-label="打开对话详情"
-          :aria-pressed="contextOpen"
-          @click="emit('toggleContext')"
-        >
-          <PanelRight />
-        </button>
-      </Tooltip>
     </div>
   </header>
 </template>
