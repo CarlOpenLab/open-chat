@@ -18,6 +18,7 @@
     "@codemirror/lang-json": "catalog:",
     "@codemirror/lang-markdown": "catalog:",
     "@codemirror/lang-vue": "catalog:",
+    "@codemirror/language-data": "catalog:",
     "@codemirror/theme-one-dark": "catalog:",
     "@lucide/vue": "catalog:",
     "antdv-next": "catalog:",

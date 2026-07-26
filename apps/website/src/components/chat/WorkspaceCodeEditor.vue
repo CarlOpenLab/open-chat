@@ -4,6 +4,8 @@ import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { vue } from "@codemirror/lang-vue";
+import { LanguageDescription } from "@codemirror/language";
+import { languages } from "@codemirror/language-data";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -34,8 +36,7 @@ const languageCompartment = new Compartment();
 const themeCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
 
-const getLanguageExtension = (language: string): Extension => {
-  const normalized = language.toLowerCase();
+const getSyncLanguageExtension = (normalized: string): Extension | null => {
   if (["js", "javascript", "jsx"].includes(normalized)) {
     return javascript({ jsx: normalized === "jsx" });
   }
@@ -46,7 +47,21 @@ const getLanguageExtension = (language: string): Extension => {
   if (normalized === "json") return json();
   if (normalized === "css") return css();
   if (["md", "markdown"].includes(normalized)) return markdown();
-  return [];
+  return null;
+};
+
+let languageRequestId = 0;
+
+const applyLanguage = async (language: string) => {
+  const requestId = ++languageRequestId;
+  const normalized = language.toLowerCase();
+  let extension = getSyncLanguageExtension(normalized);
+  if (!extension) {
+    const description = LanguageDescription.matchLanguageName(languages, normalized, true);
+    extension = description ? await description.load() : [];
+  }
+  if (!editor || requestId !== languageRequestId) return;
+  editor.dispatch({ effects: languageCompartment.reconfigure(extension) });
 };
 
 const lightTheme = EditorView.theme({
@@ -80,6 +95,7 @@ const getReadOnlyExtension = (): Extension => [
 
 onMounted(() => {
   if (!host.value) return;
+  const initialLanguage = props.language.toLowerCase();
   editor = new EditorView({
     parent: host.value,
     state: EditorState.create({
@@ -87,7 +103,7 @@ onMounted(() => {
       extensions: [
         basicSetup,
         EditorView.lineWrapping,
-        languageCompartment.of(getLanguageExtension(props.language)),
+        languageCompartment.of(getSyncLanguageExtension(initialLanguage) ?? []),
         themeCompartment.of(getThemeExtension()),
         readOnlyCompartment.of(getReadOnlyExtension()),
         EditorView.updateListener.of((update) => {
@@ -98,6 +114,7 @@ onMounted(() => {
       ],
     }),
   });
+  if (!getSyncLanguageExtension(initialLanguage)) void applyLanguage(props.language);
 });
 
 watch(
@@ -111,7 +128,7 @@ watch(
 watch(
   () => props.language,
   (language) => {
-    editor?.dispatch({ effects: languageCompartment.reconfigure(getLanguageExtension(language)) });
+    void applyLanguage(language);
   },
 );
 
