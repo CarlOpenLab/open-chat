@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check as CheckOutlined, Sparkles as RobotOutlined } from "@lucide/vue";
+import { Check, Sparkles } from "@lucide/vue";
 
 type DemoMessage = {
   id: number;
@@ -15,87 +15,81 @@ defineProps<{
 
 <template>
   <div
-    class="demo-message w-[min(100%,700px)] mx-auto mb-[22px]"
+    class="demo-message mb-[22px] w-[min(100%,780px)]"
     :class="
       message.role === 'user'
         ? 'user flex justify-end'
-        : 'grid grid-cols-[26px_minmax(0,1fr)] gap-2.5'
+        : 'grid grid-cols-[30px_minmax(0,1fr)] items-start gap-[12px]'
     "
   >
-    <div
+    <span
       v-if="message.role === 'assistant'"
-      class="grid place-items-center w-[25px] h-[25px] rounded-[5px] bg-foreground text-background text-[13px]"
+      class="grid h-[30px] w-[30px] place-items-center rounded-md border border-solid border-brand-primary bg-brand-primary text-brand-primary-foreground shadow-brand-xs"
+      title="Open Chat"
     >
-      <RobotOutlined class="w-[var(--icon-sm)] h-[var(--icon-sm)]" />
-    </div>
-    <div>
-      <div v-if="message.role === 'assistant'" class="flex items-center gap-[7px] mt-0.5 mb-2">
-        <strong class="text-[11px]">Open Chat</strong
-        ><span
-          class="py-[1px] px-[5px] border border-border rounded-[3px] text-muted-foreground text-[8px]"
-          >AI 助手</span
-        >
-      </div>
+      <Sparkles class="!h-[15px] !w-[15px]" />
+    </span>
+
+    <div
+      :class="
+        message.role === 'user'
+          ? 'max-w-[min(76%,620px)] rounded-[7px_7px_2px] bg-brand-surface-subtle px-[14px] py-[11px] text-[13px] leading-[1.7] text-brand-foreground'
+          : 'min-w-0 text-[13px] leading-[1.7] text-brand-foreground'
+      "
+    >
       <div
         v-if="message.pending && !message.content"
-        class="typing flex items-center gap-1 h-6"
+        class="typing flex h-6 items-center gap-1"
         aria-label="正在生成"
       >
-        <i class="w-[5px] h-[5px] rounded-full bg-muted-foreground"></i
-        ><i class="w-[5px] h-[5px] rounded-full bg-muted-foreground"></i
-        ><i class="w-[5px] h-[5px] rounded-full bg-muted-foreground"></i>
+        <i class="h-[5px] w-[5px] rounded-full bg-brand-muted"></i>
+        <i class="h-[5px] w-[5px] rounded-full bg-brand-muted"></i>
+        <i class="h-[5px] w-[5px] rounded-full bg-brand-muted"></i>
       </div>
-      <p
-        v-else
-        :class="
-          message.role === 'user'
-            ? 'm-0 max-w-[70%] py-2.5 px-[13px] rounded-[7px] rounded-br-[2px] bg-muted text-[11px] leading-[1.55]'
-            : 'mt-0 mx-0 mb-3 text-[11px] leading-[1.65]'
-        "
-      >
-        {{ message.content }}
-      </p>
+      <p v-else class="m-0 [overflow-wrap:anywhere]">{{ message.content }}</p>
+
       <div
-        v-if="message.id === 2"
-        class="task-list overflow-hidden border border-border rounded-md"
+        v-if="message.id === 2 && !message.pending"
+        class="task-list mt-3 overflow-hidden rounded-md border border-solid border-brand-border"
       >
         <div
-          class="grid grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] min-h-[47px] py-1.5 px-2.5 border-b border-border"
+          class="grid min-h-[47px] grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] border-b border-solid border-brand-border px-[10px] py-[6px]"
         >
-          <CheckOutlined
-            class="w-4 h-4 border border-foreground rounded bg-foreground text-background"
-          /><span class="flex min-w-0 flex-col"
-            ><strong class="truncate text-[10px]">P0 · 数据迁移演练</strong
-            ><small class="truncate text-muted-foreground text-[9px]"
-              >后端 · 周二前完成回滚验证</small
-            ></span
-          ><b class="py-0.5 px-1.5 rounded-[3px] bg-danger-subtle text-danger text-[8px] font-500"
+          <Check
+            class="!h-4 !w-4 rounded border border-solid border-brand-primary bg-brand-primary text-brand-primary-foreground"
+          />
+          <span class="flex min-w-0 flex-col">
+            <strong class="truncate text-[12px]">P0 · 数据迁移演练</strong>
+            <small class="truncate text-[10px] text-brand-muted">后端 · 周二前完成回滚验证</small>
+          </span>
+          <b
+            class="rounded-[3px] bg-danger-subtle px-[6px] py-[2px] text-[9px] font-500 text-danger"
             >高风险</b
           >
         </div>
         <div
-          class="grid grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] min-h-[47px] py-1.5 px-2.5 border-b border-border"
+          class="grid min-h-[47px] grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] border-b border-solid border-brand-border px-[10px] py-[6px]"
         >
-          <i class="grid place-items-center w-4 h-4 border border-input rounded"></i
-          ><span class="flex min-w-0 flex-col"
-            ><strong class="truncate text-[10px]">P0 · 监控与告警校验</strong
-            ><small class="truncate text-muted-foreground text-[9px]"
-              >SRE · 覆盖核心转化链路</small
-            ></span
-          ><b class="py-0.5 px-1.5 rounded-[3px] bg-danger-subtle text-danger text-[8px] font-500"
+          <i class="grid h-4 w-4 place-items-center rounded border border-solid border-input"></i>
+          <span class="flex min-w-0 flex-col">
+            <strong class="truncate text-[12px]">P0 · 监控与告警校验</strong>
+            <small class="truncate text-[10px] text-brand-muted">SRE · 覆盖核心转化链路</small>
+          </span>
+          <b
+            class="rounded-[3px] bg-danger-subtle px-[6px] py-[2px] text-[9px] font-500 text-danger"
             >高风险</b
           >
         </div>
         <div
-          class="grid grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] min-h-[47px] py-1.5 px-2.5"
+          class="grid min-h-[47px] grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] px-[10px] py-[6px]"
         >
-          <i class="grid place-items-center w-4 h-4 border border-input rounded"></i
-          ><span class="flex min-w-0 flex-col"
-            ><strong class="truncate text-[10px]">P1 · 发布说明确认</strong
-            ><small class="truncate text-muted-foreground text-[9px]"
-              >产品 · 周四完成最终审核</small
-            ></span
-          ><b class="py-0.5 px-1.5 rounded-[3px] bg-muted text-muted-foreground text-[8px] font-500"
+          <i class="grid h-4 w-4 place-items-center rounded border border-solid border-input"></i>
+          <span class="flex min-w-0 flex-col">
+            <strong class="truncate text-[12px]">P1 · 发布说明确认</strong>
+            <small class="truncate text-[10px] text-brand-muted">产品 · 周四完成最终审核</small>
+          </span>
+          <b
+            class="rounded-[3px] bg-brand-surface-subtle px-[6px] py-[2px] text-[9px] font-500 text-brand-muted"
             >常规</b
           >
         </div>
@@ -105,7 +99,6 @@ defineProps<{
 </template>
 
 <style scoped>
-/* 打字机动画，保留在 style 块 */
 .typing i {
   animation: demo-typing 1s ease-in-out infinite;
 }
@@ -129,9 +122,8 @@ defineProps<{
   }
 }
 
-/* 非常规断点（760px / 430px），保留在 style 块 */
 @media (max-width: 760px) {
-  .demo-message.user p {
+  .demo-message.user > div {
     max-width: 88%;
   }
 }
