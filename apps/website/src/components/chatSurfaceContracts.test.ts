@@ -22,6 +22,14 @@ describe("Chat product surface contracts", () => {
     expect(landingSidebar).toContain("lt-md:!min-w-[44px]");
   });
 
+  test("removes the closed sidebar from keyboard and screen-reader navigation", () => {
+    expect(landing).toContain(':open="sidebarOpen"');
+    expect(landingSidebar).toContain("open: boolean");
+    expect(landingSidebar).toContain(':inert="!open"');
+    expect(landingSidebar).toContain(':aria-hidden="!open"');
+    expect(landingSidebar).toContain(':aria-expanded="open"');
+  });
+
   test("compacts starter prompts without shrinking mobile touch targets", () => {
     expect(landing).toContain("padding-top: 10px;");
     expect(landing).toContain("min-height: 52px;");

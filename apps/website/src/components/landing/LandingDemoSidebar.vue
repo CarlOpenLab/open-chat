@@ -14,6 +14,7 @@ import { Button, Tooltip } from "antdv-next";
 type Conversation = { key: string; label: string; updated: string };
 
 defineProps<{
+  open: boolean;
   conversations: Conversation[];
   activeKey: string;
 }>();
@@ -31,6 +32,8 @@ const rowBaseClass =
 <template>
   <aside
     id="landing-demo-sidebar"
+    :inert="!open"
+    :aria-hidden="!open"
     class="demo-sidebar flex min-w-0 flex-col overflow-hidden border-r border-solid border-brand-border bg-brand-sidebar pt-[10px] px-[10px] pb-[10px]"
   >
     <header class="flex h-[42px] items-center justify-between gap-[10px] pl-[5px] pr-[2px]">
@@ -53,7 +56,7 @@ const rowBaseClass =
           class="!h-[36px] !w-[36px] !min-w-[36px] !text-brand-muted hover:!bg-brand-surface-subtle hover:!text-brand-foreground lt-md:!h-[44px] lt-md:!w-[44px] lt-md:!min-w-[44px]"
           aria-label="收起侧栏"
           aria-controls="landing-demo-sidebar"
-          :aria-expanded="true"
+          :aria-expanded="open"
           @click="$emit('close')"
         >
           <PanelLeftClose class="!h-[15px] !w-[15px]" />

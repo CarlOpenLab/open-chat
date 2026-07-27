@@ -205,6 +205,7 @@ onBeforeUnmount(() => {
         @click="sidebarOpen = false"
       ></button>
       <LandingDemoSidebar
+        :open="sidebarOpen"
         :conversations="conversations"
         :active-key="activeKey"
         @select="selectConversation"
