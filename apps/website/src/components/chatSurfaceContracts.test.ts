@@ -22,6 +22,12 @@ describe("Chat product surface contracts", () => {
     expect(landingSidebar).toContain("lt-md:!min-w-[44px]");
   });
 
+  test("compacts starter prompts without shrinking mobile touch targets", () => {
+    expect(landing).toContain("padding-top: 10px;");
+    expect(landing).toContain("min-height: 52px;");
+    expect(landing).toContain("padding-block: 8px;");
+  });
+
   test("uses the product workspace instead of faux browser chrome", () => {
     expect(landing).not.toMatch(/window-bar|window-address|window-controls|LockKeyhole|\bLive\b/);
     expect(landing).toContain('data-screen-label="Open Chat 产品预览"');

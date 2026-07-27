@@ -506,6 +506,11 @@ onBeforeUnmount(() => {
   }
   .starter-prompts {
     grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .starter-prompts button {
+    min-height: 52px;
+    padding-block: 8px;
   }
   .suggestions {
     width: 100%;
@@ -514,6 +519,7 @@ onBeforeUnmount(() => {
     min-height: 44px;
   }
   .demo-composer {
+    padding-top: 10px;
     padding-inline: 12px;
   }
 }
