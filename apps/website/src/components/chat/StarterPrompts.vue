@@ -20,8 +20,8 @@ const defaultPromptItems: AssistantStarterPrompt[] = [
   {
     id: "ticket-branch",
     label: "生成工单分支",
-    description: "填写工单 ID 和项目名称，生成 Git 分支",
-    prompt: "请启动工单分支生成流程，先用表单收集工单 ID 和项目名称。",
+    description: "填写工单 ID（或链接）和需求标题，生成 Git 分支",
+    prompt: "请启动工单分支生成流程，先用表单收集工单 ID（或链接）和需求标题。",
   },
   {
     id: "placeholder-idea",

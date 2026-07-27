@@ -32,3 +32,13 @@ test("creates an editable private fork while preserving assistant behavior", () 
     "自定义产品策略 prompt",
   );
 });
+
+test("includes the fixed opening form in ticket branch snapshots", () => {
+  const assistant = getAssistantById("official-ticket-branch");
+  expect(assistant).toBeDefined();
+  if (!assistant) return;
+
+  const snapshot = createAssistantConversationSnapshot(assistant);
+  expect(snapshot.initialAssistantMessage).toContain('"surfaceId":"ticket-branch-form-1"');
+  expect(snapshot.renderedSystemPrompt).not.toContain("<a2ui>");
+});

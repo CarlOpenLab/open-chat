@@ -1,11 +1,6 @@
 import type { XModelMessage } from "@antdv-next/x-sdk";
 import { expect, test } from "vite-plus/test";
-import {
-  A2UI_SYSTEM_PROMPT,
-  OpenChatProvider,
-  WEB_SEARCHING_MARKER,
-  createTicketBranchSystemPrompt,
-} from "./OpenChatProvider";
+import { OpenChatProvider, WEB_SEARCHING_MARKER } from "./OpenChatProvider";
 
 const responseHeaders = new Headers({ "content-type": "text/event-stream" });
 const provider = Object.create(OpenChatProvider.prototype) as OpenChatProvider;
@@ -72,19 +67,22 @@ test("emits web search sources and displays the search marker", () => {
   ]);
 });
 
-test("requires conversation-unique A2UI surface IDs", () => {
-  expect(A2UI_SYSTEM_PROMPT).toContain(
-    "Every createSurface surfaceId must be unique across the entire conversation",
-  );
-  expect(A2UI_SYSTEM_PROMPT).toContain("next unused positive integer suffix");
-});
+test("excludes host-only opening messages from model requests", () => {
+  provider.injectGetMessages(() => [
+    {
+      content: "<a2ui>host-rendered form</a2ui>",
+      openChatLocalOnly: true,
+      role: "assistant",
+    },
+    { content: "[表单提交] generate_ticket_branch", role: "user" },
+  ]);
 
-test("numbers ticket branch form surfaces and documents replacement IDs", () => {
-  const prompt = createTicketBranchSystemPrompt(new Date(2025, 11, 4));
+  const params = provider.transformParams({ systemPrompt: "ticket branch rules" }, {
+    params: {},
+  } as Parameters<OpenChatProvider["transformParams"]>[1]);
 
-  expect(prompt.match(/"surfaceId":"ticket-branch-form-1"/g)).toHaveLength(4);
-  expect(prompt).toContain('"source":"ticket-branch-form-1"');
-  expect(prompt).not.toContain('"surfaceId":"ticket-branch-form"');
-  expect(prompt).toContain("ticket-branch-form-N");
-  expect(prompt).toContain("下一个尚未使用的正整数后缀");
+  expect(params.messages).toEqual([
+    { content: "ticket branch rules", role: "system" },
+    { content: "[表单提交] generate_ticket_branch", role: "user" },
+  ]);
 });

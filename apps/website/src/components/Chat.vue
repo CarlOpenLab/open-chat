@@ -19,11 +19,8 @@ import {
   isA2UISubmissionContextMessage,
   type A2UIActionPayload,
 } from "../utils/a2ui";
-import {
-  FILE_WORKSPACE_SYSTEM_PROMPT,
-  collectFileWorkspaceState,
-  type EditableWorkspaceFile,
-} from "../utils/fileWorkspace";
+import { collectFileWorkspaceState, type EditableWorkspaceFile } from "../utils/fileWorkspace";
+import { FILE_WORKSPACE_SYSTEM_PROMPT } from "../prompts/fileWorkspace";
 import {
   createAssistantConversationSnapshot,
   getAssistantById,
@@ -92,16 +89,35 @@ if (initialStarterPrompt) content.value = initialStarterPrompt.prompt;
 const createNewConversation = (
   systemPrompt: string = "",
   assistant: AssistantConversationSnapshot | null = null,
-): OpenChatConversation => ({
-  key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  label: "新对话",
-  group: "今天",
-  messages: [],
-  a2uiSubmissions: [],
-  workspaceDrafts: [],
-  systemPrompt,
-  ...(assistant ? { assistant } : {}),
-});
+): OpenChatConversation => {
+  const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const initialContent = assistant?.initialAssistantMessage?.trim();
+  const initialMessages: DefaultMessageInfo<XModelMessage>[] = initialContent
+    ? [
+        {
+          id: `initial-assistant-${key}`,
+          status: "local",
+          message: {
+            content: initialContent,
+            openChatLocalOnly: true,
+            role: "assistant",
+          },
+          extraInfo: { kind: "initial-assistant-message" },
+        },
+      ]
+    : [];
+
+  return {
+    key,
+    label: initialMessages.length > 0 && assistant ? assistant.name : "新对话",
+    group: "今天",
+    messages: initialMessages,
+    a2uiSubmissions: [],
+    workspaceDrafts: [],
+    systemPrompt,
+    ...(assistant ? { assistant } : {}),
+  };
+};
 
 const conversationList = ref<OpenChatConversation[]>([]);
 
@@ -267,7 +283,7 @@ const handleAssistantUse = (assistant: AssistantConversationSnapshot, starterPro
   }
   draftAssistant.value = assistant;
   content.value = starterPrompt ?? "";
-  showWelcome.value = true;
+  showWelcome.value = !materializeInitialAssistantConversation(assistant);
   fileModeEnabled.value = assistant.capabilities.includes("files");
   workspaceOpen.value = fileModeEnabled.value;
   searchEnabled.value = assistant.capabilities.includes("web-search") && searchAvailable.value;
@@ -367,6 +383,20 @@ const { applyPersistedState, schedulePersistState, handleExportLocalHistory } = 
   reconcileCurrentModel,
 });
 
+const materializeInitialAssistantConversation = (
+  assistant: AssistantConversationSnapshot,
+): boolean => {
+  if (!assistant.initialAssistantMessage?.trim()) return false;
+
+  const conversation = createNewConversation(assistant.renderedSystemPrompt, assistant);
+  conversationList.value.unshift(conversation);
+  currentConversationKey.value = String(conversation.key);
+  setMessages(conversation.messages);
+  showWelcome.value = false;
+  schedulePersistState();
+  return true;
+};
+
 /** Attach sources received mid-stream to the assistant message that produced them. */
 const attachPendingSearchSources = () => {
   const sources = pendingSearchSources.value;
@@ -454,6 +484,9 @@ onMounted(async () => {
   }
 
   isHydrating.value = false;
+  if (draftAssistant.value) {
+    materializeInitialAssistantConversation(draftAssistant.value);
+  }
 });
 
 onBeforeUnmount(() => {
@@ -486,7 +519,11 @@ const handlePromptClick = (info: { data: { key?: string; description?: string } 
   showWelcome.value = false;
   if (info.data.key === "ticket-branch" && !activeAssistant.value) {
     const definition = getAssistantById("official-ticket-branch");
-    if (definition) draftAssistant.value = createAssistantConversationSnapshot(definition);
+    if (definition) {
+      const assistant = createAssistantConversationSnapshot(definition);
+      draftAssistant.value = assistant;
+      if (materializeInitialAssistantConversation(assistant)) return;
+    }
   }
   handleSubmit(prompt);
 };
@@ -850,6 +887,7 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
     <DeleteConversationModal v-model:open="deleteOpen" @confirm="handleDeleteConversation" />
     <AssistantCenterModal
       :open="assistantCenterOpen"
+      :dark="dark"
       :initial-view="assistantCenterView"
       @close="assistantCenterOpen = false"
       @use="handleAssistantUse"

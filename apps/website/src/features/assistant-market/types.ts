@@ -25,6 +25,7 @@ export interface AssistantDefinition {
   capabilities: AssistantCapability[];
   starterPrompts: AssistantStarterPrompt[];
   systemPrompt: string | (() => string);
+  initialAssistantMessage?: string;
   featured?: boolean;
   rating: number;
   installCount: number;
@@ -42,6 +43,7 @@ export interface AssistantConversationSnapshot {
   capabilities: AssistantCapability[];
   starterPrompts: AssistantStarterPrompt[];
   renderedSystemPrompt: string;
+  initialAssistantMessage?: string;
 }
 
 const isStringArray = (value: unknown): value is string[] =>
@@ -87,6 +89,8 @@ export function isAssistantConversationSnapshot(
     ) &&
     Array.isArray(snapshot.starterPrompts) &&
     snapshot.starterPrompts.every(isStarterPrompt) &&
-    typeof snapshot.renderedSystemPrompt === "string"
+    typeof snapshot.renderedSystemPrompt === "string" &&
+    (snapshot.initialAssistantMessage === undefined ||
+      typeof snapshot.initialAssistantMessage === "string")
   );
 }

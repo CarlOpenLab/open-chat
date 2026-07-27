@@ -38,11 +38,13 @@ import type {
   AssistantDefinition,
 } from "../../features/assistant-market/types";
 import { useAssistantInstallations } from "../../features/assistant-market/useAssistantInstallations";
+import AssistantOpeningMessageEditor from "./AssistantOpeningMessageEditor.vue";
 
 type CenterView = "market" | "installed" | "detail" | "create";
 
 interface Props {
   open: boolean;
+  dark: boolean;
   initialView?: "market" | "installed";
 }
 
@@ -71,6 +73,7 @@ const customAssistants = ref<AssistantDefinition[]>([]);
 const customHydrating = ref(true);
 const panel = ref<HTMLElement>();
 const systemPromptDraft = ref("");
+const initialAssistantMessageDraft = ref("");
 let returnFocus: HTMLElement | null = null;
 
 const form = ref({
@@ -78,6 +81,7 @@ const form = ref({
   tagline: "",
   category: "效率" as AssistantCategory,
   systemPrompt: "",
+  initialAssistantMessage: "",
   starterPrompt: "",
   capabilities: [] as AssistantCapability[],
 });
@@ -117,6 +121,15 @@ const selectedRenderedSystemPrompt = computed(() =>
 const systemPromptDirty = computed(
   () => systemPromptDraft.value.trim() !== selectedRenderedSystemPrompt.value,
 );
+const selectedInitialAssistantMessage = computed(
+  () => selectedAssistant.value?.initialAssistantMessage?.trim() ?? "",
+);
+const initialAssistantMessageDirty = computed(
+  () => initialAssistantMessageDraft.value.trim() !== selectedInitialAssistantMessage.value,
+);
+const assistantConfigDirty = computed(
+  () => systemPromptDirty.value || initialAssistantMessageDirty.value,
+);
 const isHydrating = computed(() => installationsHydrating.value || customHydrating.value);
 const capabilityLabels: Record<AssistantCapability, string> = {
   a2ui: "交互界面",
@@ -146,6 +159,7 @@ const resetForm = () => {
     tagline: "",
     category: "效率",
     systemPrompt: "",
+    initialAssistantMessage: "",
     starterPrompt: "",
     capabilities: [],
   };
@@ -160,6 +174,7 @@ const openView = (nextView: "market" | "installed") => {
 const openDetail = (assistant: AssistantDefinition) => {
   selectedAssistant.value = assistant;
   systemPromptDraft.value = createAssistantConversationSnapshot(assistant).renderedSystemPrompt;
+  initialAssistantMessageDraft.value = assistant.initialAssistantMessage ?? "";
   view.value = "detail";
 };
 
@@ -179,6 +194,7 @@ const savePrivateSystemPrompt = async () => {
   const updatedAssistant: AssistantDefinition = {
     ...assistant,
     systemPrompt,
+    initialAssistantMessage: initialAssistantMessageDraft.value.trim() || undefined,
     versionId: `${assistant.id}-${Date.now()}`,
     version: nextPatchVersion(assistant.version),
     updatedAt: new Date().toISOString().slice(0, 10),
@@ -189,7 +205,8 @@ const savePrivateSystemPrompt = async () => {
   await saveCustomAssistants(customAssistants.value);
   selectedAssistant.value = updatedAssistant;
   systemPromptDraft.value = systemPrompt;
-  message.success("system prompt 已保存为新版本");
+  initialAssistantMessageDraft.value = updatedAssistant.initialAssistantMessage ?? "";
+  message.success("助手配置已保存为新版本");
 };
 
 const forkOfficialAssistant = async () => {
@@ -207,6 +224,7 @@ const forkOfficialAssistant = async () => {
     description: assistant.description,
     category: assistant.category,
     systemPrompt,
+    initialAssistantMessage: initialAssistantMessageDraft.value,
     capabilities: assistant.capabilities,
     starterPrompts: assistant.starterPrompts,
     icon: assistant.icon,
@@ -223,6 +241,7 @@ const forkOfficialAssistant = async () => {
 
 const resetSystemPromptDraft = () => {
   systemPromptDraft.value = selectedRenderedSystemPrompt.value;
+  initialAssistantMessageDraft.value = selectedInitialAssistantMessage.value;
 };
 
 const useAssistant = async (assistant: AssistantDefinition, starterPrompt?: string) => {
@@ -262,6 +281,7 @@ const saveCustom = async () => {
     description: form.value.tagline,
     category: form.value.category,
     systemPrompt,
+    initialAssistantMessage: form.value.initialAssistantMessage,
     capabilities: form.value.capabilities,
     starterPrompts: starterPrompt
       ? [
@@ -521,8 +541,12 @@ onBeforeUnmount(() => {
                       placeholder="你是谁？你应该如何工作？请写下稳定的角色、目标和边界。"
                     />
                   </label>
+                  <AssistantOpeningMessageEditor
+                    v-model="form.initialAssistantMessage"
+                    :dark="dark"
+                  />
                   <label class="assistant-form-field"
-                    ><span>开场问题（可选）</span
+                    ><span>快捷开始问题（可选）</span
                     ><textarea
                       v-model="form.starterPrompt"
                       rows="3"
@@ -635,84 +659,6 @@ onBeforeUnmount(() => {
                       {{ selectedAssistant.description }}
                     </p>
                   </div>
-                  <section
-                    class="assistant-prompt-panel mt-7"
-                    aria-labelledby="system-prompt-title"
-                  >
-                    <div class="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <h4 id="system-prompt-title" class="m-0 text-[15px] font-700">
-                          System prompt
-                        </h4>
-                        <p class="mt-1 mb-0 text-[10px] text-brand-muted">
-                          {{
-                            selectedIsCustom
-                              ? "修改后会保存为这个私人助手的新版本。"
-                              : "编辑官方版本时，将创建一个独立的私人副本。"
-                          }}
-                        </p>
-                      </div>
-                      <span
-                        v-if="systemPromptDirty"
-                        class="rounded-full bg-brand-surface-subtle px-2 py-1 text-[9px] font-650 text-brand-muted-strong"
-                        >未保存</span
-                      >
-                    </div>
-                    <textarea
-                      v-model="systemPromptDraft"
-                      class="assistant-prompt-editor mt-3"
-                      rows="9"
-                      spellcheck="false"
-                      aria-label="编辑 system prompt"
-                    />
-                    <div class="mt-3 flex flex-wrap justify-end gap-2">
-                      <Button
-                        size="small"
-                        class="assistant-prompt-action"
-                        :disabled="!systemPromptDirty"
-                        @click="resetSystemPromptDraft"
-                      >
-                        重置
-                      </Button>
-                      <Button
-                        v-if="selectedIsCustom"
-                        type="primary"
-                        size="small"
-                        class="assistant-prompt-action"
-                        :disabled="!systemPromptDirty || !systemPromptDraft.trim()"
-                        @click="savePrivateSystemPrompt"
-                      >
-                        <Save class="!h-[13px] !w-[13px]" />保存修改
-                      </Button>
-                      <Button
-                        v-else
-                        type="primary"
-                        size="small"
-                        class="assistant-prompt-action"
-                        :disabled="!systemPromptDraft.trim()"
-                        @click="forkOfficialAssistant"
-                      >
-                        <GitFork class="!h-[13px] !w-[13px]" />Fork 为私人助手
-                      </Button>
-                    </div>
-                  </section>
-                  <div class="mt-7">
-                    <h4 class="m-0 text-[15px] font-700">试试这样开始</h4>
-                    <div class="mt-3 grid gap-2 sm:grid-cols-3">
-                      <Button
-                        v-for="prompt in selectedAssistant.starterPrompts"
-                        :key="prompt.id"
-                        block
-                        class="assistant-starter-button min-h-[88px] rounded-[8px] border border-solid border-brand-border bg-brand-surface p-3 text-left hover:border-brand-border-strong hover:bg-brand-surface-muted"
-                        @click="useAssistant(selectedAssistant, prompt.prompt)"
-                      >
-                        <strong class="block text-[11px] font-650">{{ prompt.label }}</strong
-                        ><span class="mt-1.5 block text-[10px] leading-[1.55] text-brand-muted">{{
-                          prompt.description
-                        }}</span>
-                      </Button>
-                    </div>
-                  </div>
                 </div>
                 <aside
                   class="h-fit rounded-[10px] border border-solid border-brand-border bg-brand-surface p-4"
@@ -758,6 +704,72 @@ onBeforeUnmount(() => {
                     </div>
                   </dl>
                 </aside>
+                <section
+                  class="assistant-prompt-panel col-span-2 lt-lg:col-span-1"
+                  aria-labelledby="system-prompt-title"
+                >
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 id="system-prompt-title" class="m-0 text-[15px] font-700">
+                        System prompt
+                      </h4>
+                      <p class="mt-1 mb-0 text-[10px] text-brand-muted">
+                        {{
+                          selectedIsCustom
+                            ? "修改后会保存为这个私人助手的新版本。"
+                            : "编辑官方版本时，将创建一个独立的私人副本。"
+                        }}
+                      </p>
+                    </div>
+                    <span
+                      v-if="assistantConfigDirty"
+                      class="rounded-full bg-brand-surface-subtle px-2 py-1 text-[9px] font-650 text-brand-muted-strong"
+                      >未保存</span
+                    >
+                  </div>
+                  <textarea
+                    v-model="systemPromptDraft"
+                    class="assistant-prompt-editor mt-3"
+                    rows="9"
+                    spellcheck="false"
+                    aria-label="编辑 system prompt"
+                  />
+                  <AssistantOpeningMessageEditor
+                    v-model="initialAssistantMessageDraft"
+                    :dark="dark"
+                    class="mt-5"
+                  />
+                  <div class="mt-3 flex flex-wrap justify-end gap-2">
+                    <Button
+                      size="small"
+                      class="assistant-prompt-action"
+                      :disabled="!assistantConfigDirty"
+                      @click="resetSystemPromptDraft"
+                    >
+                      重置
+                    </Button>
+                    <Button
+                      v-if="selectedIsCustom"
+                      type="primary"
+                      size="small"
+                      class="assistant-prompt-action"
+                      :disabled="!assistantConfigDirty || !systemPromptDraft.trim()"
+                      @click="savePrivateSystemPrompt"
+                    >
+                      <Save class="!h-[13px] !w-[13px]" />保存修改
+                    </Button>
+                    <Button
+                      v-else
+                      type="primary"
+                      size="small"
+                      class="assistant-prompt-action"
+                      :disabled="!assistantConfigDirty || !systemPromptDraft.trim()"
+                      @click="forkOfficialAssistant"
+                    >
+                      <GitFork class="!h-[13px] !w-[13px]" />Fork 为私人助手
+                    </Button>
+                  </div>
+                </section>
               </div>
             </template>
 
@@ -947,23 +959,6 @@ onBeforeUnmount(() => {
   border-radius: 7px;
   font-size: 11px;
   font-weight: 680;
-}
-.assistant-center :deep(.assistant-starter-button) {
-  display: flex;
-  height: auto;
-  min-width: 0;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  gap: 0;
-  white-space: normal;
-}
-.assistant-center :deep(.assistant-starter-button > strong),
-.assistant-center :deep(.assistant-starter-button > span) {
-  width: 100%;
-  min-width: 0;
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
 .assistant-prompt-panel {
   border-top: 1px solid var(--brand-border);

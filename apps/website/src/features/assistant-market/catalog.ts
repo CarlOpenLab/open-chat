@@ -1,4 +1,12 @@
-import { createTicketBranchSystemPrompt } from "../../services/OpenChatProvider";
+import {
+  CODE_REVIEWER_SYSTEM_PROMPT,
+  MEETING_COPILOT_SYSTEM_PROMPT,
+  PRODUCT_STRATEGIST_SYSTEM_PROMPT,
+  RESEARCH_ANALYST_SYSTEM_PROMPT,
+  WRITING_EDITOR_SYSTEM_PROMPT,
+} from "./prompts/officialAssistants";
+import { createTicketBranchSystemPrompt } from "./prompts/ticketBranch";
+import { TICKET_BRANCH_INITIAL_ASSISTANT_MESSAGE } from "./surfaces/ticketBranchForm";
 import type {
   AssistantCategory,
   AssistantConversationSnapshot,
@@ -21,21 +29,21 @@ export const OFFICIAL_ASSISTANTS: AssistantDefinition[] = [
     name: "工单分支助手",
     tagline: "把工单信息转换成一致、可追踪的 Git 分支名称。",
     description:
-      "通过交互式表单收集工单 ID 与项目名称，生成符合团队约定的分支建议，并保留清晰的命名解释。适合研发团队日常开工和分支治理。",
+      "通过交互式表单收集工单 ID（或链接）与需求标题，生成符合团队约定的分支建议，并保留清晰的命名解释。适合研发团队日常开工和分支治理。",
     category: "开发",
     tags: ["Git", "工单", "A2UI"],
     author: "Open Chat",
     icon: "branch",
-    versionId: "ticket-branch-v1",
-    version: "1.0.0",
+    versionId: "ticket-branch-v3",
+    version: "1.2.0",
     updatedAt: "2026-07-27",
     capabilities: ["a2ui"],
     starterPrompts: [
       {
         id: "start-ticket-flow",
         label: "生成工单分支",
-        description: "填写工单 ID 和项目名称",
-        prompt: "请启动工单分支生成流程，先用表单收集工单 ID 和项目名称。",
+        description: "填写工单 ID（或链接）和需求标题",
+        prompt: "",
       },
       {
         id: "branch-rules",
@@ -51,6 +59,7 @@ export const OFFICIAL_ASSISTANTS: AssistantDefinition[] = [
       },
     ],
     systemPrompt: () => createTicketBranchSystemPrompt(),
+    initialAssistantMessage: TICKET_BRANCH_INITIAL_ASSISTANT_MESSAGE,
     featured: true,
     rating: 4.9,
     installCount: 1280,
@@ -90,15 +99,7 @@ export const OFFICIAL_ASSISTANTS: AssistantDefinition[] = [
         prompt: "请分析这段实现最可能遗漏的测试场景，并按风险排序。",
       },
     ],
-    systemPrompt: `你是一名严谨、务实的高级代码审查专家。你的首要任务是发现会影响正确性、可靠性、安全、性能或可维护性的具体问题。
-
-审查规则：
-- 先理解改动意图和上下文，再判断问题，不要仅凭代码风格下结论。
-- 只报告作者可以采取行动的问题，并说明触发条件与实际影响。
-- 按严重程度排序；高严重度问题必须给出最小复现路径或明确推理。
-- 检查回归风险、边界条件、并发、错误处理、权限和测试缺口。
-- 不把个人偏好包装成缺陷；如果没有实质问题，明确说明。
-- 输出简洁，建议尽量具体到修改位置和修复方向。`,
+    systemPrompt: CODE_REVIEWER_SYSTEM_PROMPT,
     featured: true,
     rating: 4.8,
     installCount: 2640,
@@ -138,15 +139,7 @@ export const OFFICIAL_ASSISTANTS: AssistantDefinition[] = [
         prompt: "请审视我的产品方案，找出最脆弱的三个假设以及验证方式。",
       },
     ],
-    systemPrompt: `你是一名注重证据和取舍的资深产品策略顾问。你帮助用户把模糊想法转化为清晰、可验证、可执行的产品决策。
-
-工作原则：
-- 先识别目标用户、真实问题和期望结果，不急于罗列功能。
-- 明确区分事实、假设和建议。
-- 主动指出范围、非目标、依赖、风险与关键权衡。
-- 优先提出最小可验证方案，并给出衡量成功的具体信号。
-- 信息不足且会显著改变结论时，先提出少量高价值问题。
-- 使用清晰标题和紧凑结构，避免空泛的产品术语。`,
+    systemPrompt: PRODUCT_STRATEGIST_SYSTEM_PROMPT,
     featured: true,
     rating: 4.9,
     installCount: 3180,
@@ -186,15 +179,7 @@ export const OFFICIAL_ASSISTANTS: AssistantDefinition[] = [
         prompt: "请先指出这段文字最影响理解的三个问题，然后提供修改版本。",
       },
     ],
-    systemPrompt: `你是一名克制、敏锐的专业写作编辑。你的目标不是把所有文字改成同一种风格，而是在保留作者原意与声音的前提下，提高准确性、清晰度、结构和说服力。
-
-编辑规则：
-- 先判断文本的受众、目的和语气；缺少关键信息时简短询问。
-- 删除套话、重复和不必要的限定词，优先使用具体、自然的表达。
-- 不擅自添加事实、承诺或数据。
-- 除非用户要求，避免过度营销、夸张形容和机械分点。
-- 提供修改稿时，必要情况下补充少量关键修改说明。
-- 尊重用户指定的语言、格式、长度和品牌语气。`,
+    systemPrompt: WRITING_EDITOR_SYSTEM_PROMPT,
     rating: 4.7,
     installCount: 1940,
   },
@@ -233,15 +218,7 @@ export const OFFICIAL_ASSISTANTS: AssistantDefinition[] = [
         prompt: "请核查我接下来提供的说法，说明支持证据、反证和仍不确定的部分。",
       },
     ],
-    systemPrompt: `你是一名证据优先的研究分析师。你负责检索、核对和综合信息，而不是简单堆砌搜索结果。
-
-研究规则：
-- 先明确问题范围、时间边界和评价维度。
-- 优先使用一手来源、官方文档和可信出版物，并检查信息日期。
-- 将已证实事实、合理推断、观点和未知明确区分。
-- 对关键结论进行交叉验证；来源冲突时解释差异，不强行给唯一答案。
-- 引用必须真正支持对应陈述，不虚构来源。
-- 输出先给结论摘要，再给证据、限制和后续可验证问题。`,
+    systemPrompt: RESEARCH_ANALYST_SYSTEM_PROMPT,
     rating: 4.8,
     installCount: 2230,
   },
@@ -280,14 +257,7 @@ export const OFFICIAL_ASSISTANTS: AssistantDefinition[] = [
         prompt: "请把会议内容整理成一封简洁的会后同步，突出决定和下一步。",
       },
     ],
-    systemPrompt: `你是一名以执行为导向的会议行动助手。你把讨论内容转化为清晰、可靠、便于跟进的会议产物。
-
-整理规则：
-- 区分已做决定、讨论中的选项、行动项、风险和待确认问题。
-- 行动项尽量包含负责人、截止时间和完成标准；原文没有的信息标记为“待确认”，不要猜测。
-- 保留重要分歧和决定依据，不把讨论压缩成失真的结论。
-- 默认输出简短摘要、决定、行动项和开放问题。
-- 如果用户需要对外发送的版本，使用专业、直接、无责备的语气。`,
+    systemPrompt: MEETING_COPILOT_SYSTEM_PROMPT,
     rating: 4.6,
     installCount: 860,
   },
@@ -301,6 +271,7 @@ export const createCustomAssistantDefinition = (input: {
   systemPrompt: string;
   capabilities: AssistantDefinition["capabilities"];
   starterPrompts?: AssistantDefinition["starterPrompts"];
+  initialAssistantMessage?: string;
   icon?: AssistantDefinition["icon"];
   tags?: string[];
   forkedFromAssistantId?: string;
@@ -332,6 +303,9 @@ export const createCustomAssistantDefinition = (input: {
           },
         ],
     systemPrompt: input.systemPrompt.trim(),
+    ...(input.initialAssistantMessage?.trim()
+      ? { initialAssistantMessage: input.initialAssistantMessage.trim() }
+      : {}),
     source: "custom",
     ...(input.forkedFromAssistantId ? { forkedFromAssistantId: input.forkedFromAssistantId } : {}),
     rating: 0,
@@ -363,5 +337,8 @@ export function createAssistantConversationSnapshot(
       typeof assistant.systemPrompt === "function"
         ? assistant.systemPrompt().trim()
         : assistant.systemPrompt.trim(),
+    ...(assistant.initialAssistantMessage?.trim()
+      ? { initialAssistantMessage: assistant.initialAssistantMessage.trim() }
+      : {}),
   };
 }

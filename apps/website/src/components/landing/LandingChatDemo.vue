@@ -62,7 +62,7 @@ const starterPrompts = [
   {
     key: "ticket-branch",
     label: "生成工单分支",
-    description: "填写工单 ID 和项目名称，生成 Git 分支",
+    description: "填写工单 ID（或链接）和需求标题，生成 Git 分支",
     prompt: "帮我生成一个工单分支命名方案。",
   },
   {
