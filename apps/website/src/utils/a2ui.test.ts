@@ -1,6 +1,8 @@
 import { expect, test } from "vite-plus/test";
 import {
+  appendA2UISurfaceIdContext,
   collectA2UIConversationState,
+  collectCreatedA2UISurfaceIds,
   createA2UIDataModelSnapshot,
   createA2UISubmission,
   flattenA2UIDataModelSnapshot,
@@ -175,4 +177,60 @@ test("reports a pending surface block only while its message is loading", () => 
 
   expect(state.commands).toEqual([]);
   expect(state.pending).toBe(true);
+});
+
+test("collects created surface IDs only from completed assistant messages", () => {
+  const createTicketForm = `<a2ui>[{"version":"v0.9","createSurface":{"surfaceId":"ticket-branch-form","catalogId":"local://open-chat/basic"}}]</a2ui>`;
+
+  expect(
+    collectCreatedA2UISurfaceIds([
+      { role: "user", status: "success", content: createTicketForm },
+      {
+        role: "assistant",
+        status: "updating",
+        content: `<a2ui>[{"version":"v0.9","createSurface":{"surfaceId":"streaming-card-1","catalogId":"local://open-chat/basic"}}]</a2ui>`,
+      },
+      { role: "assistant", status: "success", content: createTicketForm },
+      { role: "assistant", status: "success", content: createTicketForm },
+      { role: "assistant", status: "success", content: "<a2ui>not-json</a2ui>" },
+      {
+        role: "assistant",
+        status: "success",
+        content: `<a2ui>[{"version":"v0.9","updateDataModel":{"surfaceId":"update-only","path":"/status","value":"ready"}}]</a2ui>`,
+      },
+      {
+        role: "assistant",
+        status: "success",
+        content: `<a2ui>[{"version":"v0.9","createSurface":{"surfaceId":"summary-card-1","catalogId":"local://open-chat/basic"}}]</a2ui>`,
+      },
+    ]),
+  ).toEqual(["ticket-branch-form", "summary-card-1"]);
+});
+
+test("appends used surface IDs as runtime system instructions", () => {
+  const basePrompt = "Always use ticket-branch-form.";
+  const result = appendA2UISurfaceIdContext(basePrompt, [
+    {
+      role: "assistant",
+      status: "success",
+      content: `<a2ui>[{"version":"v0.9","createSurface":{"surfaceId":"ticket-branch-form","catalogId":"local://open-chat/basic"}}]</a2ui>`,
+    },
+  ]);
+
+  expect(result).toContain(basePrompt);
+  expect(result).toContain('["ticket-branch-form"]');
+  expect(result).toContain("must not reuse");
+  expect(result).toContain("next available positive integer suffix");
+  expect(result).toContain("same new surfaceId in every command");
+  expect(result).toContain("override any earlier fixed surfaceId instruction");
+});
+
+test("does not append surface instructions when the conversation has no created surface", () => {
+  const basePrompt = "Base prompt";
+
+  expect(
+    appendA2UISurfaceIdContext(basePrompt, [
+      { role: "user", status: "success", content: "Create a form" },
+    ]),
+  ).toBe(basePrompt);
 });

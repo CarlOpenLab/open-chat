@@ -14,6 +14,7 @@ import {
 } from "../services/OpenChatProvider";
 import {
   A2UI_SUBMISSION_MESSAGE_KIND,
+  appendA2UISurfaceIdContext,
   createA2UISubmission,
   formatA2UISubmissionAsUserMessage,
   isA2UISubmissionContextMessage,
@@ -411,10 +412,23 @@ const handleChange = (value: string) => {
   content.value = value;
 };
 
-const getRequestSystemPrompt = (baseSystemPrompt: string) =>
-  [baseSystemPrompt.trim(), fileModeEnabled.value ? FILE_WORKSPACE_SYSTEM_PROMPT : ""]
+const getRequestSystemPrompt = (baseSystemPrompt: string) => {
+  const composedPrompt = [
+    baseSystemPrompt.trim(),
+    fileModeEnabled.value ? FILE_WORKSPACE_SYSTEM_PROMPT : "",
+  ]
     .filter(Boolean)
     .join("\n\n");
+
+  return appendA2UISurfaceIdContext(
+    composedPrompt,
+    currentConversationMessages.value.map(({ message: modelMessage, status }) => ({
+      content: modelMessage.content,
+      role: modelMessage.role,
+      status,
+    })),
+  );
+};
 
 const handleSubmit = (
   nextContent: string,

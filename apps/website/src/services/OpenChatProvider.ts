@@ -46,6 +46,7 @@ When A2UI is requested, output exactly one complete protocol block using the <a2
 </a2ui>
 
 Strict A2UI rules:
+- Every createSurface surfaceId must be unique across the entire conversation. Never reuse an ID from a submitted, locked, preserved, or deleted surface. For another similar surface, keep the semantic prefix and use the next unused positive integer suffix, then use that exact new ID consistently in every command for the surface.
 - The <a2ui> tag content must be one valid JSON array. No comments, trailing commas, JavaScript syntax, or outer string quotes.
 - Every array item must contain version plus exactly one of createSurface, updateComponents, updateDataModel, or deleteSurface. Never put two updateDataModel keys in one object.
 - updateComponents has exactly this shape: {"surfaceId":"...","components":[...]}. Never wrap it in formCard, card, config, or another key.
@@ -81,17 +82,20 @@ export const createTicketBranchSystemPrompt = (date: Date = new Date()) => `${A2
 
 第一阶段：收集信息
 - 当用户尚未提交表单时，只输出一个完整的 <a2ui> 协议块，不要输出解释、标题或 Markdown 代码块。
+- 如果用户在之前的表单提交后明确要求重新填写、重试或创建新表单，也进入第一阶段并输出一张全新的空白表单。
 - 表单必须包含两个必填文本字段：
   1. 工单 ID，数据路径为 /ticketId。
   2. 项目名称，数据路径为 /projectName。这里填写项目、需求或改动的名称，你要用它判断分支类型并生成 feature-name。
 - 表单提交按钮的 action name 必须是 generate_ticket_branch。
-- 第一阶段必须原样输出下面的表单协议，确保字段和 action 稳定：
+- 首张表单使用 ticket-branch-form-1。如果会话中已经创建过工单表单，新表单必须使用 ticket-branch-form-N，其中 N 是下一个尚未使用的正整数后缀。
+- 新表单的 createSurface、updateComponents、所有 updateDataModel 和 action context source 必须统一使用同一个新 ID。
+- 只有首张表单必须原样输出下面的协议；后续表单必须仅替换其中每一处 ticket-branch-form-1 为选定的新 ID，其他字段和 action 保持不变：
 <a2ui>
 [
-  {"version":"v0.9","createSurface":{"surfaceId":"ticket-branch-form","catalogId":"local://open-chat/basic"}},
-  {"version":"v0.9","updateComponents":{"surfaceId":"ticket-branch-form","components":[{"id":"root","component":"Card","title":"生成工单分支","child":"form-content"},{"id":"form-content","component":"Column","gap":14,"children":["form-tip","ticket-id","project-name","submit"]},{"id":"form-tip","component":"Text","text":"填写工单 ID 和项目名称，系统会自动判断分支类型并生成命令。","variant":"secondary"},{"id":"ticket-id","component":"TextField","label":"工单 ID *","placeholder":"例如：123432","value":{"path":"/ticketId"}},{"id":"project-name","component":"TextField","label":"项目名称 *","placeholder":"例如：新增组织树筛选功能","value":{"path":"/projectName"}},{"id":"submit-label","component":"Text","text":"生成分支命令"},{"id":"submit","component":"Button","child":"submit-label","variant":"primary","action":{"event":{"name":"generate_ticket_branch","context":{"source":"ticket-branch-form","requiredPaths":["/ticketId","/projectName"]}}}}]}},
-  {"version":"v0.9","updateDataModel":{"surfaceId":"ticket-branch-form","path":"/ticketId","value":""}},
-  {"version":"v0.9","updateDataModel":{"surfaceId":"ticket-branch-form","path":"/projectName","value":""}}
+  {"version":"v0.9","createSurface":{"surfaceId":"ticket-branch-form-1","catalogId":"local://open-chat/basic"}},
+  {"version":"v0.9","updateComponents":{"surfaceId":"ticket-branch-form-1","components":[{"id":"root","component":"Card","title":"生成工单分支","child":"form-content"},{"id":"form-content","component":"Column","gap":14,"children":["form-tip","ticket-id","project-name","submit"]},{"id":"form-tip","component":"Text","text":"填写工单 ID 和项目名称，系统会自动判断分支类型并生成命令。","variant":"secondary"},{"id":"ticket-id","component":"TextField","label":"工单 ID *","placeholder":"例如：123432","value":{"path":"/ticketId"}},{"id":"project-name","component":"TextField","label":"项目名称 *","placeholder":"例如：新增组织树筛选功能","value":{"path":"/projectName"}},{"id":"submit-label","component":"Text","text":"生成分支命令"},{"id":"submit","component":"Button","child":"submit-label","variant":"primary","action":{"event":{"name":"generate_ticket_branch","context":{"source":"ticket-branch-form-1","requiredPaths":["/ticketId","/projectName"]}}}}]}},
+  {"version":"v0.9","updateDataModel":{"surfaceId":"ticket-branch-form-1","path":"/ticketId","value":""}},
+  {"version":"v0.9","updateDataModel":{"surfaceId":"ticket-branch-form-1","path":"/projectName","value":""}}
 ]
 </a2ui>
 

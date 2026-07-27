@@ -34,7 +34,7 @@ const rowBaseClass =
     id="landing-demo-sidebar"
     :inert="!open"
     :aria-hidden="!open"
-    class="demo-sidebar flex min-w-0 flex-col overflow-hidden border-r border-solid border-brand-border bg-brand-sidebar pt-[10px] px-[10px] pb-[10px]"
+    class="demo-sidebar flex min-w-0 flex-col overflow-hidden bg-brand-sidebar pt-[10px] px-[10px] pb-[10px]"
   >
     <header class="flex h-[42px] items-center justify-between gap-[10px] pl-[5px] pr-[2px]">
       <a
@@ -66,7 +66,7 @@ const rowBaseClass =
 
     <div class="mb-[7px] mt-[14px] flex flex-col gap-[12px]">
       <button
-        class="grid min-h-[38px] w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] rounded-[6px] border-0 bg-brand-primary px-[10px] text-left text-[12px] font-620 text-brand-primary-foreground shadow-brand-xs hover:opacity-88"
+        class="grid min-h-[38px] w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] rounded-[6px] border-0 bg-brand-primary px-[10px] text-left text-[12px] font-620 text-brand-primary-foreground shadow-brand-xs hover:opacity-88 whitespace-nowrap"
         type="button"
         @click="$emit('newChat')"
       >

@@ -60,7 +60,7 @@ const handleLogout = () => {
 </script>
 
 <template>
-  <footer class="border-t border-solid border-brand-border pt-[8px]">
+  <footer class="pt-[8px]">
     <button
       :class="[rowBaseClass, rowLayoutClass]"
       type="button"

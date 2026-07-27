@@ -1,6 +1,11 @@
 import type { XModelMessage } from "@antdv-next/x-sdk";
 import { expect, test } from "vite-plus/test";
-import { OpenChatProvider, WEB_SEARCHING_MARKER } from "./OpenChatProvider";
+import {
+  A2UI_SYSTEM_PROMPT,
+  OpenChatProvider,
+  WEB_SEARCHING_MARKER,
+  createTicketBranchSystemPrompt,
+} from "./OpenChatProvider";
 
 const responseHeaders = new Headers({ "content-type": "text/event-stream" });
 const provider = Object.create(OpenChatProvider.prototype) as OpenChatProvider;
@@ -65,4 +70,21 @@ test("emits web search sources and displays the search marker", () => {
       description: "福州明天有雨。",
     },
   ]);
+});
+
+test("requires conversation-unique A2UI surface IDs", () => {
+  expect(A2UI_SYSTEM_PROMPT).toContain(
+    "Every createSurface surfaceId must be unique across the entire conversation",
+  );
+  expect(A2UI_SYSTEM_PROMPT).toContain("next unused positive integer suffix");
+});
+
+test("numbers ticket branch form surfaces and documents replacement IDs", () => {
+  const prompt = createTicketBranchSystemPrompt(new Date(2025, 11, 4));
+
+  expect(prompt.match(/"surfaceId":"ticket-branch-form-1"/g)).toHaveLength(4);
+  expect(prompt).toContain('"source":"ticket-branch-form-1"');
+  expect(prompt).not.toContain('"surfaceId":"ticket-branch-form"');
+  expect(prompt).toContain("ticket-branch-form-N");
+  expect(prompt).toContain("下一个尚未使用的正整数后缀");
 });

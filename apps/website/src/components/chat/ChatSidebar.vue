@@ -141,7 +141,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
 
 <template>
   <aside
-    class="chat-sidebar relative z-sidebar flex h-[100dvh] flex-col overflow-visible border-r border-solid border-brand-border bg-brand-sidebar p-[10px] transition-[width,min-width,transform] duration-220 ease-[ease] lt-md:absolute lt-md:bottom-0 lt-md:left-0 lt-md:right-auto lt-md:top-0 lt-md:min-w-0 lt-md:w-[min(276px,calc(100%-56px))] lt-md:pb-[max(10px,env(safe-area-inset-bottom))]"
+    class="chat-sidebar relative z-sidebar flex h-[100dvh] flex-col overflow-visible bg-brand-sidebar p-[10px] transition-[width,min-width,transform] duration-220 ease-[ease] lt-md:absolute lt-md:bottom-0 lt-md:left-0 lt-md:right-auto lt-md:top-0 lt-md:min-w-0 lt-md:w-[min(276px,calc(100%-56px))] lt-md:pb-[max(10px,env(safe-area-inset-bottom))]"
     :class="
       open
         ? 'w-[276px] min-w-[276px] lt-md:translate-x-0 lt-md:shadow-[18px_0_46px_rgba(9,9,11,0.18)]'

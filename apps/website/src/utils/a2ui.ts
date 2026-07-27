@@ -294,6 +294,47 @@ function parseCommandBlock(raw: string, blockNumber: number) {
   return { commands, errors };
 }
 
+export function collectCreatedA2UISurfaceIds(items: readonly A2UIConversationItem[]): string[] {
+  const surfaceIds = new Set<string>();
+
+  items.forEach((item) => {
+    if (
+      item.role !== "assistant" ||
+      item.status === "loading" ||
+      item.status === "updating" ||
+      typeof item.content !== "string"
+    ) {
+      return;
+    }
+
+    const parsed = parseA2UIContent(item.content);
+    if (parsed.hasPendingBlock) return;
+
+    parsed.commands.forEach((command) => {
+      if ("createSurface" in command) surfaceIds.add(command.createSurface.surfaceId);
+    });
+  });
+
+  return [...surfaceIds];
+}
+
+export function appendA2UISurfaceIdContext(
+  baseSystemPrompt: string,
+  items: readonly A2UIConversationItem[],
+): string {
+  const usedSurfaceIds = collectCreatedA2UISurfaceIds(items);
+  if (usedSurfaceIds.length === 0) return baseSystemPrompt;
+
+  const runtimeContext = `A2UI runtime surface ID rules for the current conversation:
+- Surface IDs already used by createSurface: ${JSON.stringify(usedSurfaceIds)}.
+- You must not reuse any listed ID in a new createSurface command, even when its form is submitted, locked, or preserved.
+- For another instance of a similar surface, keep its semantic prefix and select the next available positive integer suffix, for example ticket-branch-form-2.
+- Use the same new surfaceId in every command belonging to the new A2UI block, including action context metadata.
+- These runtime rules override any earlier fixed surfaceId instruction or example.`;
+
+  return [baseSystemPrompt.trim(), runtimeContext].filter(Boolean).join("\n\n");
+}
+
 export function collectA2UIConversationState(
   items: readonly A2UIConversationItem[],
 ): A2UIConversationState {
