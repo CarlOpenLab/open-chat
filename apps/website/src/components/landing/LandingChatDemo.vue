@@ -6,7 +6,6 @@ import {
   Cloud,
   GitBranch,
   Lightbulb,
-  LockKeyhole,
   PanelLeftOpen,
   SlidersHorizontal,
   Sparkles,
@@ -185,38 +184,26 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div
-    class="demo-window h-[min(680px,calc(100dvh-154px))] min-h-[570px] w-[min(1240px,100%)] overflow-hidden rounded-lg border border-solid border-brand-border bg-brand-workspace shadow-xl"
+  <section
+    data-screen-label="Open Chat 产品预览"
+    class="demo-window relative mx-auto h-[min(680px,calc(100dvh-154px))] min-h-[570px] w-[min(1240px,100%)] overflow-hidden rounded-lg border border-solid border-brand-border bg-brand-workspace shadow-xl"
     aria-label="Open Chat 交互演示"
   >
     <div
-      class="window-bar grid h-[42px] grid-cols-[1fr_auto_1fr] items-center border-b border-solid border-brand-border bg-brand-sidebar px-3"
-    >
-      <div class="window-controls flex items-center gap-1.5" aria-hidden="true">
-        <i class="h-[9px] w-[9px] rounded-full bg-brand-border-strong"></i>
-        <i class="h-[9px] w-[9px] rounded-full bg-brand-border-strong"></i>
-        <i class="h-[9px] w-[9px] rounded-full bg-brand-border-strong"></i>
-      </div>
-      <div
-        class="window-address flex h-[26px] items-center gap-[7px] rounded-[5px] border border-solid border-brand-border bg-brand-surface px-3.5 text-[11px] text-brand-muted"
-      >
-        <LockKeyhole class="!h-[11px] !w-[11px]" /> openchat.dev/chat
-      </div>
-      <div class="window-actions flex items-center justify-self-end gap-1">
-        <span class="live-status flex items-center gap-1.5 text-[11px] text-brand-muted">
-          <i class="h-1.5 w-1.5 rounded-full bg-success"></i> Live
-        </span>
-      </div>
-    </div>
-
-    <div
-      class="demo-app grid h-[calc(100%-42px)] [transition:grid-template-columns_180ms_ease]"
+      class="demo-app grid h-full [transition:grid-template-columns_180ms_ease]"
       :class="
         sidebarOpen
           ? 'grid-cols-[248px_minmax(0,1fr)]'
           : 'sidebar-hidden grid-cols-[0_minmax(0,1fr)]'
       "
     >
+      <button
+        v-if="sidebarOpen"
+        class="demo-sidebar-scrim absolute inset-0 z-3 hidden border-0 bg-[rgba(9,9,11,0.34)]"
+        type="button"
+        aria-label="关闭对话侧栏"
+        @click="sidebarOpen = false"
+      ></button>
       <LandingDemoSidebar
         :conversations="conversations"
         :active-key="activeKey"
@@ -225,9 +212,9 @@ onBeforeUnmount(() => {
         @close="sidebarOpen = false"
       />
 
-      <section class="flex min-w-0 flex-col bg-brand-workspace">
+      <section class="flex min-w-0 flex-col bg-brand-workspace" aria-label="Open Chat 对话工作区">
         <header
-          class="demo-chat-header relative z-2 flex min-h-[58px] items-center justify-between gap-3 border-b border-solid border-brand-border px-4 [background:color-mix(in_srgb,var(--brand-workspace)_90%,transparent)] backdrop-blur-[16px]"
+          class="demo-chat-header relative z-2 flex min-h-[58px] items-center justify-between gap-3 px-4 [background:color-mix(in_srgb,var(--brand-workspace)_90%,transparent)] backdrop-blur-[16px]"
         >
           <div class="flex min-w-0 items-center gap-[9px]">
             <Tooltip v-if="!sidebarOpen" title="展开侧栏">
@@ -235,24 +222,26 @@ onBeforeUnmount(() => {
                 class="grid h-9 w-9 min-w-9 place-items-center rounded-md border border-solid border-transparent bg-transparent p-0 text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground"
                 type="button"
                 aria-label="展开侧栏"
+                aria-controls="landing-demo-sidebar"
+                :aria-expanded="sidebarOpen"
                 @click="sidebarOpen = true"
               >
                 <PanelLeftOpen class="!h-[15px] !w-[15px]" />
               </button>
             </Tooltip>
-            <button
-              class="flex min-h-8 min-w-0 cursor-default items-center gap-[2px] rounded border-0 bg-transparent py-0 pl-0 pr-1 text-brand-foreground"
-              type="button"
-              aria-label="对话名称"
+            <div
+              class="flex min-h-8 min-w-0 items-center rounded py-0 pl-[6px] pr-1 text-brand-foreground"
+              aria-label="当前对话"
             >
-              <span class="max-w-[min(38vw,320px)] truncate pl-[6px] text-[13px] font-650">{{
+              <span class="max-w-[min(38vw,320px)] truncate text-[13px] font-650">{{
                 activeConversation?.label || "新对话"
               }}</span>
-              <ChevronDown class="!h-3.5 !w-3.5 text-brand-muted" />
-            </button>
+            </div>
           </div>
           <div class="flex min-w-0 items-center gap-1">
-            <span class="mr-[6px] flex items-center gap-[6px] text-[10px] text-brand-muted">
+            <span
+              class="demo-sync-status mr-[6px] flex items-center gap-[6px] text-[10px] text-brand-muted"
+            >
               <Cloud class="!h-[13px] !w-[13px]" />
               <span>已同步</span>
             </span>
@@ -284,7 +273,7 @@ onBeforeUnmount(() => {
         </div>
 
         <section
-          class="demo-composer relative z-2 px-[clamp(16px,4vw,40px)] pb-[max(8px,env(safe-area-inset-bottom))] pt-[10px] bg-[linear-gradient(to_bottom,transparent_0,var(--brand-workspace)_24px,var(--brand-workspace)_100%)]"
+          class="demo-composer relative z-2 bg-[linear-gradient(to_bottom,transparent_0,var(--brand-workspace)_32px,var(--brand-workspace)_100%)] px-[clamp(16px,4vw,40px)] pb-[max(8px,env(safe-area-inset-bottom))] pt-[26px]"
         >
           <div
             v-if="showStarterPrompts"
@@ -294,11 +283,11 @@ onBeforeUnmount(() => {
               v-for="item in starterPrompts"
               :key="item.key"
               type="button"
-              class="flex min-h-[60px] cursor-pointer items-start gap-[10px] rounded-[7px] border border-solid border-brand-border bg-brand-surface px-3 py-[10px] text-left transition-colors duration-150 hover:border-brand-border-strong hover:bg-brand-surface-muted"
+              class="flex min-h-[60px] cursor-pointer items-start gap-[10px] rounded-[7px] border-0 bg-brand-surface-subtle px-3 py-[10px] text-left transition-colors duration-150 hover:bg-brand-sidebar-hover active:translate-y-[1px]"
               @click="handlePromptClick(item.prompt)"
             >
               <span
-                class="grid h-7 w-7 flex-[0_0_28px] place-items-center rounded-[5px] border border-solid border-brand-border bg-brand-surface-subtle"
+                class="grid h-7 w-7 flex-[0_0_28px] place-items-center rounded-[5px] bg-brand-surface"
               >
                 <GitBranch
                   v-if="item.key === 'ticket-branch'"
@@ -323,21 +312,21 @@ onBeforeUnmount(() => {
           >
             <button
               type="button"
-              class="h-7 flex-none cursor-pointer rounded-[5px] border border-solid border-brand-border bg-brand-surface px-[9px] text-[10px] text-brand-muted transition-colors duration-150 hover:bg-brand-surface-subtle hover:text-brand-foreground"
+              class="h-7 flex-none cursor-pointer rounded-[5px] border-0 bg-brand-surface-subtle px-[9px] text-[10px] text-brand-muted transition-colors duration-150 hover:bg-brand-sidebar-hover hover:text-brand-foreground"
               @click="content = '把它转换成时间线'"
             >
               转换成时间线
             </button>
             <button
               type="button"
-              class="h-7 flex-none cursor-pointer rounded-[5px] border border-solid border-brand-border bg-brand-surface px-[9px] text-[10px] text-brand-muted transition-colors duration-150 hover:bg-brand-surface-subtle hover:text-brand-foreground"
+              class="h-7 flex-none cursor-pointer rounded-[5px] border-0 bg-brand-surface-subtle px-[9px] text-[10px] text-brand-muted transition-colors duration-150 hover:bg-brand-sidebar-hover hover:text-brand-foreground"
               @click="content = '补充发布回滚方案'"
             >
               补充回滚方案
             </button>
             <button
               type="button"
-              class="h-7 flex-none cursor-pointer rounded-[5px] border border-solid border-brand-border bg-brand-surface px-[9px] text-[10px] text-brand-muted transition-colors duration-150 hover:bg-brand-surface-subtle hover:text-brand-foreground"
+              class="h-7 flex-none cursor-pointer rounded-[5px] border-0 bg-brand-surface-subtle px-[9px] text-[10px] text-brand-muted transition-colors duration-150 hover:bg-brand-sidebar-hover hover:text-brand-foreground"
               @click="content = '导出为 Markdown'"
             >
               导出 Markdown
@@ -401,11 +390,10 @@ onBeforeUnmount(() => {
         </section>
       </section>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.window-actions :deep(.ant-btn),
 .demo-composer :deep(.ant-btn) {
   width: 34px;
   min-width: 34px;
@@ -483,14 +471,6 @@ onBeforeUnmount(() => {
     height: 660px;
     min-height: 0;
   }
-  .window-bar {
-    height: 48px;
-    grid-template-columns: 1fr auto;
-  }
-  .window-controls {
-    display: none;
-  }
-  .window-actions :deep(.ant-btn),
   .demo-chat-header button,
   .demo-composer :deep(.ant-btn),
   .demo-composer :deep(.antd-sender-actions-btn) {
@@ -498,13 +478,12 @@ onBeforeUnmount(() => {
     min-width: 44px;
     height: 44px;
   }
-  .window-address {
-    justify-self: start;
-  }
   .demo-app {
     position: relative;
-    height: calc(100% - 48px);
     grid-template-columns: minmax(0, 1fr);
+  }
+  .demo-sidebar-scrim {
+    display: block;
   }
   .demo-app :deep(.demo-sidebar) {
     position: absolute;
@@ -540,9 +519,7 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 430px) {
-  .live-status,
-  .demo-chat-header span:has(+ span),
-  .demo-chat-header .mr-\[6px\] {
+  .demo-sync-status {
     display: none;
   }
 }
