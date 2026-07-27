@@ -15,6 +15,7 @@ import { shadcnDarkTheme, shadcnTheme } from "./theme/shadcnTheme";
 const LandingPage = defineAsyncComponent(() => import("./pages/LandingPage.vue"));
 const AuthPage = defineAsyncComponent(() => import("./pages/AuthPage.vue"));
 const Chat = defineAsyncComponent(() => import("./components/Chat.vue"));
+const AssistantMarketPage = defineAsyncComponent(() => import("./pages/AssistantMarketPage.vue"));
 
 const enUS: XProviderProps["locale"] = {
   locale: "en",
@@ -87,7 +88,8 @@ const zhCN: XProviderProps["locale"] = {
 };
 
 const localeType = ref<"zh" | "en">("zh");
-const route = ref(window.location.pathname);
+const getLocationPath = () => window.location.pathname + window.location.search;
+const route = ref(getLocationPath());
 const storedTheme = localStorage.getItem("open-chat-theme");
 const dark = ref(
   storedTheme ? storedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches,
@@ -97,13 +99,19 @@ const locale = computed<XProviderProps["locale"]>(() => {
   return localeType.value === "zh" ? zhCN : enUS;
 });
 const appTheme = computed(() => (dark.value ? shadcnDarkTheme : shadcnTheme));
-const currentPage = computed<"landing" | "auth" | "chat">(() => {
+const currentPage = computed<"landing" | "auth" | "chat" | "assistants">(() => {
   if (route.value.startsWith("/auth")) return "auth";
   if (route.value.startsWith("/chat")) return "chat";
+  if (route.value.startsWith("/assistants")) return "assistants";
   return "landing";
 });
 const currentComponent = computed(() => {
-  const pages = { landing: LandingPage, auth: AuthPage, chat: Chat };
+  const pages = {
+    landing: LandingPage,
+    auth: AuthPage,
+    chat: Chat,
+    assistants: AssistantMarketPage,
+  };
   return pages[currentPage.value];
 });
 let focusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -112,7 +120,12 @@ const focusMainContent = async () => {
   await nextTick();
   if (focusTimer) window.clearTimeout(focusTimer);
   const page = currentPage.value;
-  const selector = { landing: "#main", auth: ".auth-page", chat: "#chat-content" }[page];
+  const selector = {
+    landing: "#main",
+    auth: ".auth-page",
+    chat: "#chat-content",
+    assistants: "#assistant-market-content",
+  }[page];
   let attempts = 0;
   const focusWhenReady = () => {
     if (currentPage.value !== page) return;
@@ -129,12 +142,12 @@ const focusMainContent = async () => {
 };
 
 const syncRoute = () => {
-  route.value = window.location.pathname;
+  route.value = getLocationPath();
   void focusMainContent();
 };
 
 const navigate = (path: string) => {
-  if (window.location.pathname !== path) window.history.pushState({}, "", path);
+  if (getLocationPath() !== path) window.history.pushState({}, "", path);
   route.value = path;
   window.scrollTo({ top: 0, behavior: "auto" });
   void focusMainContent();
@@ -160,6 +173,7 @@ watch(
       landing: "Open Chat · AI Chat Workspace",
       auth: "登录 · Open Chat",
       chat: "工作区 · Open Chat",
+      assistants: "助手市场 · Open Chat",
     };
     document.title = titles[page];
   },
@@ -179,6 +193,7 @@ onBeforeUnmount(() => {
       <component
         :is="currentComponent"
         :dark="dark"
+        v-bind="currentPage === 'assistants' ? { routePath: route } : {}"
         @navigate="navigate"
         @toggle-theme="toggleTheme"
       />

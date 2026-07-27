@@ -8,6 +8,7 @@ import {
   PanelLeftOpen,
   Pencil,
   Pin,
+  Sparkles,
   Trash2,
 } from "@lucide/vue";
 import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
@@ -19,6 +20,8 @@ interface Props {
   workspaceAvailable?: boolean;
   workspaceOpen?: boolean;
   syncing?: boolean;
+  assistantName?: string;
+  assistantVersion?: string;
 }
 
 interface Emits {
@@ -129,6 +132,17 @@ const titleMenu = computed<MenuProps>(() => ({
           ><ChevronDown class="!h-3.5 !w-3.5 text-brand-muted" />
         </button>
       </Dropdown>
+      <span
+        v-if="assistantName"
+        class="ml-1 inline-flex min-h-8 max-w-[190px] items-center gap-[5px] rounded-[5px] border border-solid border-brand-border bg-brand-surface-subtle px-2 text-[10px] font-620 text-brand-muted lt-md:min-h-11"
+        :aria-label="`当前助手：${assistantName}`"
+      >
+        <Sparkles class="!h-[12px] !w-[12px]" />
+        <span class="truncate">{{ assistantName }}</span>
+        <span v-if="assistantVersion" class="text-[9px] text-brand-muted"
+          >v{{ assistantVersion }}</span
+        >
+      </span>
     </div>
 
     <div class="flex min-w-0 items-center gap-1" aria-label="对话工具">

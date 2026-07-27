@@ -1,43 +1,52 @@
 <script setup lang="ts">
 import { Prompts, type PromptsItemType } from "@antdv-next/x";
 import { GitBranch, Lightbulb, Sparkles } from "@lucide/vue";
+import { computed } from "vue";
+import type { AssistantStarterPrompt } from "../../features/assistant-market/types";
 
+interface Props {
+  items?: AssistantStarterPrompt[];
+}
 interface Emits {
   (e: "promptClick", info: { data: { key: string; description: string } }): void;
 }
 
+const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
 // ============ 推荐提示词（深度思考位置） ============
 
-const starterPromptItems: PromptsItemType[] = [
+const defaultPromptItems: AssistantStarterPrompt[] = [
   {
-    key: "ticket-branch",
+    id: "ticket-branch",
     label: "生成工单分支",
     description: "填写工单 ID 和项目名称，生成 Git 分支",
+    prompt: "请启动工单分支生成流程，先用表单收集工单 ID 和项目名称。",
   },
   {
-    key: "placeholder-idea",
+    id: "placeholder-idea",
     label: "梳理一个想法",
     description: "快速整理目标、边界和下一步",
+    prompt: "帮我把这个想法整理成目标、范围和下一步行动。",
   },
   {
-    key: "placeholder-review",
+    id: "placeholder-review",
     label: "检查一段内容",
     description: "发现问题并给出简洁建议",
+    prompt: "帮我检查一段内容，指出最需要改进的三个地方。",
   },
 ];
 
-// 真实发送的提示词文本，按 key 查表，避免污染 Prompts 项的 DOM 属性
-const starterPromptText: Record<string, string> = {
-  "ticket-branch": "请启动工单分支生成流程，先用表单收集工单 ID 和项目名称。",
-  "placeholder-idea": "帮我把这个想法整理成目标、范围和下一步行动。",
-  "placeholder-review": "帮我检查一段内容，指出最需要改进的三个地方。",
-};
+const promptItems = computed<AssistantStarterPrompt[]>(() =>
+  props.items?.length ? props.items : defaultPromptItems,
+);
+const starterPromptItems = computed<PromptsItemType[]>(() =>
+  promptItems.value.map(({ id, label, description }) => ({ key: id, label, description })),
+);
 
 const handlePromptItemClick = (info: { data: { key: string | number } }) => {
   const key = String(info.data.key);
-  const prompt = starterPromptText[key];
+  const prompt = promptItems.value.find((item) => item.id === key)?.prompt;
   if (prompt) emit("promptClick", { data: { key, description: prompt } });
 };
 </script>
@@ -50,7 +59,10 @@ const handlePromptItemClick = (info: { data: { key: string | number } }) => {
       @item-click="handlePromptItemClick"
     >
       <template #iconRender="{ item }">
-        <GitBranch v-if="item.key === 'ticket-branch'" class="w-3.5 h-3.5" />
+        <GitBranch
+          v-if="item.key === 'ticket-branch' || item.key === 'start-ticket-flow'"
+          class="w-3.5 h-3.5"
+        />
         <Lightbulb v-else-if="item.key === 'placeholder-idea'" class="w-3.5 h-3.5" />
         <Sparkles v-else class="w-3.5 h-3.5" />
       </template>

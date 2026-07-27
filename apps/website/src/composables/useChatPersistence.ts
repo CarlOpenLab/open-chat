@@ -2,6 +2,7 @@ import type { ConversationItemType } from "@antdv-next/x";
 import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
 import { message } from "antdv-next";
 import { onBeforeUnmount, watch, type Ref } from "vue";
+import type { AssistantConversationSnapshot } from "../features/assistant-market/types";
 import {
   clearChatState,
   normalizePersistedChatState,
@@ -16,6 +17,7 @@ export interface OpenChatConversation extends ConversationItemType {
   a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
   systemPrompt?: string;
+  assistant?: AssistantConversationSnapshot;
 }
 
 export const getMessagePreview = (content: string, maxLength: number = 20): string => {
@@ -95,6 +97,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
             : [],
           systemPrompt:
             typeof conversation.systemPrompt === "string" ? conversation.systemPrompt : "",
+          ...(conversation.assistant ? { assistant: conversation.assistant } : {}),
         };
       });
   };

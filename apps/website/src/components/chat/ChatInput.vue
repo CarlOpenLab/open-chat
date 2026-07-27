@@ -8,9 +8,11 @@ import {
   Globe2,
   SlidersHorizontal,
   Square,
+  Sparkles,
 } from "@lucide/vue";
 import { Badge, Button, Dropdown, Popover, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, ref } from "vue";
+import type { AssistantStarterPrompt } from "../../features/assistant-market/types";
 import ComposerToolsMenu from "./ComposerToolsMenu.vue";
 import StarterPrompts from "./StarterPrompts.vue";
 
@@ -25,6 +27,8 @@ interface Props {
   searchEnabled: boolean;
   searchAvailable: boolean;
   showStarterPrompts: boolean;
+  starterPrompts?: AssistantStarterPrompt[];
+  assistantName?: string;
 }
 
 interface Emits {
@@ -37,6 +41,7 @@ interface Emits {
   (e: "fileModeChange", value: boolean): void;
   (e: "searchChange", value: boolean): void;
   (e: "promptClick", info: { data: { key: string; description: string } }): void;
+  (e: "assistantSelect"): void;
 }
 
 const props = defineProps<Props>();
@@ -80,6 +85,7 @@ const toggleVoice = () => {
   >
     <StarterPrompts
       v-if="showStarterPrompts && !loading"
+      :items="starterPrompts"
       @prompt-click="emit('promptClick', $event)"
     />
 
@@ -95,6 +101,18 @@ const toggleVoice = () => {
       <template #footer="{ defaultNode }">
         <div class="flex w-full min-h-[34px] items-center justify-between gap-3">
           <div class="composer-tools flex items-center gap-[3px] lt-sm:gap-0">
+            <Tooltip :title="props.assistantName ? `助手：${props.assistantName}` : '选择助手'">
+              <Button
+                type="text"
+                shape="circle"
+                class="assistant-picker-button"
+                :class="{ 'tool-active': props.assistantName }"
+                :aria-label="props.assistantName ? `当前助手：${props.assistantName}` : '选择助手'"
+                @click="emit('assistantSelect')"
+              >
+                <Sparkles />
+              </Button>
+            </Tooltip>
             <Popover v-model:open="toolsOpen" placement="topLeft" :arrow="false" trigger="click">
               <template #content>
                 <ComposerToolsMenu
@@ -243,6 +261,20 @@ const toggleVoice = () => {
 .composer-tools :deep(.ant-btn.tool-active) {
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
+}
+.composer-tools :deep(.assistant-picker-button) {
+  position: relative;
+}
+.composer-tools :deep(.assistant-picker-button.tool-active::after) {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--brand-surface);
+  border-radius: 50%;
+  background: var(--brand-primary);
+  content: "";
 }
 .chat-footer :deep(.antd-sender-actions-btn) {
   width: 34px;

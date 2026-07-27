@@ -11,6 +11,8 @@ import {
   Search,
   Sparkles,
   SquarePen,
+  Store,
+  Bookmark,
   Trash2,
 } from "@lucide/vue";
 import { Button, Input, Modal, Tooltip, message } from "antdv-next";
@@ -29,6 +31,8 @@ interface Emits {
   (e: "toggleSidebar"): void;
   (e: "toggleTheme"): void;
   (e: "newConversation"): void;
+  (e: "assistants"): void;
+  (e: "installedAssistants"): void;
   (e: "activeChange", key: string): void;
   (e: "rename", key: string, title: string): void;
   (e: "pin", key: string): void;
@@ -222,6 +226,25 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
       </label>
     </div>
 
+    <div class="mb-[12px] flex flex-col gap-[2px]">
+      <Button
+        type="text"
+        class="assistant-shortcut-button min-h-[38px] w-full grid-cols-[18px_minmax(0,1fr)] items-center gap-[9px] rounded-[6px] border border-solid border-transparent bg-transparent px-[10px] text-left text-[12px] font-620 text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground lt-md:min-h-11"
+        :class="primaryActionClass"
+        @click="emit('assistants')"
+      >
+        <Store class="!h-[15px] !w-[15px]" /><span :class="collapsibleTextClass">助手市场</span>
+      </Button>
+      <Button
+        type="text"
+        class="assistant-shortcut-button min-h-[38px] w-full grid-cols-[18px_minmax(0,1fr)] items-center gap-[9px] rounded-[6px] border border-solid border-transparent bg-transparent px-[10px] text-left text-[12px] font-620 text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground lt-md:min-h-11"
+        :class="primaryActionClass"
+        @click="emit('installedAssistants')"
+      >
+        <Bookmark class="!h-[15px] !w-[15px]" /><span :class="collapsibleTextClass">我的助手</span>
+      </Button>
+    </div>
+
     <div class="conversation-scroll relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
       <div
         v-if="filteredConversations.length === 0"
@@ -276,6 +299,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
 </template>
 
 <style scoped>
+.chat-sidebar :deep(.assistant-shortcut-button) {
+  border-color: transparent;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+.chat-sidebar :deep(.assistant-shortcut-button:hover),
+.chat-sidebar :deep(.assistant-shortcut-button:focus-visible),
+.chat-sidebar :deep(.assistant-shortcut-button:active) {
+  border-color: transparent;
+}
+
 /* 保留原因：以下全部是 antd/x Conversations 内部类（.antd-*）与滚动条伪元素的
    :deep 覆盖（含 menu trigger 由 h() 渲染进组件内部、依赖父项 hover 态），
    无法迁移为模板工具类。折叠态通过根节点 is-collapsed 类联动。 */
