@@ -50,7 +50,7 @@ const rowBaseClass =
         <Button
           type="text"
           shape="circle"
-          class="!h-[36px] !w-[36px] !min-w-[36px] !text-brand-muted hover:!bg-brand-surface-subtle hover:!text-brand-foreground"
+          class="!h-[36px] !w-[36px] !min-w-[36px] !text-brand-muted hover:!bg-brand-surface-subtle hover:!text-brand-foreground lt-md:!h-[44px] lt-md:!w-[44px] lt-md:!min-w-[44px]"
           aria-label="收起侧栏"
           aria-controls="landing-demo-sidebar"
           :aria-expanded="true"
