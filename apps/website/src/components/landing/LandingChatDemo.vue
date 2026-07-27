@@ -219,7 +219,7 @@ onBeforeUnmount(() => {
           <div class="flex min-w-0 items-center gap-[9px]">
             <Tooltip v-if="!sidebarOpen" title="展开侧栏">
               <button
-                class="grid h-9 w-9 min-w-9 place-items-center rounded-md border border-solid border-transparent bg-transparent p-0 text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground"
+                class="grid h-9 w-9 min-w-9 place-items-center rounded-md border-0 bg-transparent p-0 text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground"
                 type="button"
                 aria-label="展开侧栏"
                 aria-controls="landing-demo-sidebar"

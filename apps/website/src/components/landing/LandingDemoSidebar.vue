@@ -30,6 +30,7 @@ const rowBaseClass =
 
 <template>
   <aside
+    id="landing-demo-sidebar"
     class="demo-sidebar flex min-w-0 flex-col overflow-hidden border-r border-solid border-brand-border bg-brand-sidebar pt-[10px] px-[10px] pb-[10px]"
   >
     <header class="flex h-[42px] items-center justify-between gap-[10px] pl-[5px] pr-[2px]">
@@ -51,6 +52,8 @@ const rowBaseClass =
           shape="circle"
           class="!h-[36px] !w-[36px] !min-w-[36px] !text-brand-muted hover:!bg-brand-surface-subtle hover:!text-brand-foreground"
           aria-label="收起侧栏"
+          aria-controls="landing-demo-sidebar"
+          :aria-expanded="true"
           @click="$emit('close')"
         >
           <PanelLeftClose class="!h-[15px] !w-[15px]" />
@@ -60,7 +63,7 @@ const rowBaseClass =
 
     <div class="mb-[7px] mt-[14px] flex flex-col gap-[12px]">
       <button
-        class="grid min-h-[38px] w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] rounded-[6px] border border-solid border-transparent bg-brand-primary px-[10px] text-left text-[12px] font-620 text-brand-primary-foreground shadow-brand-xs hover:opacity-88"
+        class="grid min-h-[38px] w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] rounded-[6px] border-0 bg-brand-primary px-[10px] text-left text-[12px] font-620 text-brand-primary-foreground shadow-brand-xs hover:opacity-88"
         type="button"
         @click="$emit('newChat')"
       >
@@ -72,7 +75,7 @@ const rowBaseClass =
         >
       </button>
       <label
-        class="grid min-h-[38px] w-full cursor-text grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] rounded-[6px] border border-solid border-transparent px-[10px] text-left text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground focus-within:bg-brand-surface-subtle focus-within:text-brand-foreground"
+        class="grid min-h-[38px] w-full cursor-text grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] rounded-[6px] border-0 px-[10px] text-left text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground focus-within:bg-brand-surface-subtle focus-within:text-brand-foreground"
       >
         <Search class="!h-[15px] !w-[15px]" />
         <input
@@ -99,6 +102,7 @@ const rowBaseClass =
             ? 'bg-brand-sidebar-active text-brand-foreground'
             : 'bg-transparent text-brand-muted hover:bg-brand-sidebar-hover hover:text-brand-foreground'
         "
+        :aria-current="activeKey === item.key ? 'page' : undefined"
         @click="$emit('select', item.key)"
       >
         <MessageSquare class="!h-[14px] !w-[14px]" />
@@ -115,6 +119,7 @@ const rowBaseClass =
             ? 'bg-brand-sidebar-active text-brand-foreground'
             : 'bg-transparent text-brand-muted hover:bg-brand-sidebar-hover hover:text-brand-foreground'
         "
+        :aria-current="activeKey === conversations[3]?.key ? 'page' : undefined"
         @click="$emit('select', conversations[3].key)"
       >
         <MessageSquare class="!h-[14px] !w-[14px]" />
@@ -122,10 +127,10 @@ const rowBaseClass =
       </button>
     </nav>
 
-    <footer class="border-t border-solid border-brand-border pt-[8px]">
+    <footer class="pt-[10px]">
       <button :class="[rowBaseClass, 'grid-cols-[30px_minmax(0,1fr)_14px]']" type="button">
         <span
-          class="grid h-[30px] w-[30px] place-items-center rounded-[5px] border border-solid border-brand-border bg-brand-surface shadow-brand-xs"
+          class="grid h-[30px] w-[30px] place-items-center rounded-[5px] bg-brand-surface-subtle"
         >
           <Zap class="!h-[14px] !w-[14px]" />
         </span>
@@ -137,7 +142,7 @@ const rowBaseClass =
       </button>
       <button :class="[rowBaseClass, 'grid-cols-[30px_minmax(0,1fr)_14px]']" type="button">
         <span
-          class="grid h-[30px] w-[30px] place-items-center rounded-[5px] border border-solid border-brand-border bg-brand-surface text-[10px] font-700 shadow-brand-xs"
+          class="grid h-[30px] w-[30px] place-items-center rounded-[5px] bg-brand-primary text-[10px] font-700 text-brand-primary-foreground"
           >CC</span
         >
         <span class="flex min-w-0 flex-col">
