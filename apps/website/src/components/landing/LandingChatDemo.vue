@@ -8,7 +8,6 @@ import {
   Lightbulb,
   LockKeyhole,
   PanelLeftOpen,
-  Share2,
   SlidersHorizontal,
   Sparkles,
   Square,
@@ -207,11 +206,6 @@ onBeforeUnmount(() => {
         <span class="live-status flex items-center gap-1.5 text-[11px] text-brand-muted">
           <i class="h-1.5 w-1.5 rounded-full bg-success"></i> Live
         </span>
-        <Tooltip title="分享对话">
-          <Button type="text" shape="circle" aria-label="分享对话">
-            <Share2 class="!h-[14px] !w-[14px]" />
-          </Button>
-        </Tooltip>
       </div>
     </div>
 
@@ -262,12 +256,6 @@ onBeforeUnmount(() => {
               <Cloud class="!h-[13px] !w-[13px]" />
               <span>已同步</span>
             </span>
-            <button
-              class="inline-flex min-h-9 items-center gap-[7px] rounded-md border border-solid border-transparent bg-transparent px-[11px] text-[11px] font-580 text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground"
-              type="button"
-            >
-              <Share2 class="!h-[15px] !w-[15px]" /><span>分享</span>
-            </button>
           </div>
         </header>
 

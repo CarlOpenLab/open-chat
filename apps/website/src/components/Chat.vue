@@ -36,7 +36,6 @@ import ChatHeader from "./chat/ChatHeader.vue";
 import ChatMessages from "./chat/ChatMessages.vue";
 import ChatInput from "./chat/ChatInput.vue";
 import FileWorkspace from "./chat/FileWorkspace.vue";
-import ShareConversationModal from "./chat/ShareConversationModal.vue";
 import DeleteConversationModal from "./chat/DeleteConversationModal.vue";
 
 interface Props {
@@ -55,7 +54,6 @@ const emit = defineEmits<Emits>();
 
 const content = ref("");
 const conversationsOpen = ref(true);
-const shareOpen = ref(false);
 const deleteOpen = ref(false);
 const currentConversationKey = ref<string>("");
 const thinkingEnabled = ref(true);
@@ -345,7 +343,6 @@ watch(
 const handleWorkspaceKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape") {
     workspaceOpen.value = false;
-    shareOpen.value = false;
     deleteOpen.value = false;
   }
   if ((event.metaKey || event.ctrlKey) && event.key === "/") {
@@ -668,7 +665,6 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
         :syncing="isRequesting"
         @toggle-sidebar="handleSidebarToggle"
         @toggle-workspace="workspaceOpen = !workspaceOpen"
-        @share="shareOpen = true"
         @export="handleExportLocalHistory"
         @rename="handleRenameConversation"
         @pin="handlePinConversation"
@@ -726,8 +722,6 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
       @reset-file="clearWorkspaceDraft($event, '已恢复 AI 版本')"
       @accept-incoming="clearWorkspaceDraft($event, '已采用 AI 新版本')"
     />
-
-    <ShareConversationModal v-model:open="shareOpen" />
 
     <DeleteConversationModal v-model:open="deleteOpen" @confirm="handleDeleteConversation" />
   </div>

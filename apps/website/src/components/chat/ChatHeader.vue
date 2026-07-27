@@ -8,7 +8,6 @@ import {
   PanelLeftOpen,
   Pencil,
   Pin,
-  Share2,
   Trash2,
 } from "@lucide/vue";
 import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
@@ -25,7 +24,6 @@ interface Props {
 interface Emits {
   (e: "toggleSidebar"): void;
   (e: "toggleWorkspace"): void;
-  (e: "share"): void;
   (e: "export"): void;
   (e: "rename", title: string): void;
   (e: "pin"): void;
@@ -139,13 +137,6 @@ const titleMenu = computed<MenuProps>(() => ({
           syncing ? "保存中" : "已同步"
         }}</span></span
       >
-      <button
-        class="inline-flex min-h-9 items-center gap-[7px] border border-solid border-transparent rounded-md bg-transparent px-[11px] text-[11px] font-580 text-brand-muted cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground lt-md:h-11 lt-md:min-h-11 lt-md:w-11 lt-md:min-w-11 lt-sm:justify-center lt-sm:p-0"
-        type="button"
-        @click="emit('share')"
-      >
-        <Share2 class="!h-[15px] !w-[15px]" /><span class="lt-sm:hidden">分享</span>
-      </button>
       <Tooltip v-if="workspaceAvailable" title="文件工作区">
         <button
           class="inline-grid aria-pressed:bg-brand-surface-subtle aria-pressed:text-brand-foreground"
