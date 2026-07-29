@@ -73,7 +73,7 @@ const emit = defineEmits<Emits>();
   font-size: 132px;
   font-weight: 760;
   line-height: 0.72;
-  content: "THREAD";
+  content: "CHAT";
   pointer-events: none;
   user-select: none;
 }
