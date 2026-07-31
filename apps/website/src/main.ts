@@ -1,5 +1,6 @@
 import { createApp } from "vue";
 import App from "./App.vue";
+import "./codeHighlighter";
 import "./style.css";
 import "virtual:uno.css";
 import "@antdv-next/x-markdown/themes/light.css";

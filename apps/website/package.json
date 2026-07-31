@@ -27,6 +27,7 @@
     "antdv-next": "catalog:",
     "codemirror": "catalog:",
     "install": "catalog:",
+    "shiki": "catalog:",
     "vue": "catalog:"
   },
   "devDependencies": {

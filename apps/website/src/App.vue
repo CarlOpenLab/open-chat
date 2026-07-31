@@ -16,6 +16,9 @@ const LandingPage = defineAsyncComponent(() => import("./pages/LandingPage.vue")
 const AuthPage = defineAsyncComponent(() => import("./pages/AuthPage.vue"));
 const Chat = defineAsyncComponent(() => import("./components/Chat.vue"));
 const AssistantMarketPage = defineAsyncComponent(() => import("./pages/AssistantMarketPage.vue"));
+const CodeHighlightDemoPage = defineAsyncComponent(
+  () => import("./pages/CodeHighlightDemoPage.vue"),
+);
 
 const enUS: XProviderProps["locale"] = {
   locale: "en",
@@ -99,18 +102,22 @@ const locale = computed<XProviderProps["locale"]>(() => {
   return localeType.value === "zh" ? zhCN : enUS;
 });
 const appTheme = computed(() => (dark.value ? shadcnDarkTheme : shadcnTheme));
-const currentPage = computed<"landing" | "auth" | "chat" | "assistants">(() => {
-  if (route.value.startsWith("/auth")) return "auth";
-  if (route.value.startsWith("/chat")) return "chat";
-  if (route.value.startsWith("/assistants")) return "assistants";
-  return "landing";
-});
+const currentPage = computed<"landing" | "auth" | "chat" | "assistants" | "code-highlight-demo">(
+  () => {
+    if (route.value.startsWith("/auth")) return "auth";
+    if (route.value.startsWith("/chat")) return "chat";
+    if (route.value.startsWith("/assistants")) return "assistants";
+    if (route.value.startsWith("/code-highlight-demo")) return "code-highlight-demo";
+    return "landing";
+  },
+);
 const currentComponent = computed(() => {
   const pages = {
     landing: LandingPage,
     auth: AuthPage,
     chat: Chat,
     assistants: AssistantMarketPage,
+    "code-highlight-demo": CodeHighlightDemoPage,
   };
   return pages[currentPage.value];
 });
@@ -125,6 +132,7 @@ const focusMainContent = async () => {
     auth: ".auth-page",
     chat: "#chat-content",
     assistants: "#assistant-market-content",
+    "code-highlight-demo": "#code-highlight-demo",
   }[page];
   let attempts = 0;
   const focusWhenReady = () => {
@@ -174,6 +182,7 @@ watch(
       auth: "登录 · Open Chat",
       chat: "工作区 · Open Chat",
       assistants: "助手市场 · Open Chat",
+      "code-highlight-demo": "代码高亮 Demo · Open Chat",
     };
     document.title = titles[page];
   },
