@@ -1,9 +1,8 @@
+import type { LanguageInput } from "shiki";
+
 import { setupCodeHighlighter } from "@antdv-next/x";
 
 const languageAliases: Record<string, string> = {
-  ts: "typescript",
-  js: "javascript",
-  py: "python",
   rb: "ruby",
   rs: "rust",
   sh: "bash",
@@ -15,16 +14,10 @@ const languageAliases: Record<string, string> = {
   "c#": "csharp",
 };
 
-const languageLoaders: Record<string, () => Promise<{ default: unknown }>> = {
-  typescript: () => import("shiki/dist/langs/typescript.mjs"),
-  javascript: () => import("shiki/dist/langs/javascript.mjs"),
+const languageLoaders: Record<string, () => Promise<{ default: LanguageInput }>> = {
   jsx: () => import("shiki/dist/langs/jsx.mjs"),
   tsx: () => import("shiki/dist/langs/tsx.mjs"),
-  json: () => import("shiki/dist/langs/json.mjs"),
   bash: () => import("shiki/dist/langs/bash.mjs"),
-  python: () => import("shiki/dist/langs/python.mjs"),
-  html: () => import("shiki/dist/langs/html.mjs"),
-  css: () => import("shiki/dist/langs/css.mjs"),
   scss: () => import("shiki/dist/langs/scss.mjs"),
   vue: () => import("shiki/dist/langs/vue.mjs"),
   "vue-html": () => import("shiki/dist/langs/vue-html.mjs"),

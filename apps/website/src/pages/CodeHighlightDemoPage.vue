@@ -5,6 +5,12 @@ import { ref } from "vue";
 
 const samples: { language: string; code: string }[] = [
   {
+    language: "typescript",
+    code: `type User = { id: number; name: string };
+
+const formatUser = (user: User) => \`\${user.id}: \${user.name}\`;`,
+  },
+  {
     language: "go",
     code: `package main\n\nimport "fmt"\n\nfunc main() {\n    nums := []int{1, 2, 3}\n    fmt.Println(nums)\n}`,
   },
