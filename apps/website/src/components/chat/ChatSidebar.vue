@@ -15,6 +15,7 @@ import {
   Search,
   Settings,
   SquarePen,
+  Store,
   Sun,
   Trash2,
 } from "@lucide/vue";
@@ -44,6 +45,7 @@ interface Emits {
   (e: "toggleTheme"): void;
   (e: "newConversation"): void;
   (e: "openSearch"): void;
+  (e: "openAssistantCenter"): void;
   (e: "openSettings"): void;
   (e: "navigateBack"): void;
   (e: "navigateForward"): void;
@@ -255,7 +257,7 @@ const newTaskRowClass =
   "flex h-[32px] w-full flex-none items-center gap-[8px] rounded-[8px] border border-solid border-brand-border bg-transparent px-[9px] text-left text-[13px] font-medium text-brand-foreground cursor-pointer transition-colors duration-150 hover:border-brand-border-strong hover:bg-brand-surface-subtle active:opacity-80";
 
 const actionRowClass =
-  "flex h-[32px] w-full flex-none items-center gap-[10px] rounded-[7px] border-0 bg-transparent px-1 text-left text-[13px] text-brand-muted cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground active:opacity-80";
+  "flex h-[32px] w-full flex-none items-center gap-[10px] rounded-[7px] border-0 bg-transparent px-[10px] text-left text-[13px] text-brand-muted cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground active:opacity-80";
 
 const handleShortcut = (event: KeyboardEvent) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
@@ -332,10 +334,12 @@ onBeforeUnmount(() => {
         <SquarePen class="!h-[14px] !w-[14px] flex-none text-brand-accent" />
         <span class="min-w-0 flex-1 truncate">新任务</span>
       </button>
+      <button type="button" :class="actionRowClass" @click="emit('openAssistantCenter')">
+        <Store class="!h-[15px] !w-[15px] flex-none text-brand-accent" />
+        <span class="min-w-0 flex-1 truncate">助手广场</span>
+      </button>
       <button type="button" :class="actionRowClass" @click="emit('openSearch')">
-        <span class="grid h-5 w-5 flex-none place-items-center">
-          <Search class="!h-[15px] !w-[15px]" />
-        </span>
+        <Search class="!h-[15px] !w-[15px] flex-none" />
         <span class="min-w-0 flex-1 truncate">搜索</span>
         <kbd
           class="flex h-[18px] flex-none items-center rounded-[4px] border border-solid border-brand-border bg-transparent px-[5px] text-[10px] tracking-[0.5px] text-brand-muted-strong [font-family:inherit]"

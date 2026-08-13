@@ -100,13 +100,18 @@ const handleSubmit = (value: string) => {
   emit("submit", prompt);
 };
 
-const chipClass = (active: boolean) =>
-  [
-    "flex h-[24px] flex-none items-center gap-[6px] rounded-[6px] border-0 px-[7px] text-[11.5px] leading-[14px] cursor-pointer transition-colors duration-150",
+const chipClass = (active: boolean, disabled = false) => {
+  if (disabled)
+    return [
+      "flex h-[26px] flex-none items-center gap-[6px] rounded-[6px] border-0 px-[8px] text-[11.5px] leading-[14px] bg-transparent text-brand-ghost opacity-55 cursor-not-allowed",
+    ].join(" ");
+  return [
+    "flex h-[26px] flex-none items-center gap-[6px] rounded-[6px] border-0 px-[8px] text-[11.5px] leading-[14px] cursor-pointer transition-colors duration-150",
     active
       ? "bg-brand-surface-subtle text-brand-foreground"
       : "bg-transparent text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground",
   ].join(" ");
+};
 </script>
 
 <template>
@@ -134,20 +139,35 @@ const chipClass = (active: boolean) =>
                 :aria-label="`推理强度：${REASONING_LABEL[reasoningLevel]}`"
                 title="推理强度"
               >
-                <component :is="props.thinkingIcon" class="!h-[12px] !w-[12px] flex-none" />
-                <span>{{ REASONING_LABEL[reasoningLevel] }}</span>
+                <component
+                  :is="props.thinkingIcon"
+                  class="!h-[12px] !w-[12px] flex-none"
+                  :class="thinkingEnabled ? 'text-brand-accent' : ''"
+                />
+                <span>深度思考</span>
+                <span
+                  v-if="thinkingEnabled"
+                  class="rounded-[4px] bg-[color-mix(in_srgb,var(--brand-accent)_12%,transparent)] px-[4px] py-px text-[10px] font-600 leading-[12px] text-brand-accent"
+                  >{{ REASONING_LABEL[reasoningLevel] }}</span
+                >
+                <ChevronDown class="!h-[10px] !w-[10px] flex-none text-brand-muted-strong" />
               </button>
             </Dropdown>
-            <Tooltip v-if="searchAvailable" title="联网搜索">
+            <Tooltip :title="searchAvailable ? '联网搜索' : '当前模型不支持联网搜索'">
               <button
                 type="button"
-                :class="chipClass(searchEnabled)"
+                :class="chipClass(searchEnabled, !searchAvailable)"
+                :disabled="!searchAvailable"
                 :aria-pressed="searchEnabled"
                 aria-label="联网搜索"
                 @click="emit('searchChange', !searchEnabled)"
               >
-                <component :is="props.searchIcon" class="!h-[12px] !w-[12px] flex-none" />
-                <span class="lt-sm:hidden">搜索</span>
+                <component
+                  :is="props.searchIcon"
+                  class="!h-[12px] !w-[12px] flex-none"
+                  :class="searchEnabled ? 'text-brand-accent' : ''"
+                />
+                <span>联网搜索</span>
               </button>
             </Tooltip>
             <Tooltip v-if="fileModeEnabled" title="文件工作区">
@@ -158,8 +178,12 @@ const chipClass = (active: boolean) =>
                 aria-label="文件工作区"
                 @click="emit('fileModeChange', !fileModeEnabled)"
               >
-                <component :is="props.fileIcon" class="!h-[12px] !w-[12px] flex-none" />
-                <span class="lt-sm:hidden">文件</span>
+                <component
+                  :is="props.fileIcon"
+                  class="!h-[12px] !w-[12px] flex-none"
+                  :class="fileModeEnabled ? 'text-brand-accent' : ''"
+                />
+                <span>文件</span>
               </button>
             </Tooltip>
           </div>

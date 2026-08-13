@@ -925,6 +925,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
             @toggle-theme="emit('toggleTheme')"
             @new-conversation="handleNewConversation"
             @open-search="commandPaletteOpen = true"
+            @open-assistant-center="openAssistantCenter('market')"
             @open-settings="settingsOpen = true"
             @navigate-back="handleNavigateBack"
             @navigate-forward="handleNavigateForward"
@@ -1057,6 +1058,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       :dark="dark"
       @update:open="commandPaletteOpen = $event"
       @new-conversation="handleNewConversation"
+      @open-assistant-center="openAssistantCenter('market')"
       @open-settings="settingsOpen = true"
       @toggle-theme="emit('toggleTheme')"
       @toggle-sidebar="handleSidebarToggle"
@@ -1078,6 +1080,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       @export-history="handleExportLocalHistory"
       @import-history="handleImportLocalHistory"
       @clear-history="handleClearLocalHistory"
+      @providers-changed="loadModels"
     />
   </div>
 </template>
