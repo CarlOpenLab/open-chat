@@ -2,7 +2,7 @@
 import { Sender } from "@antdv-next/x";
 import { BrainCircuit, ChevronDown, Cpu, FolderOpen, Globe2, Square } from "@lucide/vue";
 import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, type Component } from "vue";
 import ModelIcon from "../Icons/ModelIcon.vue";
 
 interface Props {
@@ -16,6 +16,12 @@ interface Props {
   searchEnabled: boolean;
   searchAvailable: boolean;
   assistantName?: string;
+  /** 深度思考 chip 的图标，可配置（默认 BrainCircuit） */
+  thinkingIcon?: Component;
+  /** 联网搜索 chip 的图标，可配置（默认 Globe2） */
+  searchIcon?: Component;
+  /** 文件工作区 chip 的图标，可配置（默认 FolderOpen） */
+  fileIcon?: Component;
 }
 
 interface Emits {
@@ -30,7 +36,12 @@ interface Emits {
   (e: "assistantSelect"): void;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  // 组件本身就是函数，必须再包一层工厂，否则 Vue 会把默认值当作工厂函数调用
+  thinkingIcon: () => BrainCircuit,
+  searchIcon: () => Globe2,
+  fileIcon: () => FolderOpen,
+});
 const emit = defineEmits<Emits>();
 
 const modelMenu = computed<MenuProps>(() => ({
@@ -123,7 +134,7 @@ const chipClass = (active: boolean) =>
                 :aria-label="`推理强度：${REASONING_LABEL[reasoningLevel]}`"
                 title="推理强度"
               >
-                <BrainCircuit class="!h-[12px] !w-[12px] flex-none" />
+                <component :is="props.thinkingIcon" class="!h-[12px] !w-[12px] flex-none" />
                 <span>{{ REASONING_LABEL[reasoningLevel] }}</span>
               </button>
             </Dropdown>
@@ -135,7 +146,7 @@ const chipClass = (active: boolean) =>
                 aria-label="联网搜索"
                 @click="emit('searchChange', !searchEnabled)"
               >
-                <Globe2 class="!h-[12px] !w-[12px] flex-none" />
+                <component :is="props.searchIcon" class="!h-[12px] !w-[12px] flex-none" />
                 <span class="lt-sm:hidden">搜索</span>
               </button>
             </Tooltip>
@@ -147,7 +158,7 @@ const chipClass = (active: boolean) =>
                 aria-label="文件工作区"
                 @click="emit('fileModeChange', !fileModeEnabled)"
               >
-                <FolderOpen class="!h-[12px] !w-[12px] flex-none" />
+                <component :is="props.fileIcon" class="!h-[12px] !w-[12px] flex-none" />
                 <span class="lt-sm:hidden">文件</span>
               </button>
             </Tooltip>

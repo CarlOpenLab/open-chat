@@ -14,6 +14,7 @@ import { isA2UISubmissionContextMessage, type A2UISubmission } from "../utils/a2
 import type { WorkspaceFileDraft } from "../utils/fileWorkspace";
 
 export interface OpenChatConversation extends ConversationItemType {
+  messages?: DefaultMessageInfo<XModelMessage>[];
   a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
   systemPrompt?: string;

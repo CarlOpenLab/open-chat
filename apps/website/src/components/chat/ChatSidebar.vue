@@ -7,6 +7,7 @@ import {
   ArrowRight,
   Ellipsis,
   LoaderCircle,
+  MessageSquare,
   Moon,
   PanelLeftClose,
   Pencil,
@@ -19,7 +20,8 @@ import {
 } from "@lucide/vue";
 import { Input, Modal, Tooltip, message } from "antdv-next";
 import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { OpenChatConversation } from "../../composables/useChatPersistence";
+import AssistantIcon from "../../features/assistant-market/components/AssistantIcon.vue";
+import { getMessagePreview, type OpenChatConversation } from "../../composables/useChatPersistence";
 import { resolveConversationGroup } from "../../utils/sessionDateGroup";
 import { formatElapsedDuration, formatRelativeTime } from "../../utils/relativeTime";
 
@@ -148,30 +150,53 @@ const groupable = computed<ConversationsProps["groupable"]>(() => ({
 }));
 
 /**
- * Waku 条目为两行：标题 + （助手名 / 相对时间）。
+ * 副行文案：助手会话显示助手名，普通会话回退到最后一条消息预览，
+ * 避免副行只剩一个孤零零的时间。
+ */
+const lastMessagePreview = (conversation: OpenChatConversation): string => {
+  const messages = conversation.messages ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const content = messages[index]?.message?.content;
+    if (typeof content === "string" && content.trim()) return getMessagePreview(content, 18);
+  }
+  return "";
+};
+
+/**
+ * 条目 = 左侧图标 + 右侧两行文本：标题行 +（助手名 / 消息预览 + 时间）。
  * 进行中的会话把时间换成「工作中 · 已运行时长」并附一个转圈图标。
  */
 const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
   const conversation = item as OpenChatConversation;
   const busy = Boolean(props.busyKey) && String(item.key) === props.busyKey;
   const title = String(conversation.label ?? "").trim() || "新对话";
+  const assistant = conversation.assistant;
+  const metaText = assistant?.name || lastMessagePreview(conversation);
+
+  // 左侧图标：助手会话用其品牌图标（accent 色），普通会话用聊天气泡（中性色）
+  const iconNode = assistant
+    ? h(AssistantIcon, { name: assistant.icon, class: "conversation-entry-assistant-icon" })
+    : h(MessageSquare, { class: "conversation-entry-default-icon" });
 
   return h("span", { class: "conversation-entry" }, [
-    // 首行：标题占满，进行中时右端挂一个珊瑚色转圈（与 Waku 位置一致）
-    h("span", { class: "conversation-entry-head" }, [
-      h("span", { class: "conversation-entry-title" }, title),
-      busy ? h(LoaderCircle, { class: "conversation-entry-spinner" }) : null,
-    ]),
-    h("span", { class: "conversation-entry-meta" }, [
-      // 副行只保留助手名（若有）与时间；助手名同时充当把时间推到右端的弹性占位
-      h("span", { class: "conversation-entry-project" }, conversation.assistant?.name ?? ""),
-      h(
-        "span",
-        { class: busy ? "conversation-entry-time is-busy" : "conversation-entry-time" },
-        busy
-          ? `工作中 · ${formatElapsedDuration(nowTick.value - (props.busySince || nowTick.value))}`
-          : formatRelativeTime(conversation.updatedAt as number | undefined, nowTick.value),
-      ),
+    h("span", { class: "conversation-entry-icon" }, [iconNode]),
+    h("span", { class: "conversation-entry-body" }, [
+      // 首行：标题占满，进行中时右端挂一个转圈图标
+      h("span", { class: "conversation-entry-head" }, [
+        h("span", { class: "conversation-entry-title" }, title),
+        busy ? h(LoaderCircle, { class: "conversation-entry-spinner" }) : null,
+      ]),
+      h("span", { class: "conversation-entry-meta" }, [
+        // 副行：助手名 / 消息预览 + 时间，文案弹性占位把时间推到右端
+        metaText ? h("span", { class: "conversation-entry-project" }, metaText) : null,
+        h(
+          "span",
+          { class: busy ? "conversation-entry-time is-busy" : "conversation-entry-time" },
+          busy
+            ? `工作中 · ${formatElapsedDuration(nowTick.value - (props.busySince || nowTick.value))}`
+            : formatRelativeTime(conversation.updatedAt as number | undefined, nowTick.value),
+        ),
+      ]),
     ]),
   ]);
 };
@@ -427,6 +452,7 @@ onBeforeUnmount(() => {
 /* SIDEBAR_SESSION_CARD_HEIGHT = 51 = py 7×2 + 标题行 18 + gap 4 + 副行 15，
    行间距 SIDEBAR_SESSION_ROW_GAP = 1 */
 .chat-sidebar :deep(.antd-conversations-item) {
+  position: relative;
   min-height: 51px;
   align-items: flex-start;
   margin-bottom: 1px;
@@ -441,10 +467,37 @@ onBeforeUnmount(() => {
     color 160ms ease;
 }
 
-/* Waku 两行条目：第一行标题，第二行工作区名 + 时间 */
+/* 条目 = 左侧图标 tile + 右侧两行文本（标题行 / 副行） */
 .chat-sidebar :deep(.conversation-entry) {
   display: flex;
   min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+/* 图标 tile：与右侧 ⋯ 按钮同尺寸（28px），带边框的微妙底色，普通会话是聊天气泡 */
+.chat-sidebar :deep(.conversation-entry-icon) {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--brand-border);
+  border-radius: 7px;
+  background: var(--brand-surface-subtle);
+  color: var(--brand-muted-strong);
+}
+.chat-sidebar :deep(.conversation-entry-icon svg) {
+  width: 14px;
+  height: 14px;
+}
+/* 助手会话的品牌图标用 accent 色，与卡片列表的着色一致 */
+.chat-sidebar :deep(.conversation-entry-assistant-icon) {
+  color: var(--brand-accent);
+}
+.chat-sidebar :deep(.conversation-entry-body) {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 4px;
 }
@@ -458,9 +511,10 @@ onBeforeUnmount(() => {
   overflow: hidden;
   min-width: 0;
   flex: 1 1 auto;
-  /* 标题恒用主文字色（Waku 的 text），与灰阶副行形成两级层次 */
+  /* 标题恒用主文字色并加半粗，与灰阶副行形成两级层次 */
   color: var(--brand-foreground);
   font-size: 13.5px;
+  font-weight: 500;
   line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -482,12 +536,14 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 闲置条目的时间比项目名更暗（text_ghost），进行中时提到 text_tertiary */
+/* 闲置条目的时间比项目名更暗（text_ghost），进行中时提到 text_tertiary。
+   margin-left:auto 保证即使副行没有文案，时间也始终贴右 */
 .chat-sidebar :deep(.conversation-entry-time) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex: none;
+  margin-left: auto;
   color: var(--brand-ghost);
   white-space: nowrap;
 }
@@ -519,6 +575,15 @@ onBeforeUnmount(() => {
   outline: 2px solid var(--brand-ring);
   outline-offset: 1px;
 }
+/* 菜单触发按钮不再参与布局：覆盖在条目右缘（垂直居中），hover / 聚焦时才显形。
+   时间因此可以贴齐条目右缘，右侧始终保持干净对齐。 */
+.chat-sidebar :deep(.antd-conversations-item > div:has(.conversation-menu-trigger)) {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  z-index: 1;
+  transform: translateY(-50%);
+}
 .chat-sidebar :deep(.conversation-menu-trigger) {
   display: inline-grid;
   width: 28px;
@@ -540,14 +605,23 @@ onBeforeUnmount(() => {
   width: 16px;
   height: 16px;
 }
+/* 活跃条目也只在 hover 时露出菜单，避免长期盖住右缘的时间 */
 .chat-sidebar :deep(.antd-conversations-item:hover .conversation-menu-trigger),
-.chat-sidebar :deep(.antd-conversations-item-active .conversation-menu-trigger),
 .chat-sidebar :deep(.conversation-menu-trigger:focus-visible) {
   opacity: 1;
 }
 .chat-sidebar :deep(.conversation-menu-trigger:hover) {
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
+}
+/* hover 时右侧状态（相对时间 / 进行中图标）淡出，⋯ 原位顶替，右缘不产生错位 */
+.chat-sidebar :deep(.conversation-entry-time),
+.chat-sidebar :deep(.conversation-entry-spinner) {
+  transition: opacity 120ms ease;
+}
+.chat-sidebar :deep(.antd-conversations-item:hover .conversation-entry-time),
+.chat-sidebar :deep(.antd-conversations-item:hover .conversation-entry-spinner) {
+  opacity: 0;
 }
 .chat-sidebar .conversation-scroll {
   scrollbar-width: thin;

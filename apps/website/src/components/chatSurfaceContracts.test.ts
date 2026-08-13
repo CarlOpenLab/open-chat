@@ -48,7 +48,7 @@ describe("Chat product surface contracts", () => {
   });
 
   test("sidebar renders two-line conversation entries with relative time", () => {
-    // labelRender 是两行条目的唯一渲染入口，退回 #iconRender 插槽即视为回归
+    // labelRender 是条目的唯一渲染入口（图标 + 两行文本），退回 #iconRender 插槽即视为回归
     expect(sidebar).toContain("labelRender");
     expect(sidebar).toContain("conversation-entry-title");
     expect(sidebar).toContain("conversation-entry-meta");
@@ -57,9 +57,23 @@ describe("Chat product surface contracts", () => {
     expect(sidebar).toContain("busyKey");
     expect(sidebar).toContain("formatElapsedDuration");
     expect(sidebar).not.toContain("#iconRender");
-    // 条目副行不再展示文件夹图标与 open-chat 工作区名
+    // 条目不再展示文件夹图标与 open-chat 工作区名
     expect(sidebar).not.toContain("projectName");
     expect(sidebar).not.toContain("conversation-entry-folder");
+  });
+
+  test("sidebar entries get an icon tile and a filled meta row", () => {
+    // 左侧图标 tile：助手会话用品牌图标（accent 色），普通会话用聊天气泡
+    expect(sidebar).toContain("conversation-entry-icon");
+    expect(sidebar).toContain("conversation-entry-body");
+    expect(sidebar).toContain("conversation-entry-assistant-icon");
+    expect(sidebar).toContain("MessageSquare");
+    expect(sidebar).toContain("AssistantIcon");
+    // 普通会话副行回退到最后一条消息预览，避免整行空白
+    expect(sidebar).toContain("lastMessagePreview");
+    expect(sidebar).toContain("getMessagePreview");
+    // 没有副行文案时时间也通过 margin-left:auto 贴右
+    expect(sidebar).toContain("margin-left: auto");
   });
 
   test("header exposes workspace diff stats without the session info popover", () => {
@@ -83,6 +97,20 @@ describe("Chat product surface contracts", () => {
     expect(input).not.toContain("projectName");
     // 截图中免责声明也不再出现
     expect(input).not.toMatch(/可能会出错/);
+  });
+
+  test("composer chips accept configurable icons for thinking / search / files", () => {
+    // 深度思考、联网搜索、文件三个 chip 的图标支持通过 props 自定义，默认值保留原图标
+    expect(input).toContain("thinkingIcon");
+    expect(input).toContain("searchIcon");
+    expect(input).toContain("fileIcon");
+    expect(input).toContain("thinkingIcon: () => BrainCircuit");
+    expect(input).toContain("searchIcon: () => Globe2");
+    expect(input).toContain("fileIcon: () => FolderOpen");
+    // 渲染走动态组件，而不是写死某个 lucide 图标
+    expect(input).toContain(':is="props.thinkingIcon"');
+    expect(input).toContain(':is="props.searchIcon"');
+    expect(input).toContain(':is="props.fileIcon"');
   });
 
   test("conversation groups start expanded instead of collapsed", () => {
@@ -138,5 +166,17 @@ describe("Chat product surface contracts", () => {
     expect(sidebar).toContain("min-height: 51px");
     expect(sidebar).toContain("padding: 0 10px 10px");
     expect(sidebar).toMatch(/\.antd-conversations-list\)\s*\{[^}]*gap:\s*0/);
+  });
+
+  test("conversation menu overlays on hover so the time stays flush-right", () => {
+    // 菜单触发按钮改为绝对定位覆盖层，不占布局空间，时间列因此贴齐条目右缘
+    expect(sidebar).toContain("position: relative");
+    expect(sidebar).toContain(":has(.conversation-menu-trigger)");
+    expect(sidebar).toContain("position: absolute");
+    // 活跃条目不再常驻显示 ⋯（会盖住时间），统一 hover 时露出
+    expect(sidebar).not.toContain(".antd-conversations-item-active .conversation-menu-trigger");
+    // hover 时右侧时间 / 进行中图标淡出，与菜单按钮平滑替换
+    expect(sidebar).toContain("hover .conversation-entry-time");
+    expect(sidebar).toContain("hover .conversation-entry-spinner");
   });
 });
