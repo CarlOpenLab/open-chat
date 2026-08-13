@@ -12,24 +12,33 @@ import {
 import { GatewayError } from "./error";
 import type { ChatCompletionRequest } from "./provider";
 import { ProviderRegistry } from "./registry";
+import { ProviderStore, type StoredProviderInput } from "./provider-store";
 import { createSearchProvider, type SearchProvider } from "./search";
 import { runSearchAgentLoop } from "./search-agent";
 
 const DEFAULT_CONFIG_PATH = "config/providers.toml";
+const DEFAULT_STORE_PATH = "config/providers.json";
 
 function resolveConfigPath(): string {
   return process.env.CONFIG_PATH ?? process.argv[2] ?? DEFAULT_CONFIG_PATH;
 }
 
+function resolveStorePath(): string {
+  return process.env.PROVIDER_STORE_PATH ?? DEFAULT_STORE_PATH;
+}
+
 function main(): void {
   const configPath = resolveConfigPath();
+  const storePath = resolveStorePath();
 
   let config: AppConfig;
   let registry: ProviderRegistry;
   let searchProvider: SearchProvider | null;
+  let providerStore: ProviderStore;
   try {
     config = loadConfigFile(configPath);
-    registry = ProviderRegistry.fromConfig(config);
+    providerStore = new ProviderStore(storePath);
+    registry = buildRegistry(config, providerStore);
     searchProvider = createSearchProvider(config.search);
   } catch (err) {
     if (err instanceof GatewayError) {
@@ -39,6 +48,35 @@ function main(): void {
     }
     process.exit(1);
   }
+
+  /** Rebuilds the model→provider routing table from TOML + stored providers. */
+  const refreshRegistry = (): void => {
+    registry = buildRegistry(config, providerStore);
+  };
+
+  /** Merges TOML providers with user-added stored providers. */
+  const allProviderConfigs = (): ProviderConfig[] => [
+    ...config.providers,
+    ...providerStore.resolveForGateway(),
+  ];
+
+  /** Model ids must stay unique across TOML providers and the provider store. */
+  const assertUniqueModels = (input: StoredProviderInput, skipId?: string): void => {
+    const seen = new Set<string>();
+    for (const provider of config.providers) {
+      for (const model of provider.models) seen.add(model.id);
+    }
+    for (const provider of providerStore.list()) {
+      if (skipId && provider.id === skipId) continue;
+      for (const model of provider.models) seen.add(model.id);
+    }
+    for (const model of input.models ?? []) {
+      if (seen.has(model.id)) {
+        throw GatewayError.invalidRequest(`Model is configured more than once: ${model.id}`);
+      }
+      seen.add(model.id);
+    }
+  };
 
   const app = express();
   app.use(cors(buildCorsOptions(config.corsAllowedOrigins)));
@@ -53,7 +91,52 @@ function main(): void {
   });
 
   app.get("/api/models", (_req: Request, res: Response) => {
-    res.json(buildModelsResponse(config, searchProvider));
+    res.json(buildModelsResponse(allProviderConfigs(), config.defaultModel, searchProvider));
+  });
+
+  // ============ 服务商管理（存储到服务端，密钥加密落盘） ============
+
+  app.get("/api/providers", (_req: Request, res: Response) => {
+    res.json({ providers: providerStore.list() });
+  });
+
+  app.post("/api/providers", (req: Request, res: Response) => {
+    try {
+      const input = req.body as StoredProviderInput;
+      assertUniqueModels(input);
+      const provider = providerStore.create(input);
+      refreshRegistry();
+      res.status(201).json({ provider });
+    } catch (err) {
+      sendKnownError(res, err, "Failed to create provider");
+    }
+  });
+
+  app.put("/api/providers/:id", (req: Request, res: Response) => {
+    try {
+      const id = String(req.params.id);
+      const input = req.body as StoredProviderInput;
+      assertUniqueModels(input, id);
+      const provider = providerStore.update(id, input);
+      refreshRegistry();
+      res.json({ provider });
+    } catch (err) {
+      sendKnownError(res, err, "Failed to update provider");
+    }
+  });
+
+  app.delete("/api/providers/:id", (req: Request, res: Response) => {
+    try {
+      const id = String(req.params.id);
+      const removed = providerStore.remove(id);
+      if (!removed) {
+        throw GatewayError.invalidRequest(`Provider not found: ${id}`);
+      }
+      refreshRegistry();
+      res.status(204).end();
+    } catch (err) {
+      sendKnownError(res, err, "Failed to delete provider");
+    }
   });
 
   app.post("/api/chat/completions", async (req: Request, res: Response) => {
@@ -120,6 +203,7 @@ function main(): void {
     console.log(`Chat:        http://${host}:${port}/api/chat/completions`);
     console.log(`Gateway auth: ${config.gatewayApiKey ? "enabled" : "disabled"}`);
     console.log(`Providers:   ${config.providers.map((p) => `${p.name} (${p.api})`).join(", ")}`);
+    console.log(`Provider store: ${storePath} (${providerStore.size} user-added)`);
     console.log(`Web search:  ${searchProvider ? searchProvider.name : "disabled"}`);
   });
 
@@ -154,8 +238,17 @@ function gatewayAuthMiddleware(apiKey: string) {
   };
 }
 
+function buildRegistry(config: AppConfig, providerStore: ProviderStore): ProviderRegistry {
+  const merged: AppConfig = {
+    ...config,
+    providers: [...config.providers, ...providerStore.resolveForGateway()],
+  };
+  return ProviderRegistry.fromConfig(merged);
+}
+
 function buildModelsResponse(
-  config: AppConfig,
+  providers: ProviderConfig[],
+  defaultModel: string,
   searchProvider: SearchProvider | null,
 ): {
   defaultModel: string;
@@ -166,9 +259,9 @@ function buildModelsResponse(
   }[];
 } {
   return {
-    defaultModel: config.defaultModel,
+    defaultModel,
     search: { enabled: !!searchProvider, provider: searchProvider?.name ?? "" },
-    providers: config.providers.map((provider: ProviderConfig) => ({
+    providers: providers.map((provider: ProviderConfig) => ({
       name: provider.name,
       models: provider.models,
     })),
@@ -224,6 +317,15 @@ async function pipeSseStream(
 
 function sendGatewayError(res: Response, err: GatewayError): void {
   res.status(err.status).json(err.toResponse());
+}
+
+/** Uniform error handling for the provider-management endpoints. */
+function sendKnownError(res: Response, err: unknown, fallback: string): void {
+  if (err instanceof GatewayError) {
+    return sendGatewayError(res, err);
+  }
+  console.error(`${fallback}:`, err);
+  return sendGatewayError(res, GatewayError.invalidRequest(fallback));
 }
 
 /** True when the request `tools` array declares a `web_search` function tool. */

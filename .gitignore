@@ -31,3 +31,7 @@ dist-ssr
 
 # Local provider config (contains secrets)
 apps/server/config/providers.toml
+# User-added providers stored via the settings UI (apiKeys encrypted)
+apps/server/config/providers.json
+# Auto-generated AES-256-GCM key for the provider store
+apps/server/config/.provider-store-key

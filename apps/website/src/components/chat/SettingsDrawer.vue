@@ -6,12 +6,14 @@ import {
   Info,
   Monitor,
   Moon,
+  Server,
   Settings2,
   Sun,
   Trash2,
 } from "@lucide/vue";
 import { Drawer, Segmented, Select, Upload, Button, type SelectProps } from "antdv-next";
 import { computed, ref, watch } from "vue";
+import ProviderSettings from "./ProviderSettings.vue";
 
 type ThemeMode = "system" | "light" | "dark";
 
@@ -30,12 +32,14 @@ interface Emits {
   (e: "exportHistory"): void;
   (e: "importHistory", file: File): void;
   (e: "clearHistory"): void;
+  /** 服务商增删改后触发，用于刷新模型列表 */
+  (e: "providersChanged"): void;
 }
 
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
-const activeTab = ref<"general" | "model" | "data" | "about">("general");
+const activeTab = ref<"general" | "model" | "providers" | "data" | "about">("general");
 
 const themeModeValue = computed({
   get: () => props.themeMode,
@@ -57,6 +61,7 @@ watch(
 const navItems = [
   { key: "general", label: "常规", icon: Settings2 },
   { key: "model", label: "模型", icon: CloudDownload },
+  { key: "providers", label: "服务商", icon: Server },
   { key: "data", label: "数据", icon: Database },
   { key: "about", label: "关于", icon: Info },
 ] as const;
@@ -118,6 +123,10 @@ const navItems = [
             class="w-full"
             placeholder="选择模型"
           />
+        </section>
+
+        <section v-else-if="activeTab === 'providers'" aria-label="服务商设置">
+          <ProviderSettings @changed="emit('providersChanged')" />
         </section>
 
         <section v-else-if="activeTab === 'data'" aria-label="数据设置">
