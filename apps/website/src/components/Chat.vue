@@ -19,7 +19,11 @@ import {
   isA2UISubmissionContextMessage,
   type A2UIActionPayload,
 } from "../utils/a2ui";
-import { collectFileWorkspaceState, type EditableWorkspaceFile } from "../utils/fileWorkspace";
+import {
+  collectFileWorkspaceState,
+  collectWorkspaceDiffStats,
+  type EditableWorkspaceFile,
+} from "../utils/fileWorkspace";
 import { FILE_WORKSPACE_SYSTEM_PROMPT } from "../prompts/fileWorkspace";
 import {
   createAssistantConversationSnapshot,
@@ -37,31 +41,35 @@ import ChatSidebar from "./chat/ChatSidebar.vue";
 import ChatHeader from "./chat/ChatHeader.vue";
 import ChatMessages from "./chat/ChatMessages.vue";
 import ChatInput from "./chat/ChatInput.vue";
-import FileWorkspace from "./chat/FileWorkspace.vue";
+import RightPanel from "./chat/RightPanel.vue";
+import CommandPalette from "./chat/CommandPalette.vue";
+import SettingsDrawer from "./chat/SettingsDrawer.vue";
 import DeleteConversationModal from "./chat/DeleteConversationModal.vue";
 import AssistantCenterModal from "./chat/AssistantCenterModal.vue";
 
 interface Props {
   dark: boolean;
+  /** 主题模式：跟随系统 / 浅色 / 深色 */
+  themeMode?: "system" | "light" | "dark";
 }
 
 interface Emits {
-  (e: "navigate", path: string): void;
   (e: "toggleTheme"): void;
+  (e: "themeModeChange", mode: "system" | "light" | "dark"): void;
 }
 
-defineProps<Props>();
+withDefaults(defineProps<Props>(), { themeMode: "system" });
 const emit = defineEmits<Emits>();
 
 // ============ 响应式状态 ============
 
 const content = ref("");
 const conversationsOpen = ref(true);
+const rightPanelOpen = ref(false);
 const deleteOpen = ref(false);
 const currentConversationKey = ref<string>("");
 const thinkingEnabled = ref(true);
 const fileModeEnabled = ref(false);
-const workspaceOpen = ref(false);
 const selectedWorkspacePath = ref<string[]>([]);
 const searchEnabled = ref(false);
 const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
@@ -69,9 +77,24 @@ const pendingA2UISurfaceId = ref("");
 const showWelcome = ref(true);
 const isHydrating = ref(true);
 const activeRequestConversationKey = ref<string>("");
+/** 请求开始时间，供侧栏「工作中」条目计时 */
+const requestStartedAt = ref(0);
 const draftAssistant = ref<AssistantConversationSnapshot | null>(null);
 const assistantCenterOpen = ref(false);
 const assistantCenterView = ref<"market" | "installed">("market");
+const commandPaletteOpen = ref(false);
+const settingsOpen = ref(false);
+
+// Waku 面板尺寸（sidebar 180–420，right panel 280–1000）
+/** Waku DEFAULT_SIDEBAR_WIDTH = 252，拖拽区间 SIDEBAR_MIN/MAX_WIDTH = 180 / 420 */
+const sidebarWidth = ref(252);
+const rightPanelWidth = ref(420);
+const resizing = ref<"sidebar" | "right-panel" | null>(null);
+
+// 会话历史导航（Waku header/sidebar 的 ◀ ▶）
+const historyBack = ref<string[]>([]);
+const historyForward = ref<string[]>([]);
+const historyLocked = ref(false);
 
 const assistantFromLocation = () => {
   const assistantId = new URLSearchParams(window.location.search).get("assistant");
@@ -111,6 +134,7 @@ const createNewConversation = (
     key,
     label: initialMessages.length > 0 && assistant ? assistant.name : "新对话",
     group: "今天",
+    updatedAt: Date.now(),
     messages: initialMessages,
     a2uiSubmissions: [],
     workspaceDrafts: [],
@@ -128,6 +152,7 @@ const {
   searchAvailable,
   modelDropdownItems,
   currentModelLabel,
+  modelOptions,
   reconcileCurrentModel,
   loadModels,
 } = useChatModels();
@@ -151,7 +176,7 @@ watch(
   (assistant) => {
     if (assistant?.capabilities.includes("files")) {
       fileModeEnabled.value = true;
-      workspaceOpen.value = true;
+      rightPanelOpen.value = true;
     }
   },
   { immediate: true },
@@ -179,8 +204,7 @@ const currentConversationMessages = computed<DefaultMessageInfo<XModelMessage>[]
   return conv?.messages ?? [];
 });
 
-/** Maps an assistant message id to the web-search sources attached to it.
- * Sources are stored on the assistant message's `extraInfo.webSearchResults`. */
+/** Maps an assistant message id to the web-search sources attached to it. */
 const searchResultsByMessageId = computed<Record<string, WebSearchSourceItem[]>>(() => {
   const map: Record<string, WebSearchSourceItem[]> = {};
   for (const msg of currentConversationMessages.value) {
@@ -221,6 +245,8 @@ const editableWorkspaceFiles = computed<EditableWorkspaceFile[]>(() => {
 const workspaceAvailable = computed(
   () => fileModeEnabled.value || currentFileWorkspace.value.hasWorkspace,
 );
+/** 顶栏 `+N -M`：本地草稿相对 AI 版本的真实增删行数 */
+const workspaceDiffStats = computed(() => collectWorkspaceDiffStats(editableWorkspaceFiles.value));
 
 const updateConversationMessages = (
   conversationKey: string,
@@ -231,6 +257,7 @@ const updateConversationMessages = (
   if (!conv) return;
 
   conv.messages = newMessages;
+  conv.updatedAt = Date.now();
 
   // 如果有消息，更新对话标题为首条用户消息摘要
   if (newMessages.length > 0 && conv.label === "新对话") {
@@ -266,6 +293,8 @@ const handleNewConversation = () => {
   draftAssistant.value = null;
   window.history.replaceState({}, "", "/chat");
   showWelcome.value = true;
+  historyBack.value = [];
+  historyForward.value = [];
 };
 
 const openAssistantCenter = (nextView: "market" | "installed" = "market") => {
@@ -285,14 +314,23 @@ const handleAssistantUse = (assistant: AssistantConversationSnapshot, starterPro
   content.value = starterPrompt ?? "";
   showWelcome.value = !materializeInitialAssistantConversation(assistant);
   fileModeEnabled.value = assistant.capabilities.includes("files");
-  workspaceOpen.value = fileModeEnabled.value;
+  rightPanelOpen.value = fileModeEnabled.value;
   searchEnabled.value = assistant.capabilities.includes("web-search") && searchAvailable.value;
   assistantCenterOpen.value = false;
   window.history.replaceState({}, "", "/chat");
   message.success(`已切换到「${assistant.name}」`);
 };
 
+const pushHistory = (key: string) => {
+  if (historyLocked.value) return;
+  historyBack.value.push(key);
+  historyForward.value = [];
+};
+
 const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
+  if (String(key) !== currentConversationKey.value) {
+    pushHistory(currentConversationKey.value || "");
+  }
   currentConversationKey.value = key;
   const conv = getCurrentConversation();
   if (conv) {
@@ -301,6 +339,28 @@ const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
   if (window.matchMedia("(max-width: 767px)").matches) {
     closeSidebar();
   }
+};
+
+const handleNavigateBack = () => {
+  if (historyBack.value.length === 0) return;
+  historyLocked.value = true;
+  historyForward.value.push(currentConversationKey.value);
+  const prev = historyBack.value.pop() ?? "";
+  currentConversationKey.value = prev;
+  const conv = getCurrentConversation();
+  showWelcome.value = conv ? conv.messages.length === 0 : true;
+  historyLocked.value = false;
+};
+
+const handleNavigateForward = () => {
+  if (historyForward.value.length === 0) return;
+  historyLocked.value = true;
+  historyBack.value.push(currentConversationKey.value);
+  const next = historyForward.value.pop() ?? "";
+  currentConversationKey.value = next;
+  const conv = getCurrentConversation();
+  showWelcome.value = conv ? conv.messages.length === 0 : true;
+  historyLocked.value = false;
 };
 
 const handleSidebarToggle = () => {
@@ -371,7 +431,13 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
 
 // ============ 会话持久化 ============
 
-const { applyPersistedState, schedulePersistState, handleExportLocalHistory } = useChatPersistence({
+const {
+  applyPersistedState,
+  schedulePersistState,
+  handleExportLocalHistory,
+  handleImportLocalHistory,
+  handleClearLocalHistory,
+} = useChatPersistence({
   conversationList,
   currentConversationKey,
   currentModel,
@@ -414,11 +480,14 @@ const attachPendingSearchSources = () => {
 };
 
 watch(isRequesting, (requesting) => {
-  if (!requesting) {
-    attachPendingSearchSources();
-    activeRequestConversationKey.value = "";
-    pendingA2UISurfaceId.value = "";
+  if (requesting) {
+    requestStartedAt.value = Date.now();
+    return;
   }
+  attachPendingSearchSources();
+  activeRequestConversationKey.value = "";
+  pendingA2UISurfaceId.value = "";
+  requestStartedAt.value = 0;
 });
 
 // 监听消息变化，同步到对话列表
@@ -450,7 +519,7 @@ watch(
         hasNewRevision ||
         (workspace.pending && !previousWorkspace.pending))
     ) {
-      workspaceOpen.value = true;
+      rightPanelOpen.value = true;
     }
   },
   { deep: true },
@@ -458,7 +527,7 @@ watch(
 
 const handleWorkspaceKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape") {
-    workspaceOpen.value = false;
+    commandPaletteOpen.value = false;
     deleteOpen.value = false;
   }
   if ((event.metaKey || event.ctrlKey) && event.key === "/") {
@@ -471,6 +540,7 @@ onMounted(async () => {
   window.addEventListener("keydown", handleWorkspaceKeydown);
   if (window.matchMedia("(max-width: 767px)").matches) {
     conversationsOpen.value = false;
+    rightPanelOpen.value = false;
   }
 
   const persistedState = await loadChatState();
@@ -491,7 +561,32 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleWorkspaceKeydown);
+  window.removeEventListener("mousemove", handleResizeMove);
+  window.removeEventListener("mouseup", handleResizeEnd);
 });
+
+// ============ 面板拖拽调整宽度 ============
+
+const handleResizeStart = (target: "sidebar" | "right-panel") => (event: MouseEvent) => {
+  event.preventDefault();
+  resizing.value = target;
+  window.addEventListener("mousemove", handleResizeMove);
+  window.addEventListener("mouseup", handleResizeEnd);
+};
+
+const handleResizeMove = (event: MouseEvent) => {
+  if (resizing.value === "sidebar") {
+    sidebarWidth.value = Math.min(420, Math.max(180, event.clientX));
+  } else if (resizing.value === "right-panel") {
+    rightPanelWidth.value = Math.min(1000, Math.max(280, window.innerWidth - event.clientX));
+  }
+};
+
+const handleResizeEnd = () => {
+  resizing.value = null;
+  window.removeEventListener("mousemove", handleResizeMove);
+  window.removeEventListener("mouseup", handleResizeEnd);
+};
 
 // ============ 消息转换 ============
 
@@ -654,8 +749,8 @@ const handleThinkingChange = (value: boolean) => {
 
 const handleFileModeChange = (value: boolean) => {
   fileModeEnabled.value = value;
-  if (value) workspaceOpen.value = true;
-  else if (!currentFileWorkspace.value.hasWorkspace) workspaceOpen.value = false;
+  if (value) rightPanelOpen.value = true;
+  else if (!currentFileWorkspace.value.hasWorkspace) rightPanelOpen.value = false;
 };
 
 const handleWorkspaceFileChange = (payload: { path: string; content: string }) => {
@@ -743,6 +838,8 @@ const resetAfterRemovingConversation = () => {
   setMessages([]);
   currentConversationKey.value = "";
   showWelcome.value = true;
+  historyBack.value = [];
+  historyForward.value = [];
   schedulePersistState();
 };
 
@@ -780,13 +877,21 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
   schedulePersistState();
   message.success("对话名称已更新");
 };
+
+// ============ 命令面板 / 设置 ============
+
+const handleCommandPaletteSelectConversation = (key: string) => {
+  handleActiveChange(key);
+};
 </script>
 
 <template>
   <div
-    class="chat-layout relative flex h-screen min-h-[100dvh] overflow-hidden bg-brand-background text-brand-foreground selection:bg-brand-surface-subtle selection:text-brand-foreground"
+    class="waku-chat chat-layout relative flex h-screen min-h-[100dvh] overflow-hidden bg-brand-background text-brand-foreground selection:bg-brand-surface-subtle selection:text-brand-foreground"
   >
     <a class="skip-link" href="#chat-content">跳到消息内容</a>
+
+    <!-- 移动端侧栏遮罩 -->
     <button
       v-if="conversationsOpen"
       class="sidebar-backdrop absolute inset-0 z-backdrop border-0 bg-[rgba(9,9,11,0.4)]"
@@ -794,35 +899,71 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
       aria-label="关闭对话侧栏"
       @click="closeSidebar"
     ></button>
-    <ChatSidebar
-      :open="conversationsOpen"
-      :dark="dark"
-      :conversation-list="conversationList"
-      :current-key="currentConversationKey"
-      @home="emit('navigate', '/')"
-      @toggle-sidebar="handleSidebarToggle"
-      @toggle-theme="emit('toggleTheme')"
-      @new-conversation="handleNewConversation"
-      @assistants="openAssistantCenter('market')"
-      @installed-assistants="openAssistantCenter('installed')"
-      @active-change="handleActiveChange"
-      @rename="handleSidebarRename"
-      @pin="handlePinConversation"
-      @archive="handleArchiveConversation"
-      @delete="handleDeleteConversation"
-    />
 
+    <!-- Waku 左侧栏：可拖拽宽度，收起 / 展开有滑动动画 -->
+    <div
+      class="sidebar-shell relative flex h-full flex-none"
+      :class="{
+        'sidebar-shell-open': conversationsOpen,
+        'sidebar-shell-resizing': resizing === 'sidebar',
+      }"
+      :style="{ width: (conversationsOpen ? sidebarWidth : 0) + 'px' }"
+    >
+      <!-- 收起动画期间内容保持固定宽度，从右侧被裁掉而不是被压扁换行 -->
+      <div class="sidebar-clip h-full w-full overflow-hidden">
+        <div class="h-full" :style="{ width: sidebarWidth + 'px' }">
+          <ChatSidebar
+            :open="conversationsOpen"
+            :conversation-list="conversationList"
+            :current-key="currentConversationKey"
+            :can-go-back="historyBack.length > 0"
+            :can-go-forward="historyForward.length > 0"
+            :busy-key="isRequesting ? activeRequestConversationKey : ''"
+            :busy-since="requestStartedAt"
+            :dark="dark"
+            @toggle-sidebar="handleSidebarToggle"
+            @toggle-theme="emit('toggleTheme')"
+            @new-conversation="handleNewConversation"
+            @open-search="commandPaletteOpen = true"
+            @open-settings="settingsOpen = true"
+            @navigate-back="handleNavigateBack"
+            @navigate-forward="handleNavigateForward"
+            @active-change="handleActiveChange"
+            @rename="handleSidebarRename"
+            @pin="handlePinConversation"
+            @archive="handleArchiveConversation"
+            @delete="handleDeleteConversation"
+          />
+        </div>
+      </div>
+      <button
+        v-if="conversationsOpen"
+        type="button"
+        class="absolute top-0 right-[-3px] z-10 h-full w-[6px] cursor-col-resize border-0 bg-transparent p-0 hover:bg-brand-resize"
+        :class="{ 'bg-brand-resize': resizing === 'sidebar' }"
+        aria-label="调整侧边栏宽度"
+        @mousedown="handleResizeStart('sidebar')"
+      ></button>
+    </div>
+
+    <!-- 主区 -->
     <div class="chat-main flex min-w-0 flex-1 flex-col overflow-hidden bg-brand-workspace">
       <ChatHeader
         :title="currentConversationTitle"
         :sidebar-open="conversationsOpen"
-        :workspace-available="workspaceAvailable"
-        :workspace-open="workspaceOpen"
+        :right-panel-open="rightPanelOpen"
+        :right-panel-available="workspaceAvailable"
         :syncing="isRequesting"
         :assistant-name="activeAssistant?.name"
         :assistant-version="activeAssistant?.version"
+        :can-go-back="historyBack.length > 0"
+        :can-go-forward="historyForward.length > 0"
+        :diff-added="workspaceDiffStats.added"
+        :diff-removed="workspaceDiffStats.removed"
         @toggle-sidebar="handleSidebarToggle"
-        @toggle-workspace="workspaceOpen = !workspaceOpen"
+        @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
+        @navigate-back="handleNavigateBack"
+        @navigate-forward="handleNavigateForward"
         @export="handleExportLocalHistory"
         @rename="handleRenameConversation"
         @pin="handlePinConversation"
@@ -830,17 +971,22 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
         @delete="deleteOpen = true"
       />
 
-      <ChatMessages
-        :show-welcome="showWelcome && currentConversationMessages.length === 0"
-        :bubble-items="bubbleItems"
-        :dark="dark"
-        :conversation-key="currentConversationKey"
-        :a2ui-pending-surface-id="pendingA2UISurfaceId"
-        :a2ui-submissions="currentA2UISubmissions"
-        :search-results-by-message-id="searchResultsByMessageId"
-        @a2ui-action="handleA2UIAction"
-        @reload="handleReloadMessage"
-      />
+      <!-- 消息区 -->
+      <div class="relative min-h-0 flex-1 overflow-hidden">
+        <ChatMessages
+          :show-welcome="showWelcome && currentConversationMessages.length === 0"
+          :bubble-items="bubbleItems"
+          :dark="dark"
+          :conversation-key="currentConversationKey"
+          :starter-prompts="activeStarterPrompts"
+          :a2ui-pending-surface-id="pendingA2UISurfaceId"
+          :a2ui-submissions="currentA2UISubmissions"
+          :search-results-by-message-id="searchResultsByMessageId"
+          @a2ui-action="handleA2UIAction"
+          @reload="handleReloadMessage"
+          @prompt-click="handlePromptClick"
+        />
+      </div>
 
       <ChatInput
         v-model="content"
@@ -852,8 +998,6 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
         :file-mode-enabled="fileModeEnabled"
         :search-enabled="searchEnabled"
         :search-available="searchAvailable"
-        :show-starter-prompts="showWelcome && currentConversationMessages.length === 0"
-        :starter-prompts="activeStarterPrompts"
         :assistant-name="activeAssistant?.name"
         @change="handleChange"
         @cancel="handleCancel"
@@ -862,27 +1006,41 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
         @thinking-change="handleThinkingChange"
         @file-mode-change="handleFileModeChange"
         @search-change="handleSearchChange"
-        @prompt-click="handlePromptClick"
         @assistant-select="openAssistantCenter('market')"
       />
     </div>
 
-    <FileWorkspace
-      :open="workspaceOpen"
-      :files="editableWorkspaceFiles"
-      :pending="
-        isRequesting &&
-        fileModeEnabled &&
-        (currentFileWorkspace.pending || currentFileWorkspace.files.length === 0)
-      "
-      :dark="dark"
-      :selected-path="selectedWorkspacePath"
-      @close="workspaceOpen = false"
-      @update:selected-path="selectedWorkspacePath = $event"
-      @file-change="handleWorkspaceFileChange"
-      @reset-file="clearWorkspaceDraft($event, '已恢复 AI 版本')"
-      @accept-incoming="clearWorkspaceDraft($event, '已采用 AI 新版本')"
-    />
+    <!-- Waku 右侧面板：可拖拽宽度 -->
+    <div
+      v-if="rightPanelOpen"
+      class="right-panel-shell relative flex h-full flex-none"
+      :class="{ 'right-panel-shell-open': rightPanelOpen }"
+      :style="{ width: rightPanelWidth + 'px' }"
+    >
+      <button
+        type="button"
+        class="absolute top-0 left-[-3px] z-10 h-full w-[6px] cursor-col-resize border-0 bg-transparent p-0 hover:bg-brand-resize"
+        :class="{ 'bg-brand-resize': resizing === 'right-panel' }"
+        aria-label="调整右侧面板宽度"
+        @mousedown="handleResizeStart('right-panel')"
+      ></button>
+      <RightPanel
+        :open="true"
+        :dark="dark"
+        :files="editableWorkspaceFiles"
+        :workspace-pending="
+          isRequesting &&
+          fileModeEnabled &&
+          (currentFileWorkspace.pending || currentFileWorkspace.files.length === 0)
+        "
+        :selected-path="selectedWorkspacePath"
+        @update:open="rightPanelOpen = $event"
+        @update:selected-path="selectedWorkspacePath = $event"
+        @file-change="handleWorkspaceFileChange"
+        @reset-file="clearWorkspaceDraft($event, '已恢复 AI 版本')"
+        @accept-incoming="clearWorkspaceDraft($event, '已采用 AI 新版本')"
+      />
+    </div>
 
     <DeleteConversationModal v-model:open="deleteOpen" @confirm="handleDeleteConversation" />
     <AssistantCenterModal
@@ -891,6 +1049,35 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
       :initial-view="assistantCenterView"
       @close="assistantCenterOpen = false"
       @use="handleAssistantUse"
+    />
+
+    <CommandPalette
+      :open="commandPaletteOpen"
+      :conversation-list="conversationList"
+      :dark="dark"
+      @update:open="commandPaletteOpen = $event"
+      @new-conversation="handleNewConversation"
+      @open-settings="settingsOpen = true"
+      @toggle-theme="emit('toggleTheme')"
+      @toggle-sidebar="handleSidebarToggle"
+      @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
+      @export-history="handleExportLocalHistory"
+      @clear-history="handleClearLocalHistory"
+      @select-conversation="handleCommandPaletteSelectConversation"
+    />
+
+    <SettingsDrawer
+      :open="settingsOpen"
+      :dark="dark"
+      :theme-mode="themeMode"
+      :current-model="currentModel"
+      :model-options="modelOptions"
+      @update:open="settingsOpen = $event"
+      @theme-mode-change="emit('themeModeChange', $event)"
+      @model-change="handleModelChange"
+      @export-history="handleExportLocalHistory"
+      @import-history="handleImportLocalHistory"
+      @clear-history="handleClearLocalHistory"
     />
   </div>
 </template>
@@ -901,6 +1088,14 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
   display: none;
 }
 
+/* 桌面端收起 / 展开：宽度过渡；拖拽调宽时禁掉过渡，否则手柄跟不上鼠标 */
+.chat-layout > .sidebar-shell {
+  transition: width 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+.chat-layout > .sidebar-shell.sidebar-shell-resizing {
+  transition: none;
+}
+
 @media (max-width: 767px) {
   .sidebar-backdrop {
     display: block;
@@ -908,6 +1103,43 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
 
   .chat-main {
     width: 100%;
+  }
+
+  /* 移动端侧栏变为覆盖式抽屉；宽度压住行内样式，收起时才有完整的滑出动画 */
+  .chat-layout > .sidebar-shell {
+    position: fixed;
+    z-index: var(--z-sidebar);
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(300px, 86vw) !important;
+    height: 100dvh;
+    box-shadow: 18px 0 46px rgba(9, 9, 11, 0.18);
+    transition: transform 220ms ease;
+    transform: translateX(-104%);
+  }
+  .chat-layout > .sidebar-shell.sidebar-shell-open {
+    transform: translateX(0);
+  }
+  /* 抽屉宽度由 shell 决定，内层固定宽度只服务于桌面端裁切动画 */
+  .chat-layout > .sidebar-shell .sidebar-clip > div {
+    width: 100% !important;
+  }
+
+  /* 移动端右侧面板同样覆盖 */
+  .chat-layout > .right-panel-shell {
+    position: fixed;
+    z-index: var(--z-sidebar);
+    top: 0;
+    right: 0;
+    bottom: 0;
+    height: 100dvh;
+    box-shadow: -18px 0 46px rgba(9, 9, 11, 0.18);
+    transition: transform 220ms ease;
+    transform: translateX(104%);
+  }
+  .chat-layout > .right-panel-shell.right-panel-shell-open {
+    transform: translateX(0);
   }
 }
 </style>

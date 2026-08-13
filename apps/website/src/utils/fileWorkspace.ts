@@ -21,6 +21,41 @@ export interface EditableWorkspaceFile extends WorkspaceFile {
   hasIncomingChange: boolean;
 }
 
+export interface WorkspaceDiffStats {
+  added: number;
+  removed: number;
+}
+
+/**
+ * 顶栏 `+N -M` 的数据源：把每个 dirty 文件按行做多重集比较，
+ * 本地草稿多出的行算新增、AI 版本里消失的行算删除（同一行内容的顺序变化不计）。
+ */
+export function collectWorkspaceDiffStats(
+  files: readonly Pick<EditableWorkspaceFile, "content" | "originalContent" | "dirty">[],
+): WorkspaceDiffStats {
+  let added = 0;
+  let removed = 0;
+
+  for (const file of files) {
+    if (!file.dirty) continue;
+
+    const counts = new Map<string, number>();
+    for (const line of file.originalContent.split("\n")) {
+      counts.set(line, (counts.get(line) ?? 0) + 1);
+    }
+    for (const line of file.content.split("\n")) {
+      const remaining = counts.get(line) ?? 0;
+      if (remaining > 0) counts.set(line, remaining - 1);
+      else added += 1;
+    }
+    for (const remaining of counts.values()) {
+      removed += remaining;
+    }
+  }
+
+  return { added, removed };
+}
+
 export function isValidWorkspaceFileDraft(value: unknown): value is WorkspaceFileDraft {
   if (!value || typeof value !== "object") return false;
   const draft = value as Partial<WorkspaceFileDraft>;

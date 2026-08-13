@@ -72,7 +72,11 @@ export default defineConfig({
           DEFAULT: "var(--brand-danger)",
           subtle: "var(--brand-danger-subtle)",
         },
+        success: "var(--brand-success)",
         ring: "var(--brand-ring)",
+        accent: "var(--brand-accent)",
+        resize: "var(--brand-resize)",
+        gauge: "var(--brand-gauge)",
       },
     },
     boxShadow: {

@@ -88,6 +88,9 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
           key: String(conversation.key),
           label: normalizedLabel,
           group: normalizedGroup,
+          ...(typeof conversation.updatedAt === "number"
+            ? { updatedAt: conversation.updatedAt }
+            : {}),
           messages: normalizedMessages,
           a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
             ? conversation.a2uiSubmissions

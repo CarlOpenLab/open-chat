@@ -26,6 +26,8 @@ interface Props {
   pending?: boolean;
   dark: boolean;
   selectedPath?: string[];
+  /** 嵌入右侧面板时省略外层 aside/头部/遮罩，只渲染浏览器主体 */
+  embedded?: boolean;
 }
 
 interface Emits {
@@ -43,6 +45,7 @@ interface MutableTreeNode extends FolderTreeData {
 const props = withDefaults(defineProps<Props>(), {
   pending: false,
   selectedPath: () => [],
+  embedded: false,
 });
 const emit = defineEmits<Emits>();
 const markdownView = ref<"edit" | "preview">("edit");
@@ -133,7 +136,70 @@ const downloadSelectedFile = () => {
 </script>
 
 <template>
+  <!-- 嵌入模式：外层布局（aside / 头部 / 遮罩）由 RightPanel 提供 -->
+  <template v-if="embedded">
+    <div v-if="files.length" class="workspace-browser h-full min-h-0 flex-1 overflow-hidden">
+      <Folder
+        :key="directoryTreeWidth"
+        :tree-data="treeData"
+        :selected-file="selectedPath"
+        :directory-tree-with="directoryTreeWidth"
+        :default-expand-all="true"
+        @selected-file-change="emit('update:selectedPath', $event.path)"
+      >
+        <template #directoryTitle>文件</template>
+        <template #previewTitle="{ title, path }">
+          <WorkspacePreviewTitle
+            v-model:view="markdownView"
+            :title="title"
+            :file="files.find((item) => item.path === path.join('/'))"
+            :markdown="isMarkdownFile(files.find((item) => item.path === path.join('/'))!)"
+            @copy="copySelectedFile"
+          />
+        </template>
+        <template #previewRender="{ file }">
+          <div v-if="resolvePreviewFile(file)" class="flex h-full min-h-0 w-full flex-col">
+            <div class="min-h-0 flex-1 overflow-auto">
+              <XMarkdown
+                v-if="isMarkdownFile(resolvePreviewFile(file)!) && markdownView === 'preview'"
+                :content="resolvePreviewFile(file)?.content ?? ''"
+                :components="markdownComponents"
+                :class-name="markdownClassName"
+                :escape-raw-html="true"
+                :open-links-in-new-tab="true"
+              />
+              <WorkspaceCodeEditor
+                v-else
+                :model-value="resolvePreviewFile(file)?.content ?? ''"
+                :language="resolvePreviewFile(file)?.language ?? file.language"
+                :dark="dark"
+                :read-only="resolvePreviewFile(file)?.status === 'streaming'"
+                @update:model-value="
+                  emit('fileChange', {
+                    path: resolvePreviewFile(file)!.path,
+                    content: $event,
+                  })
+                "
+              />
+            </div>
+          </div>
+        </template>
+      </Folder>
+    </div>
+
+    <div
+      v-else
+      class="grid min-h-0 flex-1 place-content-center justify-items-center gap-[10px] text-[11px] text-brand-muted"
+      role="status"
+    >
+      <LoaderCircle v-if="pending" class="workspace-spinner !h-5 !w-5" />
+      <FileText v-else class="!h-5 !w-5" />
+      <span>{{ pending ? "正在生成文件" : "暂无文件" }}</span>
+    </div>
+  </template>
+
   <aside
+    v-else
     class="file-workspace relative z-24 flex h-[100dvh] flex-col overflow-hidden border-l-solid border-l-brand-border bg-brand-sidebar [transition:width_220ms_ease,min-width_220ms_ease,opacity_180ms_ease,transform_220ms_ease]"
     :class="
       open
@@ -215,7 +281,7 @@ const downloadSelectedFile = () => {
   </aside>
 
   <button
-    v-if="open"
+    v-if="!embedded && open"
     class="workspace-scrim hidden"
     type="button"
     aria-label="关闭文件工作区"

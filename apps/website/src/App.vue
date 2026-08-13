@@ -12,8 +12,6 @@ import {
 } from "vue";
 import { shadcnDarkTheme, shadcnTheme } from "./theme/shadcnTheme";
 
-const LandingPage = defineAsyncComponent(() => import("./pages/LandingPage.vue"));
-const AuthPage = defineAsyncComponent(() => import("./pages/AuthPage.vue"));
 const Chat = defineAsyncComponent(() => import("./components/Chat.vue"));
 const AssistantMarketPage = defineAsyncComponent(() => import("./pages/AssistantMarketPage.vue"));
 const CodeHighlightDemoPage = defineAsyncComponent(
@@ -93,28 +91,35 @@ const zhCN: XProviderProps["locale"] = {
 const localeType = ref<"zh" | "en">("zh");
 const getLocationPath = () => window.location.pathname + window.location.search;
 const route = ref(getLocationPath());
+
+// ============ 主题：跟随系统 / 浅色 / 深色 ============
+type ThemeMode = "system" | "light" | "dark";
+
+// 历史版本只存过 "dark" / "light"，其余值（含未设置）都按跟随系统处理
 const storedTheme = localStorage.getItem("open-chat-theme");
-const dark = ref(
-  storedTheme ? storedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches,
+const themeMode = ref<ThemeMode>(
+  storedTheme === "dark" || storedTheme === "light" ? storedTheme : "system",
+);
+const systemDarkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const systemDark = ref(systemDarkQuery.matches);
+const handleSystemThemeChange = (event: MediaQueryListEvent) => {
+  systemDark.value = event.matches;
+};
+const dark = computed(() =>
+  themeMode.value === "system" ? systemDark.value : themeMode.value === "dark",
 );
 
 const locale = computed<XProviderProps["locale"]>(() => {
   return localeType.value === "zh" ? zhCN : enUS;
 });
 const appTheme = computed(() => (dark.value ? shadcnDarkTheme : shadcnTheme));
-const currentPage = computed<"landing" | "auth" | "chat" | "assistants" | "code-highlight-demo">(
-  () => {
-    if (route.value.startsWith("/auth")) return "auth";
-    if (route.value.startsWith("/chat")) return "chat";
-    if (route.value.startsWith("/assistants")) return "assistants";
-    if (route.value.startsWith("/code-highlight-demo")) return "code-highlight-demo";
-    return "landing";
-  },
-);
+const currentPage = computed<"chat" | "assistants" | "code-highlight-demo">(() => {
+  if (route.value.startsWith("/assistants")) return "assistants";
+  if (route.value.startsWith("/code-highlight-demo")) return "code-highlight-demo";
+  return "chat";
+});
 const currentComponent = computed(() => {
   const pages = {
-    landing: LandingPage,
-    auth: AuthPage,
     chat: Chat,
     assistants: AssistantMarketPage,
     "code-highlight-demo": CodeHighlightDemoPage,
@@ -128,8 +133,6 @@ const focusMainContent = async () => {
   if (focusTimer) window.clearTimeout(focusTimer);
   const page = currentPage.value;
   const selector = {
-    landing: "#main",
-    auth: ".auth-page",
     chat: "#chat-content",
     assistants: "#assistant-market-content",
     "code-highlight-demo": "#code-highlight-demo",
@@ -161,15 +164,23 @@ const navigate = (path: string) => {
   void focusMainContent();
 };
 
-const toggleTheme = () => {
-  dark.value = !dark.value;
+const setThemeMode = (mode: ThemeMode) => {
+  themeMode.value = mode;
 };
+
+// 命令面板等处的「切换主题」：从当前实际明暗翻转成显式模式
+const toggleTheme = () => {
+  themeMode.value = dark.value ? "light" : "dark";
+};
+
+watch(themeMode, (mode) => {
+  localStorage.setItem("open-chat-theme", mode);
+});
 
 watch(
   dark,
   (value) => {
     document.documentElement.dataset.theme = value ? "dark" : "light";
-    localStorage.setItem("open-chat-theme", value ? "dark" : "light");
   },
   { immediate: true },
 );
@@ -178,8 +189,6 @@ watch(
   currentPage,
   (page) => {
     const titles = {
-      landing: "Open Chat · AI Chat Workspace",
-      auth: "登录 · Open Chat",
       chat: "工作区 · Open Chat",
       assistants: "助手市场 · Open Chat",
       "code-highlight-demo": "代码高亮 Demo · Open Chat",
@@ -189,9 +198,13 @@ watch(
   { immediate: true },
 );
 
-onMounted(() => window.addEventListener("popstate", syncRoute));
+onMounted(() => {
+  window.addEventListener("popstate", syncRoute);
+  systemDarkQuery.addEventListener("change", handleSystemThemeChange);
+});
 onBeforeUnmount(() => {
   window.removeEventListener("popstate", syncRoute);
+  systemDarkQuery.removeEventListener("change", handleSystemThemeChange);
   if (focusTimer) window.clearTimeout(focusTimer);
 });
 </script>
@@ -202,9 +215,16 @@ onBeforeUnmount(() => {
       <component
         :is="currentComponent"
         :dark="dark"
-        v-bind="currentPage === 'assistants' ? { routePath: route } : {}"
-        @navigate="navigate"
+        v-bind="
+          currentPage === 'assistants'
+            ? { routePath: route }
+            : currentPage === 'chat'
+              ? { themeMode }
+              : {}
+        "
+        @navigate="currentPage === 'assistants' ? navigate : undefined"
         @toggle-theme="toggleTheme"
+        @theme-mode-change="setThemeMode"
       />
       <template #fallback>
         <main

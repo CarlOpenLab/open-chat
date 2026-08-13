@@ -1,20 +1,9 @@
 <script setup lang="ts">
 import { Sender } from "@antdv-next/x";
-import {
-  AudioLines,
-  BrainCircuit,
-  ChevronDown,
-  FolderOpen,
-  Globe2,
-  SlidersHorizontal,
-  Square,
-  Sparkles,
-} from "@lucide/vue";
-import { Badge, Button, Dropdown, Popover, Tooltip, message, type MenuProps } from "antdv-next";
-import { computed, ref } from "vue";
-import type { AssistantStarterPrompt } from "../../features/assistant-market/types";
-import ComposerToolsMenu from "./ComposerToolsMenu.vue";
-import StarterPrompts from "./StarterPrompts.vue";
+import { BrainCircuit, ChevronDown, Cpu, FolderOpen, Globe2, Square } from "@lucide/vue";
+import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
+import { computed, ref, watch } from "vue";
+import ModelIcon from "../Icons/ModelIcon.vue";
 
 interface Props {
   modelValue: string;
@@ -26,8 +15,6 @@ interface Props {
   fileModeEnabled: boolean;
   searchEnabled: boolean;
   searchAvailable: boolean;
-  showStarterPrompts: boolean;
-  starterPrompts?: AssistantStarterPrompt[];
   assistantName?: string;
 }
 
@@ -40,14 +27,11 @@ interface Emits {
   (e: "thinkingChange", value: boolean): void;
   (e: "fileModeChange", value: boolean): void;
   (e: "searchChange", value: boolean): void;
-  (e: "promptClick", info: { data: { key: string; description: string } }): void;
   (e: "assistantSelect"): void;
 }
 
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
-const toolsOpen = ref(false);
-const voiceActive = ref(false);
 
 const modelMenu = computed<MenuProps>(() => ({
   items: props.modelItems,
@@ -55,11 +39,44 @@ const modelMenu = computed<MenuProps>(() => ({
   onClick: ({ key }) => emit("modelChange", String(key)),
 }));
 
-const activeTools = computed(() => [
-  ...(props.searchEnabled ? [{ key: "search", label: "联网搜索", icon: Globe2 }] : []),
-  ...(props.thinkingEnabled ? [{ key: "reason", label: "深度思考", icon: BrainCircuit }] : []),
-  ...(props.fileModeEnabled ? [{ key: "files", label: "文件", icon: FolderOpen }] : []),
-]);
+/** 模型图标：只有确实认得的模型才用品牌图标，其余用通用字形，避免张冠李戴。 */
+const brandedModel = computed(() => (/qwen/i.test(props.currentModel) ? "qwen" : ""));
+
+/**
+ * 推理强度：Waku 的「高」chip。底层仍是 useXChat 的 enable_thinking 布尔值，
+ * 高/中映射为开启、低为关闭；本地记住具体档位以便再次展开时回显。
+ */
+type ReasoningLevel = "high" | "medium" | "low";
+
+const REASONING_LABEL: Record<ReasoningLevel, string> = {
+  high: "高",
+  medium: "中",
+  low: "低",
+};
+
+const reasoningLevel = ref<ReasoningLevel>(props.thinkingEnabled ? "high" : "low");
+
+watch(
+  () => props.thinkingEnabled,
+  (enabled) => {
+    // 父级把开关关掉时降到「低」；重新打开时恢复到上次的高/中档位
+    if (!enabled) reasoningLevel.value = "low";
+    else if (reasoningLevel.value === "low") reasoningLevel.value = "high";
+  },
+);
+
+const reasoningMenu = computed<MenuProps>(() => ({
+  items: (["high", "medium", "low"] as ReasoningLevel[]).map((level) => ({
+    key: level,
+    label: REASONING_LABEL[level],
+  })),
+  selectedKeys: [reasoningLevel.value],
+  onClick: ({ key }) => {
+    const level = String(key) as ReasoningLevel;
+    reasoningLevel.value = level;
+    emit("thinkingChange", level !== "low");
+  },
+}));
 
 const handleChange = (value: string) => {
   emit("update:modelValue", value);
@@ -72,245 +89,175 @@ const handleSubmit = (value: string) => {
   emit("submit", prompt);
 };
 
-const toggleVoice = () => {
-  voiceActive.value = !voiceActive.value;
-  message.info(voiceActive.value ? "正在聆听" : "语音输入已停止");
-};
+const chipClass = (active: boolean) =>
+  [
+    "flex h-[24px] flex-none items-center gap-[6px] rounded-[6px] border-0 px-[7px] text-[11.5px] leading-[14px] cursor-pointer transition-colors duration-150",
+    active
+      ? "bg-brand-surface-subtle text-brand-foreground"
+      : "bg-transparent text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground",
+  ].join(" ");
 </script>
 
 <template>
   <section
-    class="chat-footer relative z-12 pt-[26px] px-[max(24px,calc((100%_-_780px)/2))] pb-[max(8px,env(safe-area-inset-bottom))] bg-[linear-gradient(to_bottom,transparent_0,var(--brand-workspace)_32px,var(--brand-workspace)_100%)] lt-md:px-[18px] lt-sm:px-[10px]"
+    class="chat-footer relative z-12 pt-[20px] px-[max(20px,calc((100%_-_720px)/2))] pb-[max(16px,env(safe-area-inset-bottom))] bg-[linear-gradient(to_bottom,transparent_0,var(--brand-workspace)_32px,var(--brand-workspace)_100%)] lt-md:px-[18px] lt-sm:px-[10px]"
     aria-label="消息输入区"
   >
-    <StarterPrompts
-      v-if="showStarterPrompts && !loading"
-      :items="starterPrompts"
-      @prompt-click="emit('promptClick', $event)"
-    />
-
     <Sender
       :value="modelValue"
       :loading="loading"
-      placeholder="向 Open Chat 发送消息"
+      placeholder="做什么都可以..."
       :on-cancel="() => emit('cancel')"
       :on-change="handleChange"
       :on-submit="handleSubmit"
       :suffix="false"
     >
       <template #footer="{ defaultNode }">
-        <div class="flex w-full min-h-[34px] items-center justify-between gap-3">
-          <div class="composer-tools flex items-center gap-[3px] lt-sm:gap-0">
-            <Tooltip :title="props.assistantName ? `助手：${props.assistantName}` : '选择助手'">
-              <Button
-                type="text"
-                shape="circle"
-                class="assistant-picker-button"
-                :class="{ 'tool-active': props.assistantName }"
-                :aria-label="props.assistantName ? `当前助手：${props.assistantName}` : '选择助手'"
-                @click="emit('assistantSelect')"
+        <div class="flex min-h-[26px] w-full items-center justify-between gap-3">
+          <!-- Waku composer 左排：能力 chips（深度思考 / 联网搜索 / 文件） -->
+          <div class="flex min-w-0 items-center gap-[3px]">
+            <Dropdown :menu="reasoningMenu" :trigger="['click']" placement="topLeft">
+              <button
+                type="button"
+                :class="chipClass(thinkingEnabled)"
+                :aria-label="`推理强度：${REASONING_LABEL[reasoningLevel]}`"
+                title="推理强度"
               >
-                <Sparkles />
-              </Button>
+                <BrainCircuit class="!h-[12px] !w-[12px] flex-none" />
+                <span>{{ REASONING_LABEL[reasoningLevel] }}</span>
+              </button>
+            </Dropdown>
+            <Tooltip v-if="searchAvailable" title="联网搜索">
+              <button
+                type="button"
+                :class="chipClass(searchEnabled)"
+                :aria-pressed="searchEnabled"
+                aria-label="联网搜索"
+                @click="emit('searchChange', !searchEnabled)"
+              >
+                <Globe2 class="!h-[12px] !w-[12px] flex-none" />
+                <span class="lt-sm:hidden">搜索</span>
+              </button>
             </Tooltip>
-            <Popover v-model:open="toolsOpen" placement="topLeft" :arrow="false" trigger="click">
-              <template #content>
-                <ComposerToolsMenu
-                  :search-available="props.searchAvailable"
-                  :search-enabled="props.searchEnabled"
-                  :thinking-enabled="thinkingEnabled"
-                  :file-mode-enabled="fileModeEnabled"
-                  @search-change="emit('searchChange', $event)"
-                  @thinking-change="emit('thinkingChange', $event)"
-                  @file-mode-change="emit('fileModeChange', $event)"
-                />
-              </template>
-              <Tooltip title="工具">
-                <Badge
-                  :count="activeTools.length"
-                  :offset="[-4, 4]"
-                  class="tools-badge inline-flex"
-                >
-                  <Button
-                    type="text"
-                    shape="circle"
-                    aria-label="选择工具"
-                    :aria-expanded="toolsOpen"
-                    :class="{ 'tool-active': activeTools.length > 0 }"
-                    ><SlidersHorizontal
-                  /></Button>
-                </Badge>
-              </Tooltip>
-            </Popover>
+            <Tooltip v-if="fileModeEnabled" title="文件工作区">
+              <button
+                type="button"
+                :class="chipClass(fileModeEnabled)"
+                :aria-pressed="fileModeEnabled"
+                aria-label="文件工作区"
+                @click="emit('fileModeChange', !fileModeEnabled)"
+              >
+                <FolderOpen class="!h-[12px] !w-[12px] flex-none" />
+                <span class="lt-sm:hidden">文件</span>
+              </button>
+            </Tooltip>
           </div>
 
-          <div class="flex items-center gap-[3px] lt-sm:gap-0">
+          <!-- Waku composer 右排：模型选择 + 发送 / 停止（圆形 26px，有内容时 inverse 填充） -->
+          <div class="flex min-w-0 flex-none items-center gap-[6px]">
             <Dropdown :menu="modelMenu" :trigger="['click']" placement="topRight">
               <button
                 type="button"
-                class="flex min-h-[32px] items-center gap-[5px] py-0 px-2 border-0 rounded-[5px] bg-transparent text-brand-muted text-[10px] font-600 cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground lt-md:min-h-[44px] lt-sm:max-w-[104px] lt-sm:px-[5px]"
+                :class="chipClass(false)"
+                aria-label="选择模型"
+                :title="assistantName ? `助手：${assistantName}` : undefined"
               >
-                <span class="lt-sm:truncate">{{ currentModelLabel || "选择模型" }}</span
-                ><ChevronDown class="w-3 h-3" />
+                <ModelIcon v-if="brandedModel" :model="brandedModel" :size="13" />
+                <Cpu v-else class="!h-[12px] !w-[12px] flex-none text-brand-muted-strong" />
+                <span class="max-w-[180px] truncate lt-sm:max-w-[120px]">{{
+                  currentModelLabel || "选择模型"
+                }}</span>
+                <ChevronDown class="!h-3 !w-3 flex-none text-brand-muted-strong" />
               </button>
             </Dropdown>
-            <Tooltip :title="voiceActive ? '停止语音输入' : '语音输入'">
+            <component v-if="!loading" :is="defaultNode" />
+            <Tooltip v-else title="停止生成">
               <button
                 type="button"
-                class="grid w-[34px] h-[34px] place-items-center p-0 border-0 rounded-md cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground lt-md:w-[44px] lt-md:min-w-[44px] lt-md:h-[44px] lt-md:flex-[0_0_44px] lt-sm:hidden"
-                :class="
-                  voiceActive
-                    ? 'bg-brand-surface-subtle text-brand-foreground'
-                    : 'bg-transparent text-brand-muted'
-                "
-                aria-label="语音输入"
-                @click="toggleVoice"
-              >
-                <AudioLines class="w-[15px] h-[15px]" />
-              </button>
-            </Tooltip>
-            <Tooltip v-if="loading" title="停止生成">
-              <button
-                type="button"
-                class="grid w-[34px] h-[34px] place-items-center p-0 border-0 rounded-md cursor-pointer bg-brand-primary text-brand-primary-foreground lt-md:w-[44px] lt-md:min-w-[44px] lt-md:h-[44px] lt-md:flex-[0_0_44px]"
+                class="grid h-[26px] w-[26px] place-items-center rounded-full border-0 bg-brand-surface-subtle p-0 text-brand-foreground cursor-pointer hover:bg-brand-danger-subtle"
                 aria-label="停止生成"
                 @click="emit('cancel')"
               >
-                <Square class="w-3 h-3 fill-current" />
+                <Square class="!h-[11px] !w-[11px] fill-current" />
               </button>
             </Tooltip>
-            <component v-else :is="defaultNode" />
           </div>
         </div>
       </template>
     </Sender>
-    <p class="mt-[6px] mx-auto mb-0 text-brand-muted text-[9px] text-center">
-      Open Chat 可能会出错，请核查重要信息。
-    </p>
   </section>
 </template>
 
 <style scoped>
-/* 以下均为 :deep() 覆盖 antd / antd-x 内部类，按迁移规范保留在 scoped CSS 中 */
-
-/* 工具按钮角标：count=0 时自动隐藏 */
-.composer-tools :deep(.tools-badge .ant-badge-count) {
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--brand-primary);
-  color: var(--brand-primary-foreground);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 16px;
-}
+/* 保留原因：以下均为 :deep() 覆盖 antd / antd-x 内部类，按迁移规范保留在 scoped CSS 中 */
 .chat-footer :deep(.antd-sender) {
   width: 100%;
-  max-width: 780px;
+  max-width: 720px;
   margin: 0 auto;
 }
 .chat-footer :deep(.antd-sender-main) {
   min-height: 96px;
   padding: 0;
-  border: 1px solid var(--brand-border-strong);
-  border-radius: 8px;
-  background: var(--brand-surface);
-  box-shadow:
-    0 10px 34px rgba(9, 9, 11, 0.09),
-    0 1px 4px rgba(9, 9, 11, 0.04);
-  transition:
-    border-color 160ms ease,
-    box-shadow 160ms ease;
+  /* Waku composer 卡片：圆角 13px，border，composer 底色，无重阴影 */
+  border: 1px solid var(--brand-border);
+  border-radius: 13px;
+  background: var(--brand-composer);
+  /* Waku 的 composer 卡片没有投影，只有 1px border */
+  box-shadow: none;
+  transition: border-color 160ms ease;
 }
 .chat-footer :deep(.antd-sender-main:focus-within) {
-  border-color: var(--brand-foreground);
-  box-shadow:
-    0 0 0 1px var(--brand-foreground),
-    0 10px 34px rgba(9, 9, 11, 0.09);
+  border-color: var(--brand-border-strong);
 }
 .chat-footer :deep(.antd-sender-content) {
   min-height: 50px;
   align-items: flex-start;
-  padding: 12px 12px 2px;
+  padding: 10px 10px 2px;
 }
 .chat-footer :deep(.antd-sender-footer) {
-  min-height: 44px;
-  padding: 0 12px 10px;
+  min-height: 32px;
+  padding: 0 10px 10px;
 }
 .chat-footer :deep(textarea) {
   max-height: 152px;
   min-height: 36px;
   color: var(--brand-foreground);
-  caret-color: var(--brand-foreground);
-  font-size: 13px;
-  line-height: 1.65;
+  caret-color: var(--brand-accent);
+  font-size: 13.5px;
+  line-height: 21px;
 }
 .chat-footer :deep(textarea::placeholder) {
-  color: var(--brand-muted);
+  color: var(--brand-muted-strong);
   opacity: 1;
 }
-.composer-tools :deep(.ant-btn) {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  color: var(--brand-muted);
-}
-.composer-tools :deep(.ant-btn:hover),
-.composer-tools :deep(.ant-btn[aria-expanded="true"]),
-.composer-tools :deep(.ant-btn.tool-active) {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.composer-tools :deep(.assistant-picker-button) {
-  position: relative;
-}
-.composer-tools :deep(.assistant-picker-button.tool-active::after) {
-  position: absolute;
-  right: 5px;
-  bottom: 5px;
-  width: 5px;
-  height: 5px;
-  border: 1px solid var(--brand-surface);
+/* Waku 发送按钮：圆形 26px，inverse 底色，无阴影 */
+.chat-footer :deep(.antd-sender-actions-btn) {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
   border-radius: 50%;
   background: var(--brand-primary);
-  content: "";
-}
-.chat-footer :deep(.antd-sender-actions-btn) {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  border-radius: 6px;
-  background: var(--brand-primary);
   color: var(--brand-primary-foreground);
-  box-shadow: var(--brand-shadow-xs);
+  box-shadow: none;
 }
 .chat-footer :deep(.antd-sender-actions-btn:disabled) {
-  opacity: 0.26;
-}
-@media (max-width: 820px) {
-  .composer-tools :deep(.ant-btn),
-  .chat-footer :deep(.antd-sender-actions-btn) {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    flex: 0 0 44px;
-  }
-  .chat-footer :deep(textarea) {
-    font-size: 16px;
-  }
+  background: var(--brand-sidebar-active);
+  color: var(--brand-ghost);
+  opacity: 1;
 }
 @media (max-width: 560px) {
   .chat-footer :deep(.antd-sender-main) {
     min-height: 102px;
-    padding: 0;
-    border-radius: 7px;
+    border-radius: 13px;
   }
   .chat-footer :deep(.antd-sender-content) {
     padding-inline: 12px;
   }
   .chat-footer :deep(.antd-sender-footer) {
     padding-inline: 8px;
+  }
+  .chat-footer :deep(textarea) {
+    font-size: 16px;
   }
 }
 </style>

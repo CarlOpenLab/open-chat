@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Prompts, type PromptsItemType } from "@antdv-next/x";
 import { GitBranch, Lightbulb, Sparkles } from "@lucide/vue";
+import { Tooltip } from "antdv-next";
 import { computed } from "vue";
 import type { AssistantStarterPrompt } from "../../features/assistant-market/types";
 
@@ -14,7 +14,7 @@ interface Emits {
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
-// ============ 推荐提示词（深度思考位置） ============
+// ============ 推荐提示词（空状态标题下方的胶囊建议） ============
 
 const defaultPromptItems: AssistantStarterPrompt[] = [
   {
@@ -40,97 +40,32 @@ const defaultPromptItems: AssistantStarterPrompt[] = [
 const promptItems = computed<AssistantStarterPrompt[]>(() =>
   props.items?.length ? props.items : defaultPromptItems,
 );
-const starterPromptItems = computed<PromptsItemType[]>(() =>
-  promptItems.value.map(({ id, label, description }) => ({ key: id, label, description })),
-);
 
-const handlePromptItemClick = (info: { data: { key: string | number } }) => {
-  const key = String(info.data.key);
-  const prompt = promptItems.value.find((item) => item.id === key)?.prompt;
-  if (prompt) emit("promptClick", { data: { key, description: prompt } });
+const iconFor = (id: string) => {
+  if (id === "ticket-branch" || id === "start-ticket-flow") return GitBranch;
+  if (id === "placeholder-idea") return Lightbulb;
+  return Sparkles;
+};
+
+const handleClick = (item: AssistantStarterPrompt) => {
+  emit("promptClick", { data: { key: item.id, description: item.prompt } });
 };
 </script>
 
 <template>
-  <div class="starter-prompts w-full max-w-[780px] mt-0 mx-auto mb-[7px]">
-    <Prompts
-      :items="starterPromptItems"
-      class="starter-prompts-inner"
-      @item-click="handlePromptItemClick"
-    >
-      <template #iconRender="{ item }">
-        <GitBranch
-          v-if="item.key === 'ticket-branch' || item.key === 'start-ticket-flow'"
-          class="w-3.5 h-3.5"
-        />
-        <Lightbulb v-else-if="item.key === 'placeholder-idea'" class="w-3.5 h-3.5" />
-        <Sparkles v-else class="w-3.5 h-3.5" />
-      </template>
-    </Prompts>
+  <div
+    class="starter-prompts mt-[26px] flex w-full flex-wrap items-center justify-center gap-[8px]"
+    aria-label="推荐提示词"
+  >
+    <Tooltip v-for="item in promptItems" :key="item.id" :title="item.description">
+      <button
+        type="button"
+        class="starter-prompt-pill flex h-[32px] items-center gap-[7px] rounded-full border border-solid border-brand-border bg-transparent px-[13px] text-[12.5px] text-brand-muted cursor-pointer transition-colors duration-150 hover:border-brand-border-strong hover:bg-brand-surface-subtle hover:text-brand-foreground active:opacity-80"
+        @click="handleClick(item)"
+      >
+        <component :is="iconFor(item.id)" class="!h-[13px] !w-[13px] flex-none text-brand-accent" />
+        <span class="max-w-[240px] truncate">{{ item.label }}</span>
+      </button>
+    </Tooltip>
   </div>
 </template>
-
-<style scoped>
-/* 以下均为 :deep() 覆盖 antd-x Prompts 内部类，保留在 scoped CSS 中 */
-.starter-prompts :deep(.antd-prompts) {
-  width: 100%;
-}
-.starter-prompts :deep(.antd-prompts-list) {
-  gap: 8px;
-}
-.starter-prompts :deep(.antd-prompts-item) {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 60px;
-  padding: 10px 12px;
-  border: 1px solid var(--brand-border);
-  border-radius: 7px;
-  background: var(--brand-surface);
-  transition:
-    background 160ms ease,
-    border-color 160ms ease;
-}
-.starter-prompts :deep(.antd-prompts-item:hover) {
-  background: var(--brand-surface-muted);
-  border-color: var(--brand-border-strong);
-}
-.starter-prompts :deep(.antd-prompts-item:active) {
-  background: var(--brand-surface-subtle);
-}
-.starter-prompts :deep(.antd-prompts-icon) {
-  display: grid;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 1px solid var(--brand-border);
-  border-radius: 5px;
-  background: var(--brand-surface-subtle);
-}
-.starter-prompts :deep(.antd-prompts-content) {
-  gap: 2px;
-}
-.starter-prompts :deep(.antd-prompts-label) {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--brand-foreground);
-}
-.starter-prompts :deep(.antd-prompts-desc) {
-  overflow: hidden;
-  max-width: 100%;
-  color: var(--brand-muted);
-  font-size: 9px;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-@media (max-width: 560px) {
-  .starter-prompts :deep(.antd-prompts-item) {
-    flex: 0 0 auto;
-    width: 196px;
-  }
-  .starter-prompts :deep(.antd-prompts-desc) {
-    white-space: normal;
-  }
-}
-</style>

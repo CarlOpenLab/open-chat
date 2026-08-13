@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { BubbleItemType, BubbleListProps } from "@antdv-next/x";
-import { BubbleList, Welcome } from "@antdv-next/x";
+import { BubbleList } from "@antdv-next/x";
 import type { XCardCommand } from "@antdv-next/x-card";
-import { RotateCcw, Sparkles } from "@lucide/vue";
-import { Button, Tooltip } from "antdv-next";
+import { RotateCcw } from "@lucide/vue";
+import { Tooltip } from "antdv-next";
 import { computed, provide, ref, watch } from "vue";
 import {
   getA2UISurfaceId,
@@ -14,13 +14,18 @@ import {
 import type { WebSearchSourceItem } from "../../services/ai";
 import { parseFileWorkspaceContent } from "../../utils/fileWorkspace";
 import AssistantMessageContent from "./AssistantMessageContent.vue";
+import EmptyState from "./EmptyState.vue";
+import StarterPrompts from "./StarterPrompts.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
+import type { AssistantStarterPrompt } from "../../features/assistant-market/types";
 
 interface Props {
   showWelcome: boolean;
   bubbleItems: BubbleItemType[];
   dark: boolean;
   conversationKey: string;
+  /** 空状态标题下方的推荐提示词 */
+  starterPrompts?: AssistantStarterPrompt[];
   a2uiPendingSurfaceId?: string;
   a2uiSubmissions?: A2UISubmission[];
   searchResultsByMessageId?: Record<string, WebSearchSourceItem[]>;
@@ -29,6 +34,7 @@ interface Props {
 interface Emits {
   (e: "a2uiAction", payload: A2UIActionPayload): void;
   (e: "reload", messageId: string | number): void;
+  (e: "promptClick", info: { data: { key: string; description: string } }): void;
 }
 
 interface ParsedA2UIRenderContent {
@@ -233,37 +239,18 @@ watch(
 <template>
   <main
     id="chat-content"
-    class="messages-wrapper min-h-0 flex-1 overflow-hidden bg-brand-workspace pt-[38px] pb-6 px-[max(28px,calc((100%_-_780px)/2))] lt-md:pt-7 lt-md:px-6 lt-md:pb-6 lt-sm:pt-[22px] lt-sm:px-[15px] lt-sm:pb-5"
+    class="messages-wrapper h-full min-h-0 flex-1 overflow-hidden bg-brand-workspace pt-6 pb-6 px-[max(20px,calc((100%_-_720px)/2))] lt-md:pt-6 lt-md:px-6 lt-md:pb-6 lt-sm:pt-[18px] lt-sm:px-[15px] lt-sm:pb-5"
     :class="showWelcome ? 'flex flex-col justify-center' : ''"
     tabindex="-1"
   >
     <section v-if="showWelcome" class="empty-state m-auto w-[min(100%,700px)] p-0 text-center">
-      <Welcome
-        class="welcome-hero flex-col items-center text-center"
-        variant="borderless"
-        title="今天想一起完成什么？"
-        description="从一个问题开始，或者把正在处理的内容交给 Open Chat。"
-      >
-        <template #icon><Sparkles class="!h-[19px] !w-[19px]" /></template>
-      </Welcome>
+      <EmptyState>
+        <StarterPrompts :items="starterPrompts" @prompt-click="emit('promptClick', $event)" />
+      </EmptyState>
     </section>
 
+    <!-- Waku 1:1：转录无头像列，消息贴左/右缘渲染 -->
     <BubbleList v-else class="h-full" :role="roleConfig" :items="displayItems" :auto-scroll="true">
-      <template #avatar="{ role }">
-        <span
-          class="grid h-[30px] w-[30px] place-items-center border border-solid rounded-md text-[10px] font-700 shadow-brand-xs"
-          :class="
-            role === 'assistant'
-              ? 'border-brand-primary bg-brand-primary text-brand-primary-foreground'
-              : 'border-brand-border bg-brand-surface text-brand-foreground'
-          "
-          :title="role === 'assistant' ? 'Open Chat' : 'Carl Chen'"
-        >
-          <Sparkles v-if="role === 'assistant'" class="!h-[15px] !w-[15px]" />
-          <span v-else>CC</span>
-        </span>
-      </template>
-
       <template #contentRender="{ content, item }">
         <AssistantMessageContent
           v-if="item.role === 'assistant'"
@@ -319,40 +306,8 @@ watch(
   animation: empty-in 360ms ease-out both;
 }
 /* 保留：:deep() 覆盖 antd/x 组件内部类，无法用工具类表达 */
-/* Welcome 组件：覆盖为居中纵向布局，匹配空态 hero */
-.welcome-hero :deep(.antd-welcome-content-wrapper) {
-  align-items: center;
-}
-.welcome-hero :deep(.antd-welcome-icon) {
-  display: grid;
-  flex: 0 0 auto;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  margin: 0;
-  border-radius: 7px;
-  background: var(--brand-primary);
-  color: var(--brand-primary-foreground);
-  box-shadow: var(--brand-shadow-sm);
-}
-.welcome-hero :deep(.antd-welcome-title) {
-  margin: 0;
-  color: var(--brand-foreground);
-  font-size: 28px;
-  line-height: 1.2;
-  font-weight: 680;
-  text-align: center;
-}
-.welcome-hero :deep(.antd-welcome-description) {
-  display: block;
-  max-width: 460px;
-  margin: 0;
-  color: var(--brand-muted);
-  font-size: 13px;
-  text-align: center;
-}
 .messages-wrapper :deep(.antd-bubble-list) {
-  width: min(100%, 780px);
+  width: min(100%, 720px);
   min-width: 0;
   max-width: 100%;
   margin: 0 auto;
@@ -371,7 +326,14 @@ watch(
 .messages-wrapper :deep(.antd-bubble) {
   min-width: 0;
   max-width: 100%;
-  padding-block: 15px;
+  /* Waku：每行 py(8px)，首行 pt(22px)，末行 pb(22px) */
+  padding-block: 8px;
+}
+.messages-wrapper :deep(.antd-bubble:first-child) {
+  padding-top: 22px;
+}
+.messages-wrapper :deep(.antd-bubble:last-child) {
+  padding-bottom: 22px;
 }
 .messages-wrapper :deep(.antd-bubble-start) {
   padding-inline-end: 0 !important;
@@ -379,33 +341,33 @@ watch(
 .messages-wrapper :deep(.antd-bubble-end) {
   padding-inline-start: 0 !important;
 }
-.messages-wrapper :deep(.antd-bubble-avatar) {
-  min-width: 32px;
-}
 .messages-wrapper :deep(.antd-bubble-body),
 .messages-wrapper :deep(.antd-bubble-content) {
   min-width: 0;
   max-width: 100%;
 }
 .messages-wrapper :deep(.antd-bubble-start .antd-bubble-body) {
-  width: min(100%, 737px);
+  width: min(100%, 720px);
 }
 .messages-wrapper :deep(.antd-bubble-end .antd-bubble-body) {
-  max-width: min(76%, 620px);
+  max-width: min(78%, 540px);
 }
 .messages-wrapper :deep(.antd-bubble-content) {
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: 13.5px;
+  line-height: 21px;
 }
 .messages-wrapper :deep(.antd-bubble-start .antd-bubble-content) {
   background: transparent;
   color: var(--brand-foreground);
 }
+/* Waku 用户消息：右对齐 raised 卡片，圆角 12px，14px/20px */
 .messages-wrapper :deep(.antd-bubble-end .antd-bubble-content) {
-  padding: 11px 14px;
-  border-radius: 7px 7px 2px;
-  background: var(--brand-surface-subtle);
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--brand-surface);
   color: var(--brand-foreground);
+  font-size: 14px;
+  line-height: 20px;
 }
 .messages-wrapper :deep(.antd-bubble-footer) {
   margin-top: 8px;
@@ -415,8 +377,9 @@ watch(
   min-width: 0;
   max-width: 100%;
   color: var(--brand-foreground);
-  font-size: 13px;
-  line-height: 1.82;
+  /* Waku MarkdownMetrics::BODY：13.5px / 21px */
+  font-size: 13.5px;
+  line-height: 21px;
   overflow-wrap: anywhere;
 }
 .messages-wrapper :deep(.chat-markdown pre),
@@ -455,19 +418,15 @@ watch(
 }
 @media (max-width: 820px) {
   .messages-wrapper :deep(.antd-bubble) {
-    padding-block: 12px;
+    padding-block: 8px;
   }
   .messages-wrapper :deep(.antd-bubble-end .antd-bubble-body) {
     max-width: 88%;
   }
 }
 @media (max-width: 560px) {
-  .welcome-hero :deep(.antd-welcome-title) {
-    font-size: 24px;
-  }
-  .welcome-hero :deep(.antd-welcome-description) {
-    max-width: 300px;
-    margin-inline: auto;
+  .messages-wrapper :deep(.antd-bubble-end .antd-bubble-body) {
+    max-width: 88%;
   }
 }
 </style>

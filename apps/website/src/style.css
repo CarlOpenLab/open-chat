@@ -39,6 +39,7 @@
   --brand-primary-foreground: var(--background);
   --brand-danger: var(--danger);
   --brand-danger-subtle: var(--danger-subtle);
+  --brand-success: var(--success);
   --brand-ring: rgba(24, 24, 27, 0.2);
   --brand-shadow-xs: var(--shadow-sm);
   --brand-shadow-sm: var(--shadow-lg);
@@ -194,6 +195,102 @@ a {
   --table-body-bg: var(--background);
   --cite-bg: var(--muted);
   --cite-hover-bg: var(--border);
+}
+
+/* ============================================================
+   Waku-style chat theme
+   1:1 取自 waku/src/theme.rs 的 Theme::dark() / Theme::light()
+   ============================================================ */
+
+/* 默认即深色（Waku 以深色为主）；html[data-theme="dark"] 重定义了少数
+   brand 变量，需用更高特异性再压一次 */
+.waku-chat {
+  color-scheme: dark;
+  --chat-content-width: 720px; /* Waku CONTENT_MAX_WIDTH = 720 */
+  --brand-background: #1a1a1a; /* canvas */
+  --brand-surface: #232323; /* raised */
+  --brand-surface-muted: #1e1e1e;
+  --brand-surface-subtle: hsla(0, 0%, 94%, 0.06); /* 6% neutral wash */
+  --brand-workspace: #1a1a1a; /* surface：Waku 主区与 canvas 同色 */
+  --brand-composer: #212121; /* composer */
+  /* Waku 的侧栏是透明的，底下压着 macOS 原生 sidebar 材质；#181818 是它自己
+     在拖拽时用的不透明替身（sidebar_drag_background），Web 端照搬这个值 */
+  --brand-sidebar: #181818;
+  --brand-sidebar-muted: #7d7d7d; /* text_tertiary */
+  --brand-sidebar-foreground: #e2e2e2; /* text */
+  --brand-sidebar-hover: hsla(0, 0%, 94%, 0.06); /* sidebar_item_background */
+  --brand-sidebar-active: hsla(0, 0%, 94%, 0.06); /* 选中与 hover 同层 */
+  --brand-foreground: #e2e2e2; /* text */
+  --brand-muted: #a3a3a3; /* text_secondary */
+  --brand-muted-strong: #7d7d7d; /* text_tertiary */
+  --brand-ghost: #575757; /* text_ghost */
+  --brand-border: hsla(220, 10%, 90%, 0.07); /* border */
+  --brand-border-strong: hsla(220, 10%, 90%, 0.14); /* border_strong */
+  --brand-primary: #e7e9ec; /* inverse（亮色按钮底） */
+  --brand-primary-hover: #ffffff;
+  --brand-primary-foreground: #17181c; /* on_inverse */
+  --brand-danger: #e2726a;
+  --brand-danger-subtle: hsla(4, 55%, 63%, 0.1);
+  --brand-success: #62c987; /* diff 新增行 */
+  --brand-ring: hsla(211, 100%, 50%, 0.55); /* selection */
+  --brand-accent: #e2795b; /* 珊瑚色 accent */
+  --brand-resize: #3b82f6; /* resize handle */
+  --brand-gauge: #3b82f6; /* gauge */
+  --brand-shadow-xs: none;
+  --brand-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --brand-shadow-float: 0 4px 20px rgba(0, 0, 0, 0.28);
+}
+
+html[data-theme="dark"] .waku-chat {
+  /* 覆盖 html[data-theme="dark"] 在 :root 重定义的 4 个变量 */
+  --brand-muted-strong: #7d7d7d;
+  --brand-primary-hover: #ffffff;
+  --brand-ring: hsla(211, 100%, 50%, 0.55);
+  --brand-shadow-float: 0 4px 20px rgba(0, 0, 0, 0.28);
+}
+
+html[data-theme="light"] .waku-chat {
+  color-scheme: light;
+  --brand-background: #f6f5f6; /* canvas */
+  --brand-surface: #ececec; /* raised */
+  --brand-surface-muted: #f0f0f0;
+  --brand-surface-subtle: hsla(0, 0%, 8%, 0.06);
+  --brand-workspace: #f6f5f6;
+  --brand-composer: #ffffff;
+  --brand-sidebar: #f3f3f3; /* sidebar_drag_background */
+  --brand-sidebar-muted: #858585;
+  --brand-sidebar-foreground: #242424;
+  --brand-sidebar-hover: hsla(0, 0%, 8%, 0.06);
+  --brand-sidebar-active: hsla(0, 0%, 8%, 0.06);
+  --brand-foreground: #242424;
+  --brand-muted: #666666;
+  --brand-muted-strong: #858585;
+  --brand-ghost: #a4a4a4; /* text_ghost */
+  --brand-border: hsla(220, 10%, 12%, 0.08);
+  --brand-border-strong: hsla(220, 10%, 12%, 0.15);
+  --brand-primary: #202227;
+  --brand-primary-hover: #000000;
+  --brand-primary-foreground: #f8f8f9;
+  --brand-danger: #c64a42;
+  --brand-danger-subtle: hsla(4, 55%, 52%, 0.1);
+  --brand-success: #2f8f52;
+  --brand-ring: hsla(211, 100%, 50%, 0.35);
+  --brand-accent: #c85f44;
+  --brand-resize: #2563eb;
+  --brand-gauge: #2563eb;
+  --brand-shadow-xs: none;
+  --brand-shadow-sm: 0 1px 2px rgba(20, 20, 24, 0.06);
+  --brand-shadow-float: 0 4px 20px rgba(20, 20, 24, 0.08);
+}
+
+/* Waku selection 洗色：浏览器蓝而非品牌色 */
+.waku-chat ::selection {
+  background: hsla(211, 100%, 50%, 0.55);
+  color: inherit;
+}
+html[data-theme="light"] .waku-chat ::selection {
+  background: hsla(211, 100%, 50%, 0.35);
+  color: inherit;
 }
 
 @media (prefers-reduced-motion: reduce) {

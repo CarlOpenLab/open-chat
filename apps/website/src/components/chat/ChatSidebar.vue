@@ -3,36 +3,48 @@ import type { ConversationItemType, ConversationsProps } from "@antdv-next/x";
 import { Conversations } from "@antdv-next/x";
 import {
   Archive,
+  ArrowLeft,
+  ArrowRight,
   Ellipsis,
-  MessageSquare,
+  LoaderCircle,
+  Moon,
   PanelLeftClose,
   Pencil,
   Pin,
   Search,
-  Sparkles,
+  Settings,
   SquarePen,
-  Store,
-  Bookmark,
+  Sun,
   Trash2,
 } from "@lucide/vue";
-import { Button, Input, Modal, Tooltip, message } from "antdv-next";
-import { computed, h, onBeforeUnmount, onMounted, ref } from "vue";
-import SidebarFooter from "./SidebarFooter.vue";
+import { Input, Modal, Tooltip, message } from "antdv-next";
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import type { OpenChatConversation } from "../../composables/useChatPersistence";
+import { resolveConversationGroup } from "../../utils/sessionDateGroup";
+import { formatElapsedDuration, formatRelativeTime } from "../../utils/relativeTime";
 
 interface Props {
   open: boolean;
-  dark: boolean;
-  conversationList: ConversationItemType[];
+  conversationList: OpenChatConversation[];
   currentKey: string;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  /** 正在请求的会话 key，该条目显示「工作中」与已运行时长 */
+  busyKey?: string;
+  /** 当前请求开始时间，用于「工作中」条目的计时 */
+  busySince?: number;
+  /** 当前是否深色主题，底栏的主题切换按钮据此换图标 */
+  dark?: boolean;
 }
 
 interface Emits {
-  (e: "home"): void;
   (e: "toggleSidebar"): void;
   (e: "toggleTheme"): void;
   (e: "newConversation"): void;
-  (e: "assistants"): void;
-  (e: "installedAssistants"): void;
+  (e: "openSearch"): void;
+  (e: "openSettings"): void;
+  (e: "navigateBack"): void;
+  (e: "navigateForward"): void;
   (e: "activeChange", key: string): void;
   (e: "rename", key: string, title: string): void;
   (e: "pin", key: string): void;
@@ -40,37 +52,132 @@ interface Emits {
   (e: "delete", key: string): void;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  canGoBack: false,
+  canGoForward: false,
+  busyKey: "",
+  busySince: 0,
+  dark: true,
+});
 const emit = defineEmits<Emits>();
+
 const search = ref("");
-const accountOpen = ref(false);
 const renameOpen = ref(false);
 const renameKey = ref("");
 const renameDraft = ref("");
 
-const filteredConversations = computed(() => {
+// 条目副行的时间需要随时间走动：进行中每秒刷新（要显示秒），空闲时 30 秒刷新即可。
+const nowTick = ref(Date.now());
+let tickTimer: ReturnType<typeof setInterval> | undefined;
+
+const stopTick = () => {
+  if (!tickTimer) return;
+  clearInterval(tickTimer);
+  tickTimer = undefined;
+};
+
+const startTick = (periodMs: number) => {
+  stopTick();
+  tickTimer = setInterval(() => {
+    nowTick.value = Date.now();
+  }, periodMs);
+};
+
+const DATE_GROUP_LABEL: Record<string, string> = {
+  置顶: "置顶",
+  今天: "今天",
+  昨天: "昨天",
+  本周: "本周",
+  本月: "本月",
+  今年: "今年",
+  更早: "更早",
+};
+
+const GROUP_WEIGHT: Record<string, number> = {
+  置顶: 0,
+  今天: 1,
+  昨天: 2,
+  本周: 3,
+  本月: 4,
+  今年: 5,
+  更早: 6,
+};
+
+const groupedConversations = computed<ConversationItemType[]>(() => {
   const query = search.value.trim().toLocaleLowerCase();
-  return props.conversationList.filter((item) =>
-    query
-      ? String(item.label ?? "")
-          .toLocaleLowerCase()
-          .includes(query)
-      : true,
-  );
+  const list = props.conversationList
+    .map((item) => ({
+      ...item,
+      group: resolveConversationGroup(item.updatedAt, item.group),
+    }))
+    .filter((item) =>
+      query
+        ? String(item.label ?? "")
+            .toLocaleLowerCase()
+            .includes(query)
+        : true,
+    );
+
+  return list.sort((a, b) => {
+    const ga = GROUP_WEIGHT[a.group ?? "今天"] ?? 6;
+    const gb = GROUP_WEIGHT[b.group ?? "今天"] ?? 6;
+    if (ga !== gb) return ga - gb;
+    return String(b.updatedAt ?? 0) - String(a.updatedAt ?? 0);
+  });
 });
 
-// 主操作按钮（新对话 / 搜索）：展开为三列 grid，折叠为居中图标，移动端恢复 grid
-const primaryActionClass = computed(() =>
-  props.open
-    ? "grid px-[10px] py-0"
-    : "flex justify-center p-0 lt-md:grid lt-md:justify-normal lt-md:px-[10px] lt-md:py-0",
+const hasConversations = computed(() => props.conversationList.length > 0);
+
+/**
+ * Conversations 的 expandedKeys 默认是空数组，只要开了 collapsible，
+ * 「今天 / 昨天」这些分组一上来就是折叠的、一条会话都看不见。
+ * 这里改成受控：默认全展开，只记住用户手动折叠过的分组，新出现的分组也是展开的。
+ */
+const collapsedGroups = ref<string[]>([]);
+
+const groupNames = computed(() =>
+  Array.from(new Set(groupedConversations.value.map((item) => item.group ?? "今天"))),
 );
 
-// 折叠时隐藏文字/快捷键，移动端（抽屉形态）恢复显示
-const collapsibleTextClass = computed(() => (props.open ? "" : "hidden lt-md:[display:initial]"));
+const groupable = computed<ConversationsProps["groupable"]>(() => ({
+  collapsible: true,
+  expandedKeys: groupNames.value.filter((name) => !collapsedGroups.value.includes(name)),
+  onExpand: (keys) => {
+    collapsedGroups.value = groupNames.value.filter((name) => !keys.includes(name));
+  },
+}));
+
+/**
+ * Waku 条目为两行：标题 + （助手名 / 相对时间）。
+ * 进行中的会话把时间换成「工作中 · 已运行时长」并附一个转圈图标。
+ */
+const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
+  const conversation = item as OpenChatConversation;
+  const busy = Boolean(props.busyKey) && String(item.key) === props.busyKey;
+  const title = String(conversation.label ?? "").trim() || "新对话";
+
+  return h("span", { class: "conversation-entry" }, [
+    // 首行：标题占满，进行中时右端挂一个珊瑚色转圈（与 Waku 位置一致）
+    h("span", { class: "conversation-entry-head" }, [
+      h("span", { class: "conversation-entry-title" }, title),
+      busy ? h(LoaderCircle, { class: "conversation-entry-spinner" }) : null,
+    ]),
+    h("span", { class: "conversation-entry-meta" }, [
+      // 副行只保留助手名（若有）与时间；助手名同时充当把时间推到右端的弹性占位
+      h("span", { class: "conversation-entry-project" }, conversation.assistant?.name ?? ""),
+      h(
+        "span",
+        { class: busy ? "conversation-entry-time is-busy" : "conversation-entry-time" },
+        busy
+          ? `工作中 · ${formatElapsedDuration(nowTick.value - (props.busySince || nowTick.value))}`
+          : formatRelativeTime(conversation.updatedAt as number | undefined, nowTick.value),
+      ),
+    ]),
+  ]);
+};
 
 const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
-  emit("activeChange", key);
+  emit("activeChange", String(key));
 };
 
 const openRename = (item: ConversationItemType) => {
@@ -115,169 +222,149 @@ const conversationMenu: ConversationsProps["menu"] = (item) => ({
   },
 });
 
+const iconButtonClass =
+  "grid h-[26px] w-[26px] flex-none place-items-center rounded-[6px] border-0 bg-transparent p-0 text-brand-muted-strong cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground active:opacity-80";
+
+/* 新任务是侧栏唯一的「主操作」：带边框的软按钮，与下面的幽灵行拉开层级 */
+const newTaskRowClass =
+  "flex h-[32px] w-full flex-none items-center gap-[8px] rounded-[8px] border border-solid border-brand-border bg-transparent px-[9px] text-left text-[13px] font-medium text-brand-foreground cursor-pointer transition-colors duration-150 hover:border-brand-border-strong hover:bg-brand-surface-subtle active:opacity-80";
+
+const actionRowClass =
+  "flex h-[32px] w-full flex-none items-center gap-[10px] rounded-[7px] border-0 bg-transparent px-1 text-left text-[13px] text-brand-muted cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground active:opacity-80";
+
 const handleShortcut = (event: KeyboardEvent) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
     event.preventDefault();
-    emit("newConversation");
+    emit("openSearch");
   }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "f") {
-    event.preventDefault();
-    if (!props.open) emit("toggleSidebar");
-    window.setTimeout(
-      () => document.querySelector<HTMLInputElement>("#conversation-search")?.focus(),
-      100,
-    );
+  if (event.key === "Escape") {
+    renameOpen.value = false;
   }
-  if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLocaleLowerCase() === "l") {
-    event.preventDefault();
-    emit("toggleTheme");
-  }
-  if (event.key === "Escape") closeMenus();
 };
 
-const closeMenus = () => {
-  accountOpen.value = false;
-};
+watch(
+  () => Boolean(props.busyKey),
+  (busy) => {
+    nowTick.value = Date.now();
+    startTick(busy ? 1000 : 30000);
+  },
+  { immediate: true },
+);
 
 onMounted(() => window.addEventListener("keydown", handleShortcut));
-onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleShortcut);
+  stopTick();
+});
 </script>
 
 <template>
   <aside
-    class="chat-sidebar relative z-sidebar flex h-[100dvh] flex-col overflow-visible bg-brand-sidebar p-[10px] transition-[width,min-width,transform] duration-220 ease-[ease] lt-md:absolute lt-md:bottom-0 lt-md:left-0 lt-md:right-auto lt-md:top-0 lt-md:min-w-0 lt-md:w-[min(276px,calc(100%-56px))] lt-md:pb-[max(10px,env(safe-area-inset-bottom))]"
-    :class="
-      open
-        ? 'w-[276px] min-w-[276px] lt-md:translate-x-0 lt-md:shadow-[18px_0_46px_rgba(9,9,11,0.18)]'
-        : 'is-collapsed w-[68px] min-w-[68px] lt-md:translate-x-[-104%] lt-md:shadow-none'
-    "
+    class="chat-sidebar relative z-sidebar flex h-full min-h-0 w-full flex-col overflow-hidden bg-brand-sidebar"
+    :class="open ? 'border-r border-r-solid border-r-brand-border' : ''"
     aria-label="会话导航"
   >
-    <header
-      class="flex h-[42px] items-center gap-[10px] pb-[4px] pr-[2px] pt-0"
-      :class="
-        open
-          ? 'justify-between pl-[5px]'
-          : 'justify-center pl-0 lt-md:justify-between lt-md:pl-[5px]'
-      "
-    >
+    <!-- Waku sidebar titlebar：48px，折叠按钮 + 历史导航 -->
+    <div class="flex h-[48px] flex-none items-center gap-[2px] px-[10px]">
       <button
-        class="min-w-0 cursor-pointer items-center gap-[9px] border-0 bg-transparent p-0 text-[14px] font-680 text-brand-foreground lt-md:min-h-[44px]"
-        :class="open ? 'inline-flex' : 'hidden lt-md:inline-flex'"
         type="button"
-        aria-label="返回 Open Chat 首页"
-        @click="emit('home')"
+        class="grid h-[26px] w-[26px] place-items-center rounded-[6px] border-0 bg-transparent p-0 text-brand-muted-strong hover:bg-brand-surface-subtle hover:text-brand-foreground"
+        :aria-label="open ? '收起侧边栏' : '展开侧边栏'"
+        @click="emit('toggleSidebar')"
       >
-        <span
-          class="grid h-[29px] w-[29px] flex-[0_0_29px] place-items-center rounded-[5px] bg-brand-primary text-brand-primary-foreground"
-          aria-hidden="true"
-        >
-          <Sparkles class="!h-[15px] !w-[15px]" />
+        <PanelLeftClose :class="open ? '' : 'rotate-180'" />
+      </button>
+      <button
+        type="button"
+        class="grid h-[26px] w-[26px] place-items-center rounded-[6px] border-0 bg-transparent p-0 text-brand-muted-strong"
+        :class="
+          canGoBack ? 'hover:bg-brand-surface-subtle hover:text-brand-foreground' : 'opacity-35'
+        "
+        :disabled="!canGoBack"
+        aria-label="返回上一个会话"
+        @click="emit('navigateBack')"
+      >
+        <ArrowLeft class="!h-[14px] !w-[14px]" />
+      </button>
+      <button
+        type="button"
+        class="grid h-[26px] w-[26px] place-items-center rounded-[6px] border-0 bg-transparent p-0 text-brand-muted-strong"
+        :class="
+          canGoForward ? 'hover:bg-brand-surface-subtle hover:text-brand-foreground' : 'opacity-35'
+        "
+        :disabled="!canGoForward"
+        aria-label="前进到下一个会话"
+        @click="emit('navigateForward')"
+      >
+        <ArrowRight class="!h-[14px] !w-[14px]" />
+      </button>
+    </div>
+
+    <!-- 新任务 / 搜索 -->
+    <!-- 动作行紧贴 titlebar，搜索行下方留 10px（SIDEBAR_SEARCH_BOTTOM_GAP） -->
+    <div class="flex flex-none flex-col gap-[4px] px-[10px] pb-[10px]">
+      <button type="button" :class="newTaskRowClass" @click="emit('newConversation')">
+        <SquarePen class="!h-[14px] !w-[14px] flex-none text-brand-accent" />
+        <span class="min-w-0 flex-1 truncate">新任务</span>
+      </button>
+      <button type="button" :class="actionRowClass" @click="emit('openSearch')">
+        <span class="grid h-5 w-5 flex-none place-items-center">
+          <Search class="!h-[15px] !w-[15px]" />
         </span>
-        <span class="overflow-hidden whitespace-nowrap">Open Chat</span>
-      </button>
-      <Tooltip :title="open ? '收起侧边栏' : '展开侧边栏'" placement="right">
-        <Button
-          type="text"
-          shape="circle"
-          class="!h-[36px] !w-[36px] !min-w-[36px] !text-brand-muted hover:!bg-brand-surface-subtle hover:!text-brand-foreground lt-md:!h-[44px] lt-md:!w-[44px] lt-md:!min-w-[44px]"
-          :aria-label="open ? '收起侧边栏' : '展开侧边栏'"
-          @click="emit('toggleSidebar')"
-        >
-          <PanelLeftClose :class="open ? '' : 'rotate-180 lt-md:transform-none'" />
-        </Button>
-      </Tooltip>
-    </header>
-
-    <div class="mb-[7px] mt-[14px] flex flex-col gap-[12px]">
-      <button
-        class="min-h-[38px] w-full cursor-pointer grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] rounded-[6px] border border-solid border-transparent bg-brand-primary text-left text-[12px] font-620 text-brand-primary-foreground shadow-brand-xs hover:opacity-88 lt-md:min-h-[44px]"
-        :class="primaryActionClass"
-        type="button"
-        @click="emit('newConversation')"
-      >
-        <SquarePen class="!h-[15px] !w-[15px]" /><span :class="collapsibleTextClass">新对话</span
-        ><kbd
-          class="border-0 bg-transparent text-[9px] [color:color-mix(in_srgb,var(--brand-primary-foreground)_62%,transparent)] [font-family:inherit]"
-          :class="collapsibleTextClass"
-          >⌘ K</kbd
-        >
-      </button>
-      <label
-        class="min-h-[38px] w-full grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[9px] rounded-[6px] border border-solid border-transparent text-left text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground focus-within:bg-brand-surface-subtle focus-within:text-brand-foreground lt-md:min-h-[44px]"
-        :class="primaryActionClass"
-        for="conversation-search"
-      >
-        <Search class="!h-[15px] !w-[15px]" />
-        <input
-          id="conversation-search"
-          v-model="search"
-          class="w-full min-w-0 border-0 bg-transparent p-0 text-[12px] text-brand-foreground outline-0 lt-md:text-[16px]"
-          :class="collapsibleTextClass"
-          type="search"
-          placeholder="搜索对话"
-          autocomplete="off"
-        />
+        <span class="min-w-0 flex-1 truncate">搜索</span>
         <kbd
-          class="border-0 bg-transparent text-[9px] text-brand-muted [font-family:inherit]"
-          :class="collapsibleTextClass"
-          >⌘ F</kbd
+          class="flex h-[18px] flex-none items-center rounded-[4px] border border-solid border-brand-border bg-transparent px-[5px] text-[10px] tracking-[0.5px] text-brand-muted-strong [font-family:inherit]"
+          >⌘K</kbd
         >
-      </label>
+      </button>
     </div>
 
-    <div class="mb-[12px] flex flex-col gap-[2px]">
-      <Button
-        type="text"
-        class="assistant-shortcut-button min-h-[38px] w-full grid-cols-[18px_minmax(0,1fr)] items-center gap-[9px] rounded-[6px] border border-solid border-transparent bg-transparent px-[10px] text-left text-[12px] font-620 text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground lt-md:min-h-11"
-        :class="primaryActionClass"
-        @click="emit('assistants')"
-      >
-        <Store class="!h-[15px] !w-[15px]" /><span :class="collapsibleTextClass">助手市场</span>
-      </Button>
-      <Button
-        type="text"
-        class="assistant-shortcut-button min-h-[38px] w-full grid-cols-[18px_minmax(0,1fr)] items-center gap-[9px] rounded-[6px] border border-solid border-transparent bg-transparent px-[10px] text-left text-[12px] font-620 text-brand-muted hover:bg-brand-surface-subtle hover:text-brand-foreground lt-md:min-h-11"
-        :class="primaryActionClass"
-        @click="emit('installedAssistants')"
-      >
-        <Bookmark class="!h-[15px] !w-[15px]" /><span :class="collapsibleTextClass">我的助手</span>
-      </Button>
-    </div>
-
+    <!-- 会话列表（按日期分组） -->
     <div class="conversation-scroll relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+      <!-- 空列表：安静的两行文案，靠上放置，不用图标撑场面 -->
       <div
-        v-if="filteredConversations.length === 0"
-        class="flex min-h-[180px] flex-col items-center justify-center p-[24px] text-center text-brand-muted"
+        v-if="!hasConversations"
+        class="flex flex-col items-center gap-[3px] px-6 pt-[56px] text-center"
       >
-        <Search v-if="search" class="mb-[12px] !h-[22px] !w-[22px]" />
-        <MessageSquare v-else class="mb-[12px] !h-[22px] !w-[22px]" />
-        <strong class="text-[11px] text-brand-foreground">{{
-          search ? "没有匹配的对话" : "还没有对话"
-        }}</strong>
-        <span class="mt-[3px] text-[10px]">{{
-          search ? "换个关键词试试" : "开始一个新对话吧"
-        }}</span>
+        <span class="text-[12px] text-brand-muted">还没有对话</span>
+        <span class="text-[11px] text-brand-ghost">点击「新任务」开始</span>
       </div>
       <Conversations
         v-else
-        :items="filteredConversations"
+        :items="groupedConversations"
         :active-key="currentKey"
-        :groupable="true"
-        :menu="open ? conversationMenu : undefined"
+        :groupable="groupable"
+        :menu="conversationMenu"
+        :label-render="conversationLabelRender"
         @active-change="handleActiveChange"
-      >
-        <template #iconRender><MessageSquare /></template>
-      </Conversations>
+      />
     </div>
 
-    <SidebarFooter
-      v-model:account-open="accountOpen"
-      :open="open"
-      :dark="dark"
-      @home="emit('home')"
-      @toggle-theme="emit('toggleTheme')"
-    />
+    <!-- 底栏：设置在左，主题切换在右，两端平衡 -->
+    <div class="flex h-[40px] flex-none items-center px-[10px]">
+      <Tooltip title="设置">
+        <button
+          type="button"
+          :class="iconButtonClass"
+          aria-label="打开设置"
+          @click="emit('openSettings')"
+        >
+          <Settings class="!h-[14px] !w-[14px]" />
+        </button>
+      </Tooltip>
+      <div class="flex-1" />
+      <Tooltip :title="dark ? '切换到浅色' : '切换到深色'">
+        <button
+          type="button"
+          :class="iconButtonClass"
+          aria-label="切换主题"
+          @click="emit('toggleTheme')"
+        >
+          <Sun v-if="dark" class="!h-[14px] !w-[14px]" />
+          <Moon v-else class="!h-[14px] !w-[14px]" />
+        </button>
+      </Tooltip>
+    </div>
 
     <Modal
       v-model:open="renameOpen"
@@ -299,70 +386,138 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
 </template>
 
 <style scoped>
-.chat-sidebar :deep(.assistant-shortcut-button) {
-  border-color: transparent;
-  transition:
-    background-color 160ms ease,
-    color 160ms ease;
-}
-.chat-sidebar :deep(.assistant-shortcut-button:hover),
-.chat-sidebar :deep(.assistant-shortcut-button:focus-visible),
-.chat-sidebar :deep(.assistant-shortcut-button:active) {
-  border-color: transparent;
-}
-
 /* 保留原因：以下全部是 antd/x Conversations 内部类（.antd-*）与滚动条伪元素的
-   :deep 覆盖（含 menu trigger 由 h() 渲染进组件内部、依赖父项 hover 态），
-   无法迁移为模板工具类。折叠态通过根节点 is-collapsed 类联动。 */
+   :deep 覆盖，无法迁移为模板工具类。 */
+/* Waku 侧栏整列（含新任务/搜索行）都是 px 10 内缩，会话列表必须同轴 */
 .chat-sidebar :deep(.antd-conversations) {
   min-height: 100%;
-  padding: 3px 0 10px;
+  padding: 0 10px 10px;
 }
+/* 行距只由 SIDEBAR_SESSION_ROW_GAP = 1 决定，清掉组件自带的 gap / 顶部留白 */
+.chat-sidebar :deep(.antd-conversations-list) {
+  padding-top: 0;
+  gap: 0;
+}
+/* session_group_header()：h 28 / px 8 / 12.5px medium / text_tertiary */
 .chat-sidebar :deep(.antd-conversations-group-title) {
-  min-height: 20px;
+  height: 28px;
+  min-height: 28px;
+  align-items: center;
   margin-top: 10px;
-  padding: 0 9px 4px;
-  color: var(--brand-muted);
-  font-size: 10px;
-  font-weight: 600;
+  padding: 0 8px;
+  color: var(--brand-muted-strong);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 28px;
 }
+/* Waku 的折叠箭头紧跟分组名（gap 5），且只在分组 hover 时显形 */
+.chat-sidebar :deep(.antd-conversations-group-label) {
+  flex: none;
+}
+.chat-sidebar :deep(.antd-conversations-group-collapse-trigger) {
+  margin-inline-start: 5px;
+  color: var(--brand-ghost);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.chat-sidebar
+  :deep(.antd-conversations-group-title:hover .antd-conversations-group-collapse-trigger) {
+  opacity: 1;
+}
+/* SIDEBAR_SESSION_CARD_HEIGHT = 51 = py 7×2 + 标题行 18 + gap 4 + 副行 15，
+   行间距 SIDEBAR_SESSION_ROW_GAP = 1 */
 .chat-sidebar :deep(.antd-conversations-item) {
-  min-height: 40px;
-  padding-inline: 9px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  min-height: 51px;
+  align-items: flex-start;
+  margin-bottom: 1px;
+  padding-block: 7px;
+  padding-inline: 8px;
+  border: 0;
+  border-radius: 7px;
   color: var(--brand-muted);
-  font-size: 11px;
+  font-size: 13.5px;
   transition:
     background 160ms ease,
-    border-color 160ms ease,
     color 160ms ease;
+}
+
+/* Waku 两行条目：第一行标题，第二行工作区名 + 时间 */
+.chat-sidebar :deep(.conversation-entry) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.chat-sidebar :deep(.conversation-entry-head) {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+.chat-sidebar :deep(.conversation-entry-title) {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1 1 auto;
+  /* 标题恒用主文字色（Waku 的 text），与灰阶副行形成两级层次 */
+  color: var(--brand-foreground);
+  font-size: 13.5px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-sidebar :deep(.conversation-entry-meta) {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--brand-muted-strong);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 15px;
+}
+.chat-sidebar :deep(.conversation-entry-project) {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1 1 auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 闲置条目的时间比项目名更暗（text_ghost），进行中时提到 text_tertiary */
+.chat-sidebar :deep(.conversation-entry-time) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--brand-ghost);
+  white-space: nowrap;
+}
+.chat-sidebar :deep(.conversation-entry-time.is-busy) {
+  color: var(--brand-muted-strong);
+}
+.chat-sidebar :deep(.conversation-entry-spinner) {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--brand-accent);
+  animation: conversation-spin 900ms linear infinite;
+}
+@keyframes conversation-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .chat-sidebar :deep(.antd-conversations-item:hover) {
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
 }
+/* Waku 里选中 / hover / 按下都是同一层 6% 中性色，不加粗 */
 .chat-sidebar :deep(.antd-conversations-item-active) {
-  border-color: color-mix(in srgb, var(--brand-primary) 18%, transparent);
-  background: color-mix(in srgb, var(--brand-primary) 9%, var(--brand-sidebar));
+  background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
-  font-weight: 600;
 }
 .chat-sidebar :deep(.antd-conversations-item:focus-visible) {
   outline: 2px solid var(--brand-ring);
   outline-offset: 1px;
-}
-.chat-sidebar :deep(.antd-conversations-icon) {
-  width: 18px;
-  min-width: 18px;
-  color: var(--brand-muted);
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.chat-sidebar :deep(.antd-conversations-item-active .antd-conversations-icon) {
-  color: var(--brand-primary);
 }
 .chat-sidebar :deep(.conversation-menu-trigger) {
   display: inline-grid;
@@ -373,7 +528,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--brand-muted);
+  color: var(--brand-muted-strong);
   cursor: pointer;
   opacity: 0;
   transition:
@@ -394,67 +549,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
 }
-.chat-sidebar.is-collapsed :deep(.conversation-menu-trigger) {
-  display: none;
-}
-.chat-sidebar.is-collapsed .conversation-scroll,
-.chat-sidebar.is-collapsed :deep(.antd-conversations) {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-.chat-sidebar.is-collapsed .conversation-scroll::-webkit-scrollbar,
-.chat-sidebar.is-collapsed :deep(.antd-conversations::-webkit-scrollbar) {
-  display: none;
-  width: 0;
-  height: 0;
-}
-.chat-sidebar.is-collapsed :deep(.antd-conversations-group-title),
-.chat-sidebar.is-collapsed :deep(.antd-conversations-label) {
-  display: none;
-}
-.chat-sidebar.is-collapsed :deep(.antd-conversations-item) {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  margin-inline: auto;
-  place-items: center;
-  gap: 0;
-  padding: 0;
-}
-.chat-sidebar.is-collapsed :deep(.antd-conversations-icon) {
-  display: grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  margin: 0;
-}
-.chat-sidebar.is-collapsed :deep(.antd-conversations-icon svg) {
-  display: block;
-  margin: auto;
-}
-
-@media (max-width: 820px) {
-  .chat-sidebar.is-collapsed :deep(.antd-conversations-group-title),
-  .chat-sidebar.is-collapsed :deep(.antd-conversations-label) {
-    display: initial;
-  }
-  .chat-sidebar.is-collapsed :deep(.antd-conversations-item) {
-    display: flex;
-    width: auto;
-    height: auto;
-    margin-inline: 0;
-    justify-content: initial;
-    gap: 8px;
-    padding-inline: 9px;
-  }
-  .chat-sidebar.is-collapsed :deep(.antd-conversations-icon) {
-    display: flex;
-    width: 18px;
-    height: auto;
-    margin: 0;
-  }
-  .chat-sidebar :deep(.antd-conversations-item) {
-    min-height: 44px !important;
-  }
+.chat-sidebar .conversation-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--brand-border-strong) transparent;
 }
 </style>
