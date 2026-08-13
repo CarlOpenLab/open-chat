@@ -32,6 +32,7 @@
   },
   "devDependencies": {
     "@antdv-next/icons": "catalog:",
+    "@types/node": "catalog:",
     "@vitejs/plugin-vue": "^6.0.0",
     "typescript": "~5.9.3",
     "unocss": "catalog:",

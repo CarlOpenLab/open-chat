@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "ready": "vp fmt && vp lint && vp run test -r && vp run build -r",
+    "ready": "./node_modules/.bin/vp fmt && ./node_modules/.bin/vp lint && ./node_modules/.bin/vp test && vp run server#build && vp run website#build",
     "dev": "vp run dev:all",
     "dev:all": "concurrently \"vp run server#dev\" \"vp run website#dev\"",
     "dev:website": "vp run website#dev",
     "dev:server": "vp run server#dev",
+    "test": "./node_modules/.bin/vp test",
     "prepare": "vp config"
   },
   "dependencies": {
@@ -24,6 +25,7 @@
     "dotenv": "catalog:",
     "express": "catalog:",
     "sass-embedded": "catalog:",
+    "vite": "catalog:",
     "vite-plus": "catalog:"
   },
   "engines": {
