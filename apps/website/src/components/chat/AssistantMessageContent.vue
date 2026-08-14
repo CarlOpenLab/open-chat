@@ -5,7 +5,6 @@ import { XMarkdown } from "@antdv-next/x-markdown";
 import { Globe2, TriangleAlert } from "@lucide/vue";
 import { computed, ref, type Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
-import type { ToolCallItem } from "../../services/OpenChatProvider";
 import type { A2UIActionPayload, A2UISubmission } from "../../utils/a2ui";
 import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
@@ -75,64 +74,28 @@ const handleSourceClick = (item: WebSearchSourceItem) => {
   if (item.url) window.open(item.url, "_blank", "noopener,noreferrer");
 };
 
-const formatDuration = (ms: number): string => {
-  if (!Number.isFinite(ms) || ms < 0) return "";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${Math.round(seconds % 60)}s`;
-};
-
-const formatToolDetail = (value: unknown, maxLength = 4000): string => {
-  let text = "";
-  if (typeof value === "string") {
-    text = value;
-  } else if (typeof value === "object" && value !== null) {
-    try {
-      text = JSON.stringify(value, null, 2);
-    } catch {
-      text = String(value);
-    }
-  } else {
-    text = String(value ?? "");
-  }
-  return text.length > maxLength ? `${text.slice(0, maxLength)}…（内容过长已截断）` : text;
-};
-
-const toolCallChainItems = computed<ThoughtChainItemType[]>(() => {
-  const tools = props.item.extraInfo?.toolCalls as ToolCallItem[] | undefined;
-  if (!Array.isArray(tools) || tools.length === 0) return [];
-  return tools.map((tool) => {
-    const status: ThoughtChainItemType["status"] =
-      tool.status === "completed" ? "success" : tool.status === "error" ? "error" : "loading";
-    const statusText =
-      tool.status === "completed"
-        ? tool.durationMs != null && formatDuration(tool.durationMs)
-          ? `完成 · ${formatDuration(tool.durationMs)}`
-          : "完成"
-        : tool.status === "error"
-          ? "失败"
-          : tool.status === "running"
-            ? "执行中"
-            : "准备中";
-    const lines: string[] = [];
-    if (tool.input !== undefined) {
-      const inputText = formatToolDetail(tool.input, 2000);
-      if (inputText) lines.push(`输入：${inputText}`);
-    }
-    if (tool.output) lines.push(`输出：${formatToolDetail(tool.output)}`);
-    if (tool.error) lines.push(`错误：${tool.error}`);
-    return {
-      key: tool.id || `tool-${tool.name}`,
-      title: tool.name || "工具调用",
-      description: statusText,
-      status,
-      collapsible: lines.length > 0,
-      blink: tool.status === "running",
-      content: lines.join("\n\n"),
-    };
-  });
+const agentPlanItems = computed<ThoughtChainItemType[]>(() => {
+  const plan = props.item.extraInfo?.agentPlan as
+    | { entries?: Array<{ content?: string; status?: string }> }
+    | undefined;
+  if (!Array.isArray(plan?.entries)) return [];
+  return plan.entries.map((entry, index) => ({
+    key: `agent-plan-${index}`,
+    title: entry.content || `步骤 ${index + 1}`,
+    status:
+      entry.status === "completed"
+        ? ("success" as const)
+        : entry.status === "in_progress"
+          ? ("loading" as const)
+          : ("pending" as const),
+    description:
+      entry.status === "completed"
+        ? "已完成"
+        : entry.status === "in_progress"
+          ? "进行中"
+          : "等待中",
+    collapsible: false,
+  }));
 });
 
 const chatNoticesList = computed<string[]>(() => {
@@ -188,13 +151,15 @@ const onFaviconError = (url: string) => {
           :components="markdownComponents"
           :streaming="markdownStreaming"
           :class-name="markdownClassName"
+          escape-raw-html
+          open-links-in-new-tab
         />
       </Think>
     </template>
     <ThoughtChain
-      v-if="toolCallChainItems.length"
-      class="tool-call-thought-chain"
-      :items="toolCallChainItems"
+      v-if="agentPlanItems.length"
+      class="agent-plan-thought-chain"
+      :items="agentPlanItems"
       line="solid"
     />
     <XMarkdown
@@ -203,6 +168,8 @@ const onFaviconError = (url: string) => {
       :components="markdownComponents"
       :streaming="markdownStreaming"
       :class-name="markdownClassName"
+      escape-raw-html
+      open-links-in-new-tab
     />
     <XMarkdown
       v-else-if="content.trim()"
@@ -210,6 +177,8 @@ const onFaviconError = (url: string) => {
       :components="markdownComponents"
       :streaming="markdownStreaming"
       :class-name="markdownClassName"
+      escape-raw-html
+      open-links-in-new-tab
     />
     <div
       v-if="chatErrorMessage"

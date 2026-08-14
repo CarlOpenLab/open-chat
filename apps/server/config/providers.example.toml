@@ -27,7 +27,7 @@ max_results = 5
 search_depth = "basic" # "basic" or "advanced"
 include_answer = true
 
-# Local AI via opencode (AI 取本地的). Optional.
+# Legacy local-model catalog via opencode. Optional.
 #
 # When enabled, the server drives a local `opencode serve` (HTTP + SSE, the
 # same transport waku uses): models/providers are discovered from the local
@@ -50,3 +50,52 @@ enabled = true
 # max_sessions = 50
 # Idle sessions are reaped after this many ms.
 # session_idle_ms = 1800000
+
+# Local CLI compatibility layer. The server detects commands from the inherited
+# PATH plus common Homebrew, local, Bun, Cargo, mise and Volta directories.
+# Native transports do not require separate ACP adapters:
+#   codex    -> codex app-server --stdio
+#   claude   -> claude stream-json stdin/stdout
+#   pi       -> pi --mode rpc --approve
+#   opencode -> opencode serve (HTTP + SSE)
+# Use transport = "acp" only for a CLI/adapter that actually speaks ACP.
+[acp]
+enabled = true
+# cwd = "/absolute/path/to/your/workspace"
+permission_timeout_ms = 300000
+
+[[acp.agents]]
+id = "codex"
+name = "Codex"
+description = "OpenAI Codex CLI via native app-server"
+transport = "codex"
+command = "codex"
+cli_command = "codex"
+args = []
+
+[[acp.agents]]
+id = "opencode"
+name = "OpenCode"
+description = "OpenCode CLI via its local HTTP server"
+transport = "opencode"
+command = "opencode"
+cli_command = "opencode"
+args = []
+
+[[acp.agents]]
+id = "claude"
+name = "Claude Code"
+description = "Claude Code CLI via native stream-json"
+transport = "claude"
+command = "claude"
+cli_command = "claude"
+args = []
+
+[[acp.agents]]
+id = "pi"
+name = "Pi"
+description = "Pi coding agent via native RPC mode"
+transport = "pi"
+command = "pi"
+cli_command = "pi"
+args = []

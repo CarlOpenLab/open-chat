@@ -11,6 +11,7 @@ import { deleteLocalValue, readLocalValue, writeLocalValue } from "./localDataba
 const CHAT_STATE_KEY = "chat-state-v1";
 
 export interface PersistedConversation extends Omit<ConversationItemType, "messages"> {
+  agentId?: string;
   messages: DefaultMessageInfo<XModelMessage>[];
   a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];

@@ -27,12 +27,18 @@ export interface ToolCallItem {
 export interface PermissionRequest {
   id: string;
   /** v1 走 `/session/{id}/permissions/{permissionID}`，v2 走 `/permission/{requestID}/reply`。 */
-  version: "v1" | "v2";
+  version: "v1" | "v2" | "acp";
+  agentId?: string;
   /** v1 权限名（如 bash / edit / webfetch），v2 动作名（如 bash）。 */
   permission: string;
   /** v1 匹配模式（如命令、路径），v2 资源列表。 */
   patterns: string[];
   metadata: Record<string, unknown>;
+  options?: Array<{
+    optionId: string;
+    name: string;
+    kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
+  }>;
   tool?: { messageID?: string; callID?: string };
 }
 
@@ -64,6 +70,8 @@ export interface OpenChatParams extends XModelParams {
   web_search?: boolean;
   /** 前端会话 id：本地 opencode（服务端）用它复用长会话。 */
   conversationId?: string;
+  /** 本地 CLI Agent id。存在时服务端按该 Agent 的原生协议或 ACP 运行。 */
+  acpAgentId?: string;
   /** 无状态代理的转发目标：随每次请求携带（baseUrl / apiKey / api）。
    * 本地模型（opencode/...）不携带。 */
   provider?: {
@@ -166,6 +174,17 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       return info.originMessage ?? { content: "", role: "assistant" };
     }
 
+    if (chunk?.event === "acp_plan" && chunk.data && chunk.data !== "[DONE]") {
+      try {
+        const plan = JSON.parse(chunk.data) as Record<string, unknown>;
+        const origin = info.originMessage ?? { content: "", role: "assistant" };
+        return { ...origin, agentPlan: plan };
+      } catch (err) {
+        console.error("Failed to parse acp_plan event:", err);
+      }
+      return info.originMessage ?? { content: "", role: "assistant" };
+    }
+
     if (chunk?.event === "web_search" && chunk.data && chunk.data !== "[DONE]") {
       try {
         const parsed = JSON.parse(chunk.data) as {
@@ -263,6 +282,9 @@ function preserveMessageMeta(
   if (Array.isArray(origin?.chatNotices)) meta.chatNotices = origin.chatNotices;
   if (Array.isArray(origin?.pendingPermissions))
     meta.pendingPermissions = origin.pendingPermissions;
+  if (origin?.agentPlan && typeof origin.agentPlan === "object") {
+    (meta as Record<string, unknown>).agentPlan = origin.agentPlan;
+  }
   return Object.keys(meta).length > 0 ? { ...next, ...meta } : next;
 }
 

@@ -15,6 +15,8 @@ import { parseFileWorkspaceContent } from "../../utils/fileWorkspace";
 import AssistantMessageContent from "./AssistantMessageContent.vue";
 import EmptyState from "./EmptyState.vue";
 import StarterPrompts from "./StarterPrompts.vue";
+import ToolCallThoughtChain from "./ToolCallThoughtChain.vue";
+import type { ToolCallItem } from "../../services/OpenChatProvider";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import type { AssistantStarterPrompt } from "../../features/assistant-market/types";
 
@@ -205,6 +207,11 @@ const lastAssistantMessageKey = computed(
 const submissionsForMessage = (messageId: string | number) =>
   props.a2uiSubmissions.filter((submission) => submission.ownerMessageId === String(messageId));
 
+const toolCallsForItem = (item: BubbleItemType): ToolCallItem[] => {
+  const tools = item.extraInfo?.toolCalls;
+  return Array.isArray(tools) ? (tools as ToolCallItem[]) : [];
+};
+
 const getThinkKey = (messageId: string | number) =>
   `${props.conversationKey || "__draft__"}::${String(messageId)}`;
 
@@ -310,15 +317,16 @@ watch(
       </template>
 
       <template #footer="{ item }">
-        <Actions
-          v-if="
-            item.role === 'assistant' &&
-            item.status === 'success' &&
-            item.key === lastAssistantMessageKey
-          "
-          class="message-actions"
-          :items="buildMessageActions(item)"
-        />
+        <template v-if="item.role === 'assistant'">
+          <div class="assistant-bubble-footer">
+            <ToolCallThoughtChain :tools="toolCallsForItem(item)" />
+            <Actions
+              v-if="item.status === 'success' && item.key === lastAssistantMessageKey"
+              class="message-actions"
+              :items="buildMessageActions(item)"
+            />
+          </div>
+        </template>
       </template>
     </BubbleList>
   </main>
@@ -351,6 +359,13 @@ watch(
 /* 气泡下方操作栏：与气泡左缘对齐，hover 才有底色（组件库原生交互） */
 .message-actions {
   margin-top: 2px;
+}
+.assistant-bubble-footer {
+  display: flex;
+  min-width: min(100%, 760px);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
 }
 .message-actions :deep(.antd-actions-item) {
   color: var(--brand-muted);

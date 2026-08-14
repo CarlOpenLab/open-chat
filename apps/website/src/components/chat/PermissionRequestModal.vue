@@ -54,6 +54,15 @@ const detailLines = computed<string[]>(() => {
   }
   return lines;
 });
+
+const supports = (kind: "allow_once" | "allow_always" | "reject_once" | "reject_always") => {
+  const options = props.request?.options;
+  return !options?.length || options.some((option) => option.kind === kind);
+};
+
+const canReject = computed(() => supports("reject_once") || supports("reject_always"));
+const canAllowOnce = computed(() => supports("allow_once"));
+const canAllowAlways = computed(() => supports("allow_always"));
 </script>
 
 <template>
@@ -74,17 +83,18 @@ const detailLines = computed<string[]>(() => {
       </span>
       <h2 class="m-0 text-[16px]">需要你的授权</h2>
       <p class="mx-0 mb-0 mt-[5px] text-[11px] leading-[1.6] text-brand-muted">
-        AI 请求<span class="text-brand-foreground">{{ permissionLabel }}</span
-        >。是否允许？
+        <span v-if="request.version === 'acp'" class="mr-1 text-brand-accent">CLI Agent</span>
+        请求<span class="text-brand-foreground">{{ permissionLabel }}</span
+        >。请选择本次操作的授权范围。
       </p>
       <pre
         v-if="detailLines.length"
         class="permission-detail mb-0 mt-[14px] max-h-[180px] overflow-auto whitespace-pre-wrap break-words rounded-[6px] border border-brand-border bg-brand-surface-subtle px-3 py-2 text-[11px] leading-[1.6] text-brand-foreground"
         >{{ detailLines.join("\n") }}</pre>
       <footer class="mt-[22px] flex flex-wrap justify-end gap-[8px]">
-        <Button @click="emit('allow', 'reject')">拒绝</Button>
-        <Button @click="emit('allow', 'once')">允许一次</Button>
-        <Button type="primary" @click="emit('allow', 'always')">
+        <Button v-if="canReject" @click="emit('allow', 'reject')">拒绝</Button>
+        <Button v-if="canAllowOnce" @click="emit('allow', 'once')">允许一次</Button>
+        <Button v-if="canAllowAlways" type="primary" @click="emit('allow', 'always')">
           <span class="inline-flex items-center gap-1">
             <ShieldCheck class="h-[14px] w-[14px]" />始终允许
           </span>

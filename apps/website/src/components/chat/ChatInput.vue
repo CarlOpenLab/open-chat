@@ -10,6 +10,7 @@ import {
   FolderOpen,
   Globe2,
   Square,
+  SquareTerminal,
 } from "@lucide/vue";
 import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
 import { computed, h, ref, watch, type Component } from "vue";
@@ -28,6 +29,11 @@ interface Props {
   searchEnabled: boolean;
   searchAvailable: boolean;
   assistantName?: string;
+  agentMode?: boolean;
+  agentName?: string;
+  agentAvailable?: boolean;
+  agentProtocol?: string;
+  agentConfiguring?: boolean;
   /** 深度思考 chip 的图标，可配置（默认 BrainCircuit） */
   thinkingIcon?: Component;
   /** 联网搜索 chip 的图标，可配置（默认 Globe2） */
@@ -53,6 +59,11 @@ const props = withDefaults(defineProps<Props>(), {
   thinkingIcon: () => BrainCircuit,
   searchIcon: () => Globe2,
   fileIcon: () => FolderOpen,
+  agentMode: false,
+  agentName: "",
+  agentAvailable: true,
+  agentProtocol: "本地 CLI",
+  agentConfiguring: false,
 });
 const emit = defineEmits<Emits>();
 
@@ -173,6 +184,9 @@ const modelMenu = computed<MenuProps>(() => {
 
 /** 模型图标：只有确实认得的模型才用品牌图标，其余用通用字形，避免张冠李戴。 */
 const brandedModel = computed(() => (/qwen/i.test(props.currentModel) ? "qwen" : ""));
+const modelSelectionAvailable = computed(() =>
+  props.modelCatalog.some((provider) => provider.models.length > 0),
+);
 
 // ============ 推理强度 ============
 
@@ -269,6 +283,7 @@ const chipClass = (active: boolean, disabled = false) => {
       :on-change="handleChange"
       :on-submit="handleSubmit"
       :suffix="false"
+      :disabled="agentMode && (!agentAvailable || agentConfiguring)"
     >
       <template #footer="{ defaultNode }">
         <div class="flex min-h-[26px] w-full items-center justify-between gap-3">
@@ -350,26 +365,68 @@ const chipClass = (active: boolean, disabled = false) => {
 
           <!-- composer 右排：模型选择（级联：供应商 → 模型）+ 发送 / 停止 -->
           <div class="flex min-w-0 flex-none items-center gap-[6px]">
+            <Tooltip
+              v-if="agentMode"
+              :title="
+                !agentAvailable
+                  ? `${agentName} CLI 不可用，请检查本地安装与登录状态`
+                  : agentConfiguring
+                    ? `正在读取 ${agentName} 的模型配置`
+                    : `${agentName} · ${agentProtocol}`
+              "
+            >
+              <button
+                type="button"
+                :class="chipClass(false, !agentAvailable)"
+                :aria-label="`当前 CLI Agent：${agentName}`"
+              >
+                <SquareTerminal class="!h-[12px] !w-[12px] flex-none text-brand-accent" />
+                <span class="max-w-[110px] truncate lt-sm:hidden">{{ agentName }}</span>
+                <span
+                  class="h-[6px] w-[6px] rounded-full"
+                  :class="agentAvailable ? 'bg-brand-success' : 'bg-brand-ghost'"
+                />
+              </button>
+            </Tooltip>
             <Dropdown
               :menu="modelMenu"
               v-model:open="modelMenuOpen"
               :trigger="['click']"
+              :disabled="!modelSelectionAvailable || agentConfiguring"
               placement="topRight"
               :get-popup-container="popupIntoChat"
               @open-change="handleModelOpenChange"
             >
               <button
                 type="button"
-                :class="chipClass(false)"
-                aria-label="选择模型"
-                :title="assistantName ? `助手：${assistantName}` : undefined"
+                :class="chipClass(false, !modelSelectionAvailable || agentConfiguring)"
+                :aria-disabled="!modelSelectionAvailable || agentConfiguring"
+                :aria-label="
+                  modelSelectionAvailable
+                    ? '选择模型'
+                    : agentMode
+                      ? currentModelLabel
+                      : '未配置模型'
+                "
+                :title="
+                  !modelSelectionAvailable
+                    ? agentMode
+                      ? currentModelLabel
+                      : '请先配置模型供应商'
+                    : assistantName
+                      ? `助手：${assistantName}`
+                      : undefined
+                "
               >
                 <ModelIcon v-if="brandedModel" :model="brandedModel" :size="13" />
                 <Cpu v-else class="!h-[12px] !w-[12px] flex-none text-brand-muted-strong" />
-                <span class="max-w-[180px] truncate lt-sm:max-w-[120px]">{{
+                <span class="max-w-[160px] truncate lt-sm:max-w-[92px]">{{
                   currentModelLabel || "选择模型"
                 }}</span>
-                <ChevronDown class="!h-3 !w-3 flex-none text-brand-muted-strong" />
+                <ChevronDown
+                  v-if="modelSelectionAvailable"
+                  class="!h-3 !w-3 flex-none text-brand-muted-strong"
+                />
               </button>
             </Dropdown>
             <component v-if="!loading" :is="defaultNode" />

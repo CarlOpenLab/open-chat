@@ -1,198 +1,127 @@
 # Open Chat
 
-A ChatGPT-like application with frontend-backend separation using Vue 3 and Express.js, powered by `@antdv-next/x-sdk`.
+Open Chat is a Vue 3 coding-agent workspace built with Antdv Next X. The UI can switch between
+Codex, OpenCode, Claude Code, Pi, and ordinary OpenAI-compatible model APIs while keeping each
+provider's conversations separate.
 
-## Project Structure
+The server exposes one compatibility gateway modeled after Waku's provider drivers:
 
-```
-open-chat/
-├── apps/
-│   ├── website/          # Vue 3 frontend application
-│   │   ├── src/
-│   │   │   ├── App.vue   # Main chat UI component
-│   │   │   ├── main.ts   # Application entry point
-│   │   │   └── style.css # Global styles
-│   │   └── vite.config.ts
-│   └── server/           # Express.js backend server
-│       ├── src/
-│       │   └── index.ts  # Server entry point
-│       └── .env          # Environment configuration
-└── packages/
-    └── utils/
-```
-
-## Features
-
-- 🎨 Modern chat UI with gradient design
-- 💬 Real-time streaming responses
-- 🔄 Auto-scroll to latest messages
-- ⌨️ Enter to send messages
-- 🎯 Loading indicators
-- ❌ Error handling
+- Codex runs through `codex app-server --stdio`.
+- Claude Code runs through its native `stream-json` stdin/stdout mode.
+- Pi runs through `pi --mode rpc --approve`.
+- OpenCode runs through `opencode serve` over local HTTP + SSE.
+- Custom ACP agents still run through the official `@agentclientprotocol/sdk`.
+- Agent text, thoughts, plans, tool calls, usage, and permission requests are normalized to SSE.
+- Existing OpenAI-compatible APIs and the legacy `opencode serve` integration remain available.
+- The browser stores conversation history locally in IndexedDB. API keys for manually configured
+  model providers are not persisted by the server.
 
 ## Setup
 
-### 1. Install Dependencies
+Install dependencies with Vite+:
 
 ```bash
 vp install
 ```
 
-### 2. Configure Providers
-
-Copy `apps/server/config/providers.example.toml` to `apps/server/config/providers.toml` (gateway settings only):
+Create `apps/server/config/providers.toml` from
+`apps/server/config/providers.example.toml`, then adjust the enabled integrations. A minimal local
+configuration is:
 
 ```toml
 bind_addr = "127.0.0.1:8082"
 cors_allowed_origins = ["http://localhost:3000"]
 
-# Local AI via opencode (AI 取本地的).
 [local]
+enabled = false
+
+[acp]
 enabled = true
+permission_timeout_ms = 300000
 ```
 
-**Two ways to get a model:**
+The built-in agent definitions detect these local commands directly:
 
-1. **Local AI (AI 取本地的, recommended)** — enable the `[local]` table. The server drives a
-   local `opencode serve` (HTTP + SSE, the same transport waku uses): models/providers are
-   discovered from the local opencode (`GET /api/model`, ids look like
-   `opencode/nemotron-3.5-lightning-free`; `GET /config/providers` additionally supplies the
-   configured providers, e.g. the paid `opencode-go/*` models unlocked by an opencode GO plan)
-   and chat requests are forwarded to local opencode. The frontend model picker shows these
-   automatically via a cascade **供应商 → 模型** selector — no baseUrl/apiKey needed.
+| Provider    | Required command | Native transport         |
+| ----------- | ---------------- | ------------------------ |
+| Codex       | `codex`          | app-server JSON-RPC      |
+| OpenCode    | `opencode`       | local HTTP + SSE         |
+| Claude Code | `claude`         | stream-json stdin/stdout |
+| Pi          | `pi`             | RPC stdin/stdout         |
 
-> Manual provider management (设置 → 模型服务) was removed from the settings UI; the app now
-> relies on the local opencode models above. The only server-side secret is the optional Tavily
-> key for web search (below).
+No separate `codex-acp`, `claude-code-acp`, or `pi-acp` installation is required. The server checks
+the inherited `PATH` and common Homebrew, `~/.local/bin`, Bun, Cargo, mise, and Volta locations.
+Override commands or working directories with `[[acp.agents]]`. For a custom ACP implementation,
+set `transport = "acp"` and point `command` at the ACP executable.
 
-### 3. Development
-
-Run both frontend and backend servers:
+## Development
 
 ```bash
-vp dev
-```
-
-Or run them separately:
-
-```bash
-# Backend server only
-vp run dev:server
-
-# Frontend only
-vp run dev:website
+vp run dev
 ```
 
 - Frontend: http://localhost:3000
-- Backend API: http://localhost:3001
-- Health check: http://localhost:3001/health
+- Backend: http://127.0.0.1:8082
+- Health: http://127.0.0.1:8082/health
 
-## API Endpoints
+The website dev server proxies `/api` to port 8082.
 
-### POST /api/chat/completions
+## Agent API
 
-Chat endpoint:
+### `GET /api/acp/agents`
 
-- **Local models** (ids like `opencode/...`, discovered from local opencode) are forwarded to the
-  local `opencode serve` — the server creates/reuses an opencode session per frontend
-  conversation (`conversationId` in the body), injects the system prompt on every prompt, and
-  converts the opencode event stream (`message.part.delta`, `session.idle`) into an OpenAI SSE
-  stream (`content` / `reasoning_content` chunks, `[DONE]`).
-- **Manual providers** keep the stateless proxy behavior: the request body carries the
-  forwarding target (`provider: { baseUrl, apiKey, api }`), the server forwards it verbatim to
-  `{baseUrl}/{api}` and pipes the upstream response (status, headers, body) back unchanged.
-  When the request declares a `web_search` tool and a search provider is configured, the server
-  runs the search agent loop instead: it intercepts the tool call, queries Tavily, and feeds
-  results back to the model (emitting `event: web_search` SSE frames for the Sources UI).
+Returns configured agents and their `installed` / `available` status.
 
-**Request Body:**
+### `GET /api/acp/sessions?agentId=codex`
+
+Returns the server's active in-memory session mappings for one agent or all agents.
+
+### `GET /api/acp/session?agentId=codex&conversationId=...`
+
+Creates or reuses the native/ACP session and returns its modes and `configOptions`. Codex models are
+discovered from `model/list`, Pi models from RPC, OpenCode models from its local server, and Claude
+Code exposes its supported aliases. The model picker uses the select option whose category is
+`model`; agents without model discovery remain on their own default model.
+
+### `POST /api/acp/session/config`
+
+Updates one session option through the active native protocol or ACP
+`session/set_config_option`. Each conversation keeps its own selected model.
+
+### `POST /api/chat/completions`
+
+The existing chat endpoint also accepts local CLI requests:
 
 ```json
 {
-  "provider": {
-    "baseUrl": "https://api.example.com/v1",
-    "apiKey": "sk-...",
-    "api": "chat/completions"
-  },
-  "messages": [{ "role": "user", "content": "Hello!" }],
-  "stream": true,
-  "model": "gpt-3.5-turbo",
-  "temperature": 0.7
+  "acpAgentId": "codex",
+  "conversationId": "browser-conversation-id",
+  "messages": [{ "role": "user", "content": "Inspect this repository" }],
+  "stream": true
 }
 ```
 
-**Response:**
+The response is an SSE stream. Standard assistant text uses OpenAI-compatible chunks; structured
+Agent updates use `tool_call`, `acp_plan`, `acp_session`, `acp_turn`, and `chat_permission` events.
 
-- Streaming: `text/event-stream` with SSE format (upstream frames pass through)
-- Non-streaming: JSON response
-- Upstream 4xx/5xx errors are returned as-is, so clients see the upstream's real error
+### `POST /api/chat/permission`
 
-### GET /api/models
+Resolves legacy OpenCode, native CLI, and ACP permission requests. The UI maps the common actions
+`once`, `always`, and `reject` to the decision format used by the active agent.
 
-Returns only `{ search: { enabled, provider } }` — providers/models live in the browser (IndexedDB), not on the server.
-
-## Technology Stack
-
-### Frontend
-
-- Vue 3 (Composition API)
-- Vite
-- `@antdv-next/x-sdk` - SDK for AI chat requests
-
-### Backend
-
-- Express.js
-- CORS
-- dotenv for environment variables
-
-### SDK
-
-- `@antdv-next/x-sdk` - Provides `OpenAIChatProvider`, `XRequest`, and `useXChat` for seamless chat integration
-
-## Build
+## Validation
 
 ```bash
-# Build frontend
-vp run website#build
-
-# Build backend
+vp check
+vp test
 vp run server#build
+vp run website#build
 ```
 
-## Production
+## Structure
 
-1. Set your API key in `apps/server/.env`
-2. Build both applications
-3. Start the backend server:
-   ```bash
-   cd apps/server
-   node dist/index.js
-   ```
-4. Serve the frontend from `apps/website/dist`
-
-## Customization
-
-### Change AI Model
-
-Edit `apps/website/src/App.vue`:
-
-```typescript
-const provider = new OpenAIChatProvider<ChatMessage>({
-  request: XRequest("/api/chat/completions", {
-    params: {
-      model: "gpt-4", // Change model here
-      temperature: 0.7,
-      stream: true,
-    },
-    streamTimeout: 60000,
-  }),
-});
+```text
+apps/website    Vue 3 and Antdv Next X workspace UI
+apps/server     Express gateway, native CLI/ACP managers, API proxy, and OpenCode driver
+packages/utils  Shared utilities
 ```
-
-### Change Theme
-
-Edit the gradient colors in `apps/website/src/App.vue` styles.
-
-## License
-
-MIT

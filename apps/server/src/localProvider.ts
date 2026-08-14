@@ -21,6 +21,7 @@ import { createServer as createNetServer } from "node:net";
 import type { ServerResponse } from "node:http";
 import { GatewayError } from "./error";
 import type { LocalConfig } from "./config";
+import { cliProcessEnv, resolveExecutable } from "./commandEnv";
 
 export interface LocalModelInfo {
   /** 形如 `provider/model`，与 `opencode models` 输出一致。 */
@@ -129,7 +130,7 @@ class OpenCodeServer {
     const child = spawn(this.binary, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
       cwd: this.cwd || process.cwd(),
       env: {
-        ...process.env,
+        ...cliProcessEnv(this.binary),
         OPENCODE_SERVER_PASSWORD: "",
         OPENCODE_SERVER_USERNAME: "opencode",
       },
@@ -222,7 +223,11 @@ export class LocalChatManager {
   private idleTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly config: LocalConfig) {
-    this.server = new OpenCodeServer(config.binary || "opencode", config.cwd || process.cwd());
+    const binary = config.binary || "opencode";
+    this.server = new OpenCodeServer(
+      resolveExecutable(binary) ?? binary,
+      config.cwd || process.cwd(),
+    );
   }
 
   /** 是否已配置并启用本地 opencode。 */

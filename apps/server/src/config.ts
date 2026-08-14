@@ -18,6 +18,31 @@ export interface AppConfig {
   search: SearchConfig;
   /** 本地 opencode（ACP 服务）配置；`enabled=false` 时服务端不启动本地 AI。 */
   local: LocalConfig;
+  /** ACP stdio Agents（Codex / OpenCode / Claude / Pi 等）的统一入口。 */
+  acp: AcpConfig;
+}
+
+export interface AcpAgentConfig {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  command: string;
+  args: string[];
+  /** 原始 CLI，用于区分“CLI 已安装”和“ACP 适配器可用”。 */
+  cliCommand: string;
+  cwd: string;
+  adapterHint: string;
+  transport: AgentTransport;
+}
+
+export type AgentTransport = "acp" | "codex" | "claude" | "pi" | "opencode";
+
+export interface AcpConfig {
+  enabled: boolean;
+  cwd: string;
+  permissionTimeoutMs: number;
+  agents: AcpAgentConfig[];
 }
 
 /**
@@ -58,6 +83,27 @@ interface RawGatewayConfig {
   cors_allowed_origins?: unknown;
   search?: unknown;
   local?: unknown;
+  acp?: unknown;
+}
+
+interface RawAcpConfig {
+  enabled?: unknown;
+  cwd?: unknown;
+  permission_timeout_ms?: unknown;
+  agents?: unknown;
+}
+
+interface RawAcpAgentConfig {
+  id?: unknown;
+  name?: unknown;
+  description?: unknown;
+  enabled?: unknown;
+  command?: unknown;
+  args?: unknown;
+  cli_command?: unknown;
+  cwd?: unknown;
+  adapter_hint?: unknown;
+  transport?: unknown;
 }
 
 interface RawLocalConfig {
@@ -109,6 +155,7 @@ export function parseConfig(tomlStr: string): AppConfig {
     corsAllowedOrigins: parseStringArray(raw.cors_allowed_origins, "cors_allowed_origins"),
     search: parseSearch(raw.search),
     local: parseLocal(raw.local),
+    acp: parseAcp(raw.acp),
   };
 }
 
@@ -133,6 +180,137 @@ const DEFAULT_LOCAL: LocalConfig = {
   sessionIdleMs: 30 * 60 * 1000,
   requestTimeoutMs: 5 * 60 * 1000,
 };
+
+const DEFAULT_ACP_AGENTS: AcpAgentConfig[] = [
+  {
+    id: "codex",
+    name: "Codex",
+    description: "OpenAI Codex CLI via native app-server",
+    enabled: true,
+    command: "codex",
+    args: [],
+    cliCommand: "codex",
+    cwd: "",
+    adapterHint: "请先安装并登录 Codex CLI",
+    transport: "codex",
+  },
+  {
+    id: "opencode",
+    name: "OpenCode",
+    description: "OpenCode CLI via its local HTTP server",
+    enabled: true,
+    command: "opencode",
+    args: [],
+    cliCommand: "opencode",
+    cwd: "",
+    adapterHint: "请先安装并登录 OpenCode CLI",
+    transport: "opencode",
+  },
+  {
+    id: "claude",
+    name: "Claude Code",
+    description: "Claude Code CLI via native stream-json",
+    enabled: true,
+    command: "claude",
+    args: [],
+    cliCommand: "claude",
+    cwd: "",
+    adapterHint: "请先安装并登录 Claude Code CLI",
+    transport: "claude",
+  },
+  {
+    id: "pi",
+    name: "Pi",
+    description: "Pi coding agent via native RPC mode",
+    enabled: true,
+    command: "pi",
+    args: [],
+    cliCommand: "pi",
+    cwd: "",
+    adapterHint: "请先安装并配置 Pi coding agent",
+    transport: "pi",
+  },
+];
+
+function parseAcp(raw: unknown): AcpConfig {
+  if (raw === undefined || raw === null) {
+    return {
+      enabled: true,
+      cwd: "",
+      permissionTimeoutMs: 5 * 60 * 1000,
+      agents: DEFAULT_ACP_AGENTS.map((agent) => ({ ...agent, args: [...agent.args] })),
+    };
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw GatewayError.invalidRequest("[acp] must be a table");
+  }
+  const value = raw as RawAcpConfig;
+  const configuredAgents = parseAcpAgents(value.agents);
+  return {
+    enabled: typeof value.enabled === "boolean" ? value.enabled : true,
+    cwd: optionalString(value.cwd) ?? "",
+    permissionTimeoutMs:
+      typeof value.permission_timeout_ms === "number" &&
+      Number.isFinite(value.permission_timeout_ms) &&
+      value.permission_timeout_ms > 0
+        ? Math.floor(value.permission_timeout_ms)
+        : 5 * 60 * 1000,
+    agents: configuredAgents.length > 0 ? configuredAgents : DEFAULT_ACP_AGENTS,
+  };
+}
+
+function parseAcpAgents(raw: unknown): AcpAgentConfig[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw GatewayError.invalidRequest("acp.agents must be an array of tables");
+  }
+  const seen = new Set<string>();
+  return raw.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw GatewayError.invalidRequest(`acp.agents[${index}] must be a table`);
+    }
+    const agent = item as RawAcpAgentConfig;
+    const id = optionalString(agent.id)?.toLowerCase();
+    const command = optionalString(agent.command);
+    if (!id || !/^[a-z0-9][a-z0-9_-]*$/.test(id)) {
+      throw GatewayError.invalidRequest(`acp.agents[${index}].id is invalid`);
+    }
+    if (seen.has(id)) throw GatewayError.invalidRequest(`duplicate ACP agent id: ${id}`);
+    if (!command) {
+      throw GatewayError.invalidRequest(`acp.agents[${index}].command is required`);
+    }
+    seen.add(id);
+    return {
+      id,
+      name: optionalString(agent.name) ?? id,
+      description: optionalString(agent.description) ?? "ACP coding agent",
+      enabled: typeof agent.enabled === "boolean" ? agent.enabled : true,
+      command,
+      args: parseStringArray(agent.args, `acp.agents[${index}].args`),
+      cliCommand: optionalString(agent.cli_command) ?? command,
+      cwd: optionalString(agent.cwd) ?? "",
+      adapterHint: optionalString(agent.adapter_hint) ?? "",
+      transport: parseAgentTransport(agent.transport, id, command),
+    };
+  });
+}
+
+function parseAgentTransport(raw: unknown, id: string, command: string): AgentTransport {
+  const value = optionalString(raw)?.toLowerCase();
+  if (value === "acp" || value === "codex" || value === "claude" || value === "pi") {
+    return value;
+  }
+  if (value === "opencode") return value;
+  if (value) throw GatewayError.invalidRequest(`unsupported agent transport: ${value}`);
+
+  // Existing custom configs predate `transport` and used adapter commands.
+  // Infer native mode only when both the id and executable are unambiguous.
+  if (id === "codex" && command === "codex") return "codex";
+  if (id === "claude" && command === "claude") return "claude";
+  if (id === "pi" && command === "pi") return "pi";
+  if (id === "opencode" && command === "opencode") return "opencode";
+  return "acp";
+}
 
 export function parseLocal(raw: unknown): LocalConfig {
   if (raw === undefined || raw === null) return { ...DEFAULT_LOCAL };

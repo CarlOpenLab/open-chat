@@ -5,6 +5,9 @@ import {
   Archive,
   ArrowLeft,
   ArrowRight,
+  Bot,
+  ChevronDown,
+  Circle,
   Ellipsis,
   LoaderCircle,
   MessageSquare,
@@ -25,6 +28,7 @@ import AssistantIcon from "../../features/assistant-market/components/AssistantI
 import { getMessagePreview, type OpenChatConversation } from "../../composables/useChatPersistence";
 import { resolveConversationGroup } from "../../utils/sessionDateGroup";
 import { formatElapsedDuration, formatRelativeTime } from "../../utils/relativeTime";
+import type { AgentView } from "../../services/acp";
 
 interface Props {
   open: boolean;
@@ -38,6 +42,8 @@ interface Props {
   busySince?: number;
   /** 当前是否深色主题，底栏的主题切换按钮据此换图标 */
   dark?: boolean;
+  agents?: AgentView[];
+  activeAgentId?: string;
 }
 
 interface Emits {
@@ -54,6 +60,7 @@ interface Emits {
   (e: "pin", key: string): void;
   (e: "archive", key: string): void;
   (e: "delete", key: string): void;
+  (e: "agentChange", agentId: string): void;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -62,6 +69,8 @@ const props = withDefaults(defineProps<Props>(), {
   busyKey: "",
   busySince: 0,
   dark: true,
+  agents: () => [],
+  activeAgentId: "api",
 });
 const emit = defineEmits<Emits>();
 
@@ -131,6 +140,46 @@ const groupedConversations = computed<ConversationItemType[]>(() => {
 });
 
 const hasConversations = computed(() => props.conversationList.length > 0);
+
+const activeAgent = computed(
+  () => props.agents.find((agent) => agent.id === props.activeAgentId) ?? props.agents[0],
+);
+
+const agentStatus = (agent: Partial<AgentView>): string => {
+  if (!agent.enabled) return "已禁用";
+  if (agent.available) return `${agent.protocol || "CLI"} 已就绪`;
+  if (agent.installed && agent.protocol === "ACP") return "ACP 适配器未找到";
+  return "CLI 未安装";
+};
+
+const agentMenu = computed(() => ({
+  rootClass: "agent-provider-menu",
+  items: props.agents.map((agent) => ({
+    key: agent.id,
+    label: agent.name,
+    title: agent.description,
+    available: agent.available,
+    installed: agent.installed,
+    enabled: agent.enabled,
+    protocol: agent.protocol,
+  })),
+  selectedKeys: [props.activeAgentId],
+  selectable: true,
+  labelRender: (item: Record<string, unknown>) =>
+    h("span", { class: "agent-provider-option" }, [
+      h("span", {
+        class: [
+          "agent-provider-dot",
+          item.available ? "is-online" : item.installed ? "is-installed" : "is-offline",
+        ],
+      }),
+      h("span", { class: "agent-provider-option-body" }, [
+        h("span", { class: "agent-provider-option-name" }, String(item.label ?? "Agent")),
+        h("span", { class: "agent-provider-option-status" }, agentStatus(item)),
+      ]),
+    ]),
+  onClick: ({ key }: { key: string | number }) => emit("agentChange", String(key)),
+}));
 
 /**
  * Conversations 的 expandedKeys 默认是空数组，只要开了 collapsible，
@@ -327,6 +376,37 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
+    <!-- CLI / API 供应商切换：下方会话列表始终只属于当前供应商。 -->
+    <div class="px-[10px] pb-[8px]">
+      <Dropdown :menu="agentMenu" :trigger="['click']" placement="bottomLeft">
+        <button
+          type="button"
+          class="agent-provider-trigger"
+          aria-label="切换 CLI 供应商"
+          :title="activeAgent?.description"
+        >
+          <span class="agent-provider-mark"><Bot class="!h-[14px] !w-[14px]" /></span>
+          <span class="min-w-0 flex-1 text-left">
+            <span class="block truncate text-[12px] font-medium text-brand-foreground">{{
+              activeAgent?.name || "选择供应商"
+            }}</span>
+            <span class="flex items-center gap-[5px] text-[10px] text-brand-muted-strong">
+              <Circle
+                class="!h-[6px] !w-[6px]"
+                :class="
+                  activeAgent?.available
+                    ? 'fill-brand-success text-brand-success'
+                    : 'fill-brand-ghost text-brand-ghost'
+                "
+              />
+              {{ agentStatus(activeAgent) }}
+            </span>
+          </span>
+          <ChevronDown class="!h-[13px] !w-[13px] text-brand-muted-strong" />
+        </button>
+      </Dropdown>
+    </div>
+
     <!-- 新任务 / 搜索 -->
     <!-- 动作行紧贴 titlebar，搜索行下方留 10px（SIDEBAR_SEARCH_BOTTOM_GAP） -->
     <div class="flex flex-none flex-col gap-[4px] px-[10px] pb-[10px]">
@@ -421,6 +501,74 @@ onBeforeUnmount(() => {
 .chat-sidebar :deep(.antd-conversations) {
   min-height: 100%;
   padding: 0 10px 10px;
+}
+
+.agent-provider-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border: 1px solid var(--brand-border);
+  border-radius: 7px;
+  background: var(--brand-surface-subtle);
+  color: var(--brand-foreground);
+  cursor: pointer;
+}
+.agent-provider-trigger:hover {
+  border-color: var(--brand-border-strong);
+}
+.agent-provider-mark {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--brand-accent) 12%, transparent);
+  color: var(--brand-accent);
+}
+:global(.agent-provider-menu) {
+  width: 236px;
+  padding: 5px;
+}
+:global(.agent-provider-option) {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+:global(.agent-provider-dot) {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--brand-ghost);
+}
+:global(.agent-provider-dot.is-online) {
+  background: var(--brand-success);
+}
+:global(.agent-provider-dot.is-installed) {
+  background: var(--brand-accent);
+}
+:global(.agent-provider-option-body) {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+:global(.agent-provider-option-name) {
+  overflow: hidden;
+  color: var(--brand-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:global(.agent-provider-option-status) {
+  color: var(--brand-muted-strong);
+  font-size: 10px;
 }
 /* 行距只由 SIDEBAR_SESSION_ROW_GAP = 1 决定，清掉组件自带的 gap / 顶部留白 */
 .chat-sidebar :deep(.antd-conversations-list) {

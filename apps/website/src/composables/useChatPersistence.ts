@@ -14,6 +14,8 @@ import { isA2UISubmissionContextMessage, type A2UISubmission } from "../utils/a2
 import type { WorkspaceFileDraft } from "../utils/fileWorkspace";
 
 export interface OpenChatConversation extends ConversationItemType {
+  /** 会话所属兼容层供应商；历史数据缺省时归入 API。 */
+  agentId?: string;
   messages?: DefaultMessageInfo<XModelMessage>[];
   a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
@@ -101,6 +103,10 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
             : [],
           systemPrompt:
             typeof conversation.systemPrompt === "string" ? conversation.systemPrompt : "",
+          agentId:
+            typeof conversation.agentId === "string" && conversation.agentId
+              ? conversation.agentId
+              : "api",
           ...(conversation.assistant ? { assistant: conversation.assistant } : {}),
         };
       });
@@ -136,6 +142,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
       return {
         ...conv,
         key: String(conv.key),
+        agentId: typeof conv.agentId === "string" && conv.agentId ? conv.agentId : "api",
         label: typeof conv.label === "string" && conv.label.trim() ? conv.label : "新对话",
       };
     });

@@ -32,7 +32,16 @@ import {
 } from "../features/assistant-market/catalog";
 import type { AssistantConversationSnapshot } from "../features/assistant-market/types";
 import { loadChatState } from "../services/chatStorage";
-import { useChatModels } from "../composables/useChatModels";
+import {
+  API_AGENT,
+  flattenAcpSelectOptions,
+  loadAcpAgents,
+  loadAcpSession,
+  setAcpSessionConfig,
+  type AcpSessionState,
+  type AgentView,
+} from "../services/acp";
+import { useChatModels, type ModelCatalogEntry } from "../composables/useChatModels";
 import {
   getMessagePreview,
   useChatPersistence,
@@ -86,6 +95,11 @@ const assistantCenterOpen = ref(false);
 const assistantCenterView = ref<"market" | "installed">("market");
 const commandPaletteOpen = ref(false);
 const settingsOpen = ref(false);
+const agents = ref<AgentView[]>([API_AGENT]);
+const activeAgentId = ref("api");
+const acpSession = ref<AcpSessionState | null>(null);
+const acpSessionLoading = ref(false);
+const draftConversationKey = ref("");
 
 // 面板尺寸（sidebar 180–420，right panel 280–1000）
 /** 默认 sidebar 252，拖拽区间 SIDEBAR_MIN/MAX_WIDTH = 180 / 420 */
@@ -114,8 +128,9 @@ if (initialStarterPrompt) content.value = initialStarterPrompt.prompt;
 const createNewConversation = (
   systemPrompt: string = "",
   assistant: AssistantConversationSnapshot | null = null,
+  preferredKey: string = "",
 ): OpenChatConversation => {
-  const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const key = preferredKey || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const initialContent = assistant?.initialAssistantMessage?.trim();
   const initialMessages: DefaultMessageInfo<XModelMessage>[] = initialContent
     ? [
@@ -141,11 +156,21 @@ const createNewConversation = (
     a2uiSubmissions: [],
     workspaceDrafts: [],
     systemPrompt,
+    agentId: activeAgentId.value,
     ...(assistant ? { assistant } : {}),
   };
 };
 
 const conversationList = ref<OpenChatConversation[]>([]);
+const visibleConversationList = computed(() =>
+  conversationList.value.filter(
+    (conversation) => (conversation.agentId || "api") === activeAgentId.value,
+  ),
+);
+const activeAgent = computed(
+  () => agents.value.find((agent) => agent.id === activeAgentId.value) ?? API_AGENT,
+);
+const isAcpAgent = computed(() => activeAgent.value.kind === "acp");
 
 // ============ 模型加载 ============
 
@@ -160,6 +185,78 @@ const {
 } = useChatModels();
 
 loadModels();
+
+const activeAcpModelOption = computed(() =>
+  acpSession.value?.configOptions.find(
+    (option) =>
+      option.type === "select" &&
+      (option.category === "model" ||
+        option.id.toLowerCase() === "model" ||
+        option.name.toLowerCase() === "model"),
+  ),
+);
+const acpModelCatalog = computed<ModelCatalogEntry[]>(() => {
+  const option = activeAcpModelOption.value;
+  if (!option || option.type !== "select") return [];
+  return [
+    {
+      providerId: activeAgent.value.id,
+      providerName: activeAgent.value.name,
+      models: flattenAcpSelectOptions(option.options).map((model) => ({
+        id: model.value,
+        name: model.name || model.value,
+      })),
+    },
+  ];
+});
+const inputModelCatalog = computed(() =>
+  isAcpAgent.value ? acpModelCatalog.value : modelCatalog.value,
+);
+const inputCurrentModel = computed(() => {
+  const option = activeAcpModelOption.value;
+  return isAcpAgent.value && option?.type === "select" ? option.currentValue : currentModel.value;
+});
+const inputCurrentModelLabel = computed(() => {
+  if (!isAcpAgent.value) return currentModelLabel.value;
+  const option = activeAcpModelOption.value;
+  if (!option || option.type !== "select") {
+    return acpSessionLoading.value ? "读取模型..." : "由 Agent 决定";
+  }
+  const selected = flattenAcpSelectOptions(option.options).find(
+    (model) => model.value === option.currentValue,
+  );
+  return selected?.name || option.currentValue;
+});
+
+const ensureDraftConversationKey = (): string => {
+  if (!draftConversationKey.value) {
+    draftConversationKey.value = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+  return draftConversationKey.value;
+};
+
+let acpSessionLoadSequence = 0;
+const refreshAcpSession = async () => {
+  const sequence = ++acpSessionLoadSequence;
+  if (!isAcpAgent.value || !activeAgent.value.available || isHydrating.value) {
+    acpSession.value = null;
+    acpSessionLoading.value = false;
+    return;
+  }
+  const conversationId = currentConversationKey.value || ensureDraftConversationKey();
+  acpSessionLoading.value = true;
+  try {
+    const session = await loadAcpSession(activeAgentId.value, conversationId);
+    if (sequence === acpSessionLoadSequence) acpSession.value = session;
+  } catch (error) {
+    if (sequence !== acpSessionLoadSequence) return;
+    acpSession.value = null;
+    console.error("Failed to load agent session options:", error);
+    message.error(error instanceof Error ? error.message : "Agent 模型配置加载失败");
+  } finally {
+    if (sequence === acpSessionLoadSequence) acpSessionLoading.value = false;
+  }
+};
 
 // ============ 对话管理 ============
 
@@ -369,6 +466,29 @@ const handleSidebarToggle = () => {
   conversationsOpen.value = !conversationsOpen.value;
 };
 
+const handleAgentChange = (agentId: string) => {
+  if (agentId === activeAgentId.value) return;
+  if (isRequesting.value) {
+    message.warning("请先停止当前 Agent 任务再切换供应商");
+    return;
+  }
+  const next = agents.value.find((agent) => agent.id === agentId);
+  if (!next) return;
+  draftConversationKey.value = "";
+  acpSession.value = null;
+  activeAgentId.value = next.id;
+  localStorage.setItem("open-chat-agent", next.id);
+  currentConversationKey.value = "";
+  setMessages([]);
+  showWelcome.value = true;
+  historyBack.value = [];
+  historyForward.value = [];
+  draftAssistant.value = null;
+  if (!next.available) {
+    message.warning(next.adapterHint || `${next.name} 当前不可用，请检查本地 CLI 安装与登录状态`);
+  }
+};
+
 const closeSidebar = () => {
   conversationsOpen.value = false;
 };
@@ -498,6 +618,10 @@ watch(isRequesting, (requesting) => {
   requestStartedAt.value = 0;
 });
 
+watch([activeAgentId, currentConversationKey, isHydrating], () => {
+  void refreshAcpSession();
+});
+
 // 监听消息变化，同步到对话列表
 watch(
   messages,
@@ -551,7 +675,18 @@ onMounted(async () => {
     rightPanelOpen.value = false;
   }
 
-  const persistedState = await loadChatState();
+  const [persistedState, loadedAgents] = await Promise.all([
+    loadChatState(),
+    loadAcpAgents().catch((error) => {
+      console.error("Failed to load local agents:", error);
+      return [API_AGENT];
+    }),
+  ]);
+  agents.value = loadedAgents;
+  const storedAgentId = localStorage.getItem("open-chat-agent") || "";
+  const storedAgent = loadedAgents.find((agent) => agent.id === storedAgentId);
+  const firstAvailableAcp = loadedAgents.find((agent) => agent.kind === "acp" && agent.available);
+  activeAgentId.value = storedAgent?.id ?? firstAvailableAcp?.id ?? "api";
 
   if (persistedState && persistedState.conversationList.length > 0) {
     applyPersistedState(persistedState);
@@ -615,6 +750,10 @@ const bubbleItems = computed<BubbleItemType[]>(() => {
         toolCalls: Array.isArray(modelMessage.toolCalls) ? modelMessage.toolCalls : undefined,
         chatError: typeof modelMessage.chatError === "string" ? modelMessage.chatError : undefined,
         chatNotices: Array.isArray(modelMessage.chatNotices) ? modelMessage.chatNotices : undefined,
+        agentPlan:
+          modelMessage.agentPlan && typeof modelMessage.agentPlan === "object"
+            ? modelMessage.agentPlan
+            : undefined,
       },
     }));
 });
@@ -661,6 +800,7 @@ const handlePermissionResponse = async (response: "once" | "always" | "reject"):
         permissionId: permission.id,
         response: responseText,
         version: permission.version,
+        agentId: permission.agentId,
       }),
     });
     if (!res.ok) {
@@ -706,6 +846,13 @@ const handleSubmit = (
 ) => {
   if (!nextContent || !nextContent.trim()) return;
   if (isRequesting.value) return;
+  if (!activeAgent.value.available) {
+    message.warning(
+      activeAgent.value.adapterHint ||
+        `${activeAgent.value.name} 当前不可用，请检查本地 CLI 安装与登录状态`,
+    );
+    return;
+  }
 
   // 草稿态首次发送时，才创建真实会话并写入侧栏
   if (isInDraftMode.value) {
@@ -713,9 +860,11 @@ const handleSubmit = (
     const newConversation = createNewConversation(
       options.systemPrompt ?? assistant?.renderedSystemPrompt ?? "",
       assistant,
+      isAcpAgent.value ? ensureDraftConversationKey() : "",
     );
     conversationList.value.unshift(newConversation);
     currentConversationKey.value = String(newConversation.key);
+    draftConversationKey.value = "";
   }
 
   const conversation = getCurrentConversation();
@@ -736,7 +885,7 @@ const handleSubmit = (
   onRequest(
     {
       messages: [{ role: "user", content: nextContent }],
-      model: currentModel.value,
+      model: inputCurrentModel.value,
       systemPrompt: getRequestSystemPrompt(
         conversation.assistant?.renderedSystemPrompt ?? conversation.systemPrompt ?? "",
       ),
@@ -744,9 +893,10 @@ const handleSubmit = (
       thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
       // 本地 opencode（服务端 AI）：按会话复用长会话，无需转发目标。
       conversationId: String(conversation.key),
+      ...(isAcpAgent.value ? { acpAgentId: activeAgentId.value } : {}),
       // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
-      ...(forwardProvider ? { provider: forwardProvider } : {}),
-      ...(searchEnabled.value ? { web_search: true } : {}),
+      ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
+      ...(!isAcpAgent.value && searchEnabled.value ? { web_search: true } : {}),
     },
     options.extraInfo ? { extraInfo: options.extraInfo } : undefined,
   );
@@ -791,8 +941,30 @@ const handleA2UIAction = (payload: A2UIActionPayload) => {
   });
 };
 
-const handleModelChange = (key: string) => {
-  currentModel.value = key;
+const handleModelChange = async (key: string) => {
+  if (!isAcpAgent.value) {
+    currentModel.value = key;
+    return;
+  }
+  if (isRequesting.value || acpSessionLoading.value) return;
+  const session = acpSession.value;
+  const option = activeAcpModelOption.value;
+  if (!session || !option || option.type !== "select") return;
+
+  acpSessionLoading.value = true;
+  try {
+    acpSession.value = await setAcpSessionConfig(
+      activeAgentId.value,
+      session.conversationId,
+      option.id,
+      key,
+    );
+    message.success(`已切换到 ${inputCurrentModelLabel.value}`);
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "Agent 模型切换失败");
+  } finally {
+    acpSessionLoading.value = false;
+  }
 };
 
 const handleThinkingChange = (value: boolean) => {
@@ -866,13 +1038,14 @@ const handleReloadMessage = (messageId: string | number) => {
     currentConversation?.assistant?.renderedSystemPrompt ?? currentConversation?.systemPrompt ?? "";
   const forwardProvider = getForwardProvider(currentModel.value);
   onReload(messageId, {
-    model: currentModel.value,
+    model: inputCurrentModel.value,
     systemPrompt: getRequestSystemPrompt(baseSystemPrompt),
     // 本地 opencode：复用同一会话长会话
     conversationId: String(currentConversation?.key ?? ""),
+    ...(isAcpAgent.value ? { acpAgentId: activeAgentId.value } : {}),
     // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
-    ...(forwardProvider ? { provider: forwardProvider } : {}),
-    ...(searchEnabled.value ? { web_search: true } : {}),
+    ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
+    ...(!isAcpAgent.value && searchEnabled.value ? { web_search: true } : {}),
   });
 };
 
@@ -971,13 +1144,15 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         <div class="h-full" :style="{ width: sidebarWidth + 'px' }">
           <ChatSidebar
             :open="conversationsOpen"
-            :conversation-list="conversationList"
+            :conversation-list="visibleConversationList"
             :current-key="currentConversationKey"
             :can-go-back="historyBack.length > 0"
             :can-go-forward="historyForward.length > 0"
             :busy-key="isRequesting ? activeRequestConversationKey : ''"
             :busy-since="requestStartedAt"
             :dark="dark"
+            :agents="agents"
+            :active-agent-id="activeAgentId"
             @toggle-sidebar="handleSidebarToggle"
             @toggle-theme="emit('toggleTheme')"
             @new-conversation="handleNewConversation"
@@ -991,6 +1166,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
             @pin="handlePinConversation"
             @archive="handleArchiveConversation"
             @delete="handleDeleteConversation"
+            @agent-change="handleAgentChange"
           />
         </div>
       </div>
@@ -1018,6 +1194,10 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :can-go-forward="historyForward.length > 0"
         :diff-added="workspaceDiffStats.added"
         :diff-removed="workspaceDiffStats.removed"
+        :agent-name="activeAgent.name"
+        :agent-available="activeAgent.available"
+        :agent-protocol="activeAgent.protocol"
+        :agent-kind="activeAgent.kind"
         @toggle-sidebar="handleSidebarToggle"
         @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
         @navigate-back="handleNavigateBack"
@@ -1049,14 +1229,19 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       <ChatInput
         v-model="content"
         :loading="isRequesting"
-        :current-model="currentModel"
-        :current-model-label="currentModelLabel"
-        :model-catalog="modelCatalog ?? []"
+        :current-model="inputCurrentModel"
+        :current-model-label="inputCurrentModelLabel"
+        :model-catalog="inputModelCatalog"
         :thinking-enabled="thinkingEnabled"
         :file-mode-enabled="fileModeEnabled"
         :search-enabled="searchEnabled"
         :search-available="searchAvailable"
         :assistant-name="activeAssistant?.name"
+        :agent-mode="isAcpAgent"
+        :agent-name="activeAgent.name"
+        :agent-available="activeAgent.available"
+        :agent-protocol="activeAgent.protocol"
+        :agent-configuring="acpSessionLoading"
         @change="handleChange"
         @cancel="handleCancel"
         @submit="handleSubmit"
@@ -1116,7 +1301,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
 
     <CommandPalette
       :open="commandPaletteOpen"
-      :conversation-list="conversationList"
+      :conversation-list="visibleConversationList"
       :dark="dark"
       @update:open="commandPaletteOpen = $event"
       @new-conversation="handleNewConversation"
