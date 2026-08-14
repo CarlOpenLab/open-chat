@@ -45,9 +45,25 @@ Copy `apps/server/config/providers.example.toml` to `apps/server/config/provider
 ```toml
 bind_addr = "127.0.0.1:8082"
 cors_allowed_origins = ["http://localhost:3000"]
+
+# Local AI via opencode (AI 取本地的).
+[local]
+enabled = true
 ```
 
-Providers (baseUrl / apiKey / models) are **not** configured on the server — it is a stateless proxy. Open the settings UI in the app (设置 → 模型服务) and add them there; they are stored in the browser (IndexedDB). Each chat request carries the forwarding target in its body, so the server never stores API keys. The only server-side secret is the optional Tavily key for web search (below).
+**Two ways to get a model:**
+
+1. **Local AI (AI 取本地的, recommended)** — enable the `[local]` table. The server drives a
+   local `opencode serve` (HTTP + SSE, the same transport waku uses): models/providers are
+   discovered from the local opencode (`GET /api/model`, ids look like
+   `opencode/nemotron-3.5-lightning-free`; `GET /config/providers` additionally supplies the
+   configured providers, e.g. the paid `opencode-go/*` models unlocked by an opencode GO plan)
+   and chat requests are forwarded to local opencode. The frontend model picker shows these
+   automatically via a cascade **供应商 → 模型** selector — no baseUrl/apiKey needed.
+
+> Manual provider management (设置 → 模型服务) was removed from the settings UI; the app now
+> relies on the local opencode models above. The only server-side secret is the optional Tavily
+> key for web search (below).
 
 ### 3. Development
 
@@ -75,7 +91,19 @@ vp run dev:website
 
 ### POST /api/chat/completions
 
-Chat endpoint — a **stateless proxy**: the request body carries the forwarding target (`provider: { baseUrl, apiKey, api }`), the server forwards it verbatim to `{baseUrl}/{api}` and pipes the upstream response (status, headers, body) back unchanged. When the request declares a `web_search` tool and a search provider is configured, the server runs the search agent loop instead: it intercepts the tool call, queries Tavily, and feeds results back to the model (emitting `event: web_search` SSE frames for the Sources UI).
+Chat endpoint:
+
+- **Local models** (ids like `opencode/...`, discovered from local opencode) are forwarded to the
+  local `opencode serve` — the server creates/reuses an opencode session per frontend
+  conversation (`conversationId` in the body), injects the system prompt on every prompt, and
+  converts the opencode event stream (`message.part.delta`, `session.idle`) into an OpenAI SSE
+  stream (`content` / `reasoning_content` chunks, `[DONE]`).
+- **Manual providers** keep the stateless proxy behavior: the request body carries the
+  forwarding target (`provider: { baseUrl, apiKey, api }`), the server forwards it verbatim to
+  `{baseUrl}/{api}` and pipes the upstream response (status, headers, body) back unchanged.
+  When the request declares a `web_search` tool and a search provider is configured, the server
+  runs the search agent loop instead: it intercepts the tool call, queries Tavily, and feeds
+  results back to the model (emitting `event: web_search` SSE frames for the Sources UI).
 
 **Request Body:**
 

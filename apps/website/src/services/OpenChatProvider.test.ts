@@ -67,6 +67,45 @@ test("emits web search sources and displays the search marker", () => {
   ]);
 });
 
+test("emits permission requests and accumulates them on the message", () => {
+  let received: unknown;
+  provider.onPermissionRequest = (request) => {
+    received = request;
+  };
+
+  const origin: XModelMessage = { content: "", role: "assistant" };
+  const first = transform(origin, {
+    event: "chat_permission",
+    data: JSON.stringify({
+      id: "per_1",
+      version: "v1",
+      permission: "bash",
+      patterns: ["ls /tmp"],
+      metadata: {},
+    }),
+  });
+  const second = transform(first, {
+    event: "chat_permission",
+    data: JSON.stringify({
+      id: "per_2",
+      version: "v2",
+      permission: "edit",
+      patterns: ["/Users/**"],
+      metadata: {},
+    }),
+  });
+
+  expect(received).toEqual({
+    id: "per_2",
+    version: "v2",
+    permission: "edit",
+    patterns: ["/Users/**"],
+    metadata: {},
+  });
+  expect((second as { pendingPermissions?: unknown[] }).pendingPermissions).toHaveLength(2);
+  expect(second.content).toBe("");
+});
+
 test("excludes host-only opening messages from model requests", () => {
   provider.injectGetMessages(() => [
     {

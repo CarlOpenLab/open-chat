@@ -16,6 +16,31 @@ export interface AppConfig {
   bindAddr: string;
   corsAllowedOrigins: string[];
   search: SearchConfig;
+  /** 本地 opencode（ACP 服务）配置；`enabled=false` 时服务端不启动本地 AI。 */
+  local: LocalConfig;
+}
+
+/**
+ * 本地 AI（opencode serve）配置。
+ *
+ * 参考 waku 的做法：服务端驱动本地 `opencode serve`（HTTP + SSE），
+ * 模型与供应商从本地发现（`GET /api/model` 返回 `providerID/modelID`），
+ * 聊天请求转发到本地 opencode，不再依赖客户端上传 baseUrl/apiKey。
+ */
+export interface LocalConfig {
+  enabled: boolean;
+  /** opencode 可执行文件；空字符串自动从 PATH 查找。 */
+  binary: string;
+  /** opencode serve 的工作目录；空字符串用服务端启动目录。 */
+  cwd: string;
+  /** 使用的 agent：`build` 或 `plan`。 */
+  agent: string;
+  /** 前端会话 → opencode session 的缓存上限。 */
+  maxSessions: number;
+  /** 会话空闲回收时间（毫秒）。 */
+  sessionIdleMs: number;
+  /** 单次模型请求超时（毫秒）。 */
+  requestTimeoutMs: number;
 }
 
 export interface SearchConfig {
@@ -32,6 +57,17 @@ interface RawGatewayConfig {
   bind_addr?: unknown;
   cors_allowed_origins?: unknown;
   search?: unknown;
+  local?: unknown;
+}
+
+interface RawLocalConfig {
+  enabled?: unknown;
+  binary?: unknown;
+  cwd?: unknown;
+  agent?: unknown;
+  max_sessions?: unknown;
+  session_idle_ms?: unknown;
+  request_timeout_ms?: unknown;
 }
 
 interface RawSearchConfig {
@@ -72,6 +108,7 @@ export function parseConfig(tomlStr: string): AppConfig {
     bindAddr: optionalString(raw.bind_addr) ?? DEFAULT_BIND_ADDR,
     corsAllowedOrigins: parseStringArray(raw.cors_allowed_origins, "cors_allowed_origins"),
     search: parseSearch(raw.search),
+    local: parseLocal(raw.local),
   };
 }
 
@@ -85,6 +122,47 @@ export function parseBindAddr(addr: string): { host: string; port: number } {
     throw GatewayError.invalidRequest(`Invalid bind_addr port: ${addr}`);
   }
   return { host: match[1], port };
+}
+
+const DEFAULT_LOCAL: LocalConfig = {
+  enabled: false,
+  binary: "",
+  cwd: "",
+  agent: "build",
+  maxSessions: 50,
+  sessionIdleMs: 30 * 60 * 1000,
+  requestTimeoutMs: 5 * 60 * 1000,
+};
+
+export function parseLocal(raw: unknown): LocalConfig {
+  if (raw === undefined || raw === null) return { ...DEFAULT_LOCAL };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw GatewayError.invalidRequest("[local] must be a table");
+  }
+  const l = raw as RawLocalConfig;
+  const agentRaw = optionalString(l.agent);
+  return {
+    enabled: typeof l.enabled === "boolean" ? l.enabled : DEFAULT_LOCAL.enabled,
+    binary: optionalString(l.binary) ?? DEFAULT_LOCAL.binary,
+    cwd: optionalString(l.cwd) ?? DEFAULT_LOCAL.cwd,
+    agent: agentRaw === "plan" ? "plan" : "build",
+    maxSessions:
+      typeof l.max_sessions === "number" && Number.isFinite(l.max_sessions) && l.max_sessions > 0
+        ? Math.floor(l.max_sessions)
+        : DEFAULT_LOCAL.maxSessions,
+    sessionIdleMs:
+      typeof l.session_idle_ms === "number" &&
+      Number.isFinite(l.session_idle_ms) &&
+      l.session_idle_ms > 0
+        ? Math.floor(l.session_idle_ms)
+        : DEFAULT_LOCAL.sessionIdleMs,
+    requestTimeoutMs:
+      typeof l.request_timeout_ms === "number" &&
+      Number.isFinite(l.request_timeout_ms) &&
+      l.request_timeout_ms > 0
+        ? Math.floor(l.request_timeout_ms)
+        : DEFAULT_LOCAL.requestTimeoutMs,
+  };
 }
 
 function parseSearch(raw: unknown): SearchConfig {

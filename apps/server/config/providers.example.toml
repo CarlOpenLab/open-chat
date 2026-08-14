@@ -1,7 +1,7 @@
 # Gateway settings. The server is a stateless proxy: each chat request carries
-# the forwarding target (baseUrl / apiKey / api) in its body, so providers are
-# managed from the browser (设置 → 模型服务), stored in IndexedDB — nothing
-# provider-related lives in this file.
+# the forwarding target (baseUrl / apiKey / api) in its body. Manual provider
+# management in the browser UI was removed — models come from the local opencode
+# integration below. Nothing provider-related lives in this file.
 #
 # Copy this file to config/providers.toml (git-ignored) and adjust as needed.
 
@@ -26,3 +26,27 @@ api_key = "replace-with-your-tavily-key"
 max_results = 5
 search_depth = "basic" # "basic" or "advanced"
 include_answer = true
+
+# Local AI via opencode (AI 取本地的). Optional.
+#
+# When enabled, the server drives a local `opencode serve` (HTTP + SSE, the
+# same transport waku uses): models/providers are discovered from the local
+# opencode — `GET /api/model` lists the available models (free `opencode/*`,
+# ids look like `opencode/nemotron-3.5-lightning-free`) and
+# `GET /config/providers` supplies every configured provider, including the
+# paid `opencode-go/*` models unlocked by your opencode GO plan. Chat requests
+# are forwarded to the local opencode instead of a remote baseUrl/apiKey, so
+# the frontend model picker shows all of these models automatically.
+# Omit the [local] table or set enabled = false to keep the stateless proxy only.
+[local]
+enabled = true
+# Path to the opencode binary. Leave empty to look it up in PATH.
+# binary = "opencode"
+# Working directory for `opencode serve`. Leave empty to use the server's cwd.
+# cwd = "/Users/carl"
+# Agent to use: "build" or "plan".
+# agent = "build"
+# Frontend-conversation -> opencode-session cache upper bound.
+# max_sessions = 50
+# Idle sessions are reaped after this many ms.
+# session_idle_ms = 1800000

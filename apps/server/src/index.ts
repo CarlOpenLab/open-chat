@@ -13,6 +13,13 @@ import {
 } from "./provider";
 import { createSearchProvider, type SearchProvider } from "./search";
 import { runSearchAgentLoop } from "./search-agent";
+import {
+  LocalChatManager,
+  attachAbortOnClose,
+  extractTextFromMessage,
+  hashKey,
+  type LocalModelInfo,
+} from "./localProvider";
 
 const DEFAULT_CONFIG_PATH = "config/providers.toml";
 
@@ -25,9 +32,11 @@ function main(): void {
 
   let config: AppConfig;
   let searchProvider: SearchProvider | null;
+  let localChat: LocalChatManager | null;
   try {
     config = loadConfigFile(configPath);
     searchProvider = createSearchProvider(config.search);
+    localChat = config.local.enabled ? new LocalChatManager(config.local) : null;
   } catch (err) {
     if (err instanceof GatewayError) {
       console.error(`Failed to load config from ${configPath}: ${err.message}`);
@@ -49,10 +58,32 @@ function main(): void {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
-  // 服务商数据在客户端本地，这里只暴露服务端的搜索能力。
-  app.get("/api/models", (_req: Request, res: Response) => {
+  // 模型发现：服务端搜索能力 + 本地 opencode（AI 取本地的）模型/供应商。
+  // 手动配置的服务商数据仍在客户端本地（IndexedDB），前端会合并展示。
+  app.get("/api/models", async (_req: Request, res: Response) => {
+    let local: {
+      enabled: boolean;
+      provider: string;
+      models: LocalModelInfo[];
+      error?: string;
+    } = { enabled: false, provider: "", models: [] };
+    if (localChat) {
+      try {
+        const models = await localChat.listModels();
+        local = { enabled: true, provider: models[0]?.provider ?? "opencode", models };
+      } catch (err) {
+        console.error("Local opencode model discovery failed:", err);
+        local = {
+          enabled: false,
+          provider: "",
+          models: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
     res.json({
       search: { enabled: !!searchProvider, provider: searchProvider?.name ?? "" },
+      local,
     });
   });
 
@@ -63,6 +94,15 @@ function main(): void {
       const body = req.body as ChatCompletionRequest;
       if (!body || !Array.isArray(body.messages) || body.messages.length === 0) {
         throw GatewayError.invalidRequest("messages array is required");
+      }
+
+      // 本地模型（形如 `opencode/...`）：转发到本地 opencode（AI 取本地的）。
+      if (
+        localChat &&
+        typeof body.model === "string" &&
+        (await localChat.isLocalModel(body.model))
+      ) {
+        return handleLocalChat(req, res, body, localChat);
       }
 
       // 转发目标由客户端在请求体携带；解析后从 body 剔除，避免上游报未知字段。
@@ -105,6 +145,42 @@ function main(): void {
     }
   });
 
+  // 前端回复 opencode 的权限询问（允许一次 / 始终允许 / 拒绝）。本地模型回合
+  // 触发 `chat_permission` 事件后，opencode 会话会暂停等待；前端据此回复。
+  app.post("/api/chat/permission", async (req: Request, res: Response) => {
+    try {
+      if (!localChat) {
+        throw GatewayError.invalidRequest("本地 AI 未启用");
+      }
+      const body = req.body as {
+        conversationId?: unknown;
+        permissionId?: unknown;
+        response?: unknown;
+        version?: unknown;
+      };
+      const conversationId =
+        typeof body.conversationId === "string" ? body.conversationId.trim() : "";
+      const permissionId = typeof body.permissionId === "string" ? body.permissionId.trim() : "";
+      const response = body.response;
+      const version = body.version === "v2" ? "v2" : "v1";
+      if (!conversationId || !permissionId) {
+        throw GatewayError.invalidRequest("conversationId 和 permissionId 是必填项");
+      }
+      if (response !== "once" && response !== "always" && response !== "reject") {
+        throw GatewayError.invalidRequest("response 必须是 once / always / reject");
+      }
+      await localChat.replyPermission(conversationId, permissionId, response, version);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err instanceof GatewayError) return sendGatewayError(res, err);
+      console.error("Permission reply error:", err);
+      return sendGatewayError(
+        res,
+        GatewayError.upstream(err instanceof Error ? err.message : "权限回复失败"),
+      );
+    }
+  });
+
   const { host, port } = parseBindAddr(config.bindAddr);
   const server = createServer(app);
   server.listen(port, host, () => {
@@ -115,9 +191,11 @@ function main(): void {
     console.log(`Chat:        http://${host}:${port}/api/chat/completions`);
     console.log(`Gateway auth: ${config.gatewayApiKey ? "enabled" : "disabled"}`);
     console.log(`Web search:  ${searchProvider ? searchProvider.name : "disabled"}`);
+    console.log(`Local AI:    ${localChat ? "enabled (opencode)" : "disabled"}`);
   });
 
   process.on("SIGTERM", () => {
+    localChat?.stop();
     server.close(() => {
       console.log("Server closed");
       process.exit(0);
@@ -192,6 +270,81 @@ function stripWebSearchTool(body: ChatCompletionRequest): void {
     delete body.tools;
   } else {
     body.tools = filtered;
+  }
+}
+
+/**
+ * 本地聊天：把 OpenAI 格式请求转给本地 opencode（AI 取本地的）。
+ *
+ * - 会话按 `conversationId` 复用 opencode 长会话（历史积累在本地），
+ *   只发最后一条用户消息；无 conversationId 时按消息内容生成兜底 key。
+ * - 输出 OpenAI SSE 流（content / reasoning_content），前端 SDK 无需改动。
+ */
+async function handleLocalChat(
+  req: Request,
+  res: Response,
+  body: ChatCompletionRequest,
+  localChat: LocalChatManager,
+): Promise<void> {
+  const model = body.model as string;
+  const messages = body.messages;
+  // system prompt 经前端 transformParams 合并进了 messages[0]（role: system），
+  // body.systemPrompt 字段不存在；这里从 messages 里提取。
+  const systemPrompt = messages
+    .filter((m) => (m as { role?: unknown }).role === "system")
+    .map((m) => extractTextFromMessage(m))
+    .filter((text) => text.trim().length > 0)
+    .join("\n");
+  const lastUser = [...messages].reverse().find((m) => {
+    const role = (m as { role?: unknown }).role;
+    return role === "user";
+  });
+  const text = lastUser ? extractTextFromMessage(lastUser) : "";
+  if (!text.trim()) {
+    throw GatewayError.invalidRequest("本地模型需要至少一条 user 消息");
+  }
+  const conversationId = (body as Record<string, unknown>).conversationId;
+  const key =
+    typeof conversationId === "string" && conversationId.trim()
+      ? conversationId.trim()
+      : hashKey([systemPrompt, ...messages.map((m) => extractTextFromMessage(m))]);
+
+  const session = await localChat.getOrCreateSession(key, model);
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  const abort = attachAbortOnClose(res);
+  try {
+    await localChat.runTurn(session, text, model, systemPrompt, res, abort.signal);
+  } catch (err) {
+    if (abort.signal.aborted) {
+      // 客户端断开：静默结束（runTurn 已中断本地回合）。
+      return;
+    }
+    console.error("Local chat error:", err);
+    if (!res.headersSent) {
+      if (err instanceof GatewayError) return sendGatewayError(res, err);
+      return sendGatewayError(
+        res,
+        GatewayError.upstream(err instanceof Error ? err.message : String(err)),
+      );
+    }
+    try {
+      const message = err instanceof Error ? err.message : String(err);
+      res.write(
+        `event: chat_error\n` +
+          `data: ${JSON.stringify({ message, type: "upstream_error", code: "provider_error" })}\n\n`,
+      );
+      res.write("data: [DONE]\n\n");
+      res.end();
+    } catch {
+      // response already ended
+    }
   }
 }
 

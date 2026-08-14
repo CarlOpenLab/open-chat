@@ -2,9 +2,10 @@
 import type { BubbleItemType, ThoughtChainItemType } from "@antdv-next/x";
 import { Sources, Think, ThoughtChain } from "@antdv-next/x";
 import { XMarkdown } from "@antdv-next/x-markdown";
-import { Globe2 } from "@lucide/vue";
+import { Globe2, TriangleAlert } from "@lucide/vue";
 import { computed, ref, type Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
+import type { ToolCallItem } from "../../services/OpenChatProvider";
 import type { A2UIActionPayload, A2UISubmission } from "../../utils/a2ui";
 import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
@@ -74,6 +75,76 @@ const handleSourceClick = (item: WebSearchSourceItem) => {
   if (item.url) window.open(item.url, "_blank", "noopener,noreferrer");
 };
 
+const formatDuration = (ms: number): string => {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds % 60)}s`;
+};
+
+const formatToolDetail = (value: unknown, maxLength = 4000): string => {
+  let text = "";
+  if (typeof value === "string") {
+    text = value;
+  } else if (typeof value === "object" && value !== null) {
+    try {
+      text = JSON.stringify(value, null, 2);
+    } catch {
+      text = String(value);
+    }
+  } else {
+    text = String(value ?? "");
+  }
+  return text.length > maxLength ? `${text.slice(0, maxLength)}…（内容过长已截断）` : text;
+};
+
+const toolCallChainItems = computed<ThoughtChainItemType[]>(() => {
+  const tools = props.item.extraInfo?.toolCalls as ToolCallItem[] | undefined;
+  if (!Array.isArray(tools) || tools.length === 0) return [];
+  return tools.map((tool) => {
+    const status: ThoughtChainItemType["status"] =
+      tool.status === "completed" ? "success" : tool.status === "error" ? "error" : "loading";
+    const statusText =
+      tool.status === "completed"
+        ? tool.durationMs != null && formatDuration(tool.durationMs)
+          ? `完成 · ${formatDuration(tool.durationMs)}`
+          : "完成"
+        : tool.status === "error"
+          ? "失败"
+          : tool.status === "running"
+            ? "执行中"
+            : "准备中";
+    const lines: string[] = [];
+    if (tool.input !== undefined) {
+      const inputText = formatToolDetail(tool.input, 2000);
+      if (inputText) lines.push(`输入：${inputText}`);
+    }
+    if (tool.output) lines.push(`输出：${formatToolDetail(tool.output)}`);
+    if (tool.error) lines.push(`错误：${tool.error}`);
+    return {
+      key: tool.id || `tool-${tool.name}`,
+      title: tool.name || "工具调用",
+      description: statusText,
+      status,
+      collapsible: lines.length > 0,
+      blink: tool.status === "running",
+      content: lines.join("\n\n"),
+    };
+  });
+});
+
+const chatNoticesList = computed<string[]>(() => {
+  const notices = props.item.extraInfo?.chatNotices;
+  return Array.isArray(notices) ? (notices as string[]) : [];
+});
+
+const chatErrorMessage = computed<string>(() => {
+  const error = props.item.extraInfo?.chatError;
+  return typeof error === "string" ? error : "";
+});
+
 const getFaviconUrl = (url: string): string => {
   try {
     const { hostname } = new URL(url);
@@ -94,6 +165,15 @@ const onFaviconError = (url: string) => {
 
 <template>
   <div class="flex w-full min-w-0 max-w-full flex-col gap-3">
+    <div
+      v-if="chatNoticesList.length"
+      class="flex flex-col gap-1 rounded-lg border border-amber-300/50 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/40 dark:text-amber-300"
+    >
+      <span v-for="notice in chatNoticesList" :key="notice" class="inline-flex items-start gap-1.5">
+        <TriangleAlert class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>{{ notice }}</span>
+      </span>
+    </div>
     <template v-if="item.extraInfo?.parsedThink">
       <Think
         v-if="item.extraInfo.parsedThink.thinkContent"
@@ -110,14 +190,20 @@ const onFaviconError = (url: string) => {
           :class-name="markdownClassName"
         />
       </Think>
-      <XMarkdown
-        v-if="item.extraInfo.parsedThink.answerContent"
-        :content="item.extraInfo.parsedThink.answerContent"
-        :components="markdownComponents"
-        :streaming="markdownStreaming"
-        :class-name="markdownClassName"
-      />
     </template>
+    <ThoughtChain
+      v-if="toolCallChainItems.length"
+      class="tool-call-thought-chain"
+      :items="toolCallChainItems"
+      line="solid"
+    />
+    <XMarkdown
+      v-if="item.extraInfo?.parsedThink"
+      :content="item.extraInfo.parsedThink.answerContent"
+      :components="markdownComponents"
+      :streaming="markdownStreaming"
+      :class-name="markdownClassName"
+    />
     <XMarkdown
       v-else-if="content.trim()"
       :content="content"
@@ -125,6 +211,15 @@ const onFaviconError = (url: string) => {
       :streaming="markdownStreaming"
       :class-name="markdownClassName"
     />
+    <div
+      v-if="chatErrorMessage"
+      class="rounded-lg border border-red-300/60 bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-700 dark:border-red-500/30 dark:bg-red-950/40 dark:text-red-300"
+    >
+      <span class="inline-flex items-start gap-1.5">
+        <TriangleAlert class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>请求失败：{{ chatErrorMessage }}</span>
+      </span>
+    </div>
     <ThoughtChain
       v-if="item.extraInfo?.parsedWorkspace?.hasWorkspaceBlock"
       class="workspace-thought-chain"

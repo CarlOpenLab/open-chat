@@ -603,7 +603,7 @@ onBeforeUnmount(() => {
   transition:
     background 160ms ease,
     color 160ms ease,
-    opacity 160ms ease;
+    opacity 90ms ease;
 }
 .chat-sidebar :deep(.conversation-menu-trigger svg) {
   width: 16px;
@@ -613,19 +613,28 @@ onBeforeUnmount(() => {
 .chat-sidebar :deep(.antd-conversations-item:hover .conversation-menu-trigger),
 .chat-sidebar :deep(.conversation-menu-trigger:focus-visible) {
   opacity: 1;
+  /* 菜单稍晚淡入（120ms），等右侧时间先清场，过渡期间不与时间重叠 */
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    opacity 90ms ease 120ms;
 }
 .chat-sidebar :deep(.conversation-menu-trigger:hover) {
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
 }
-/* hover 时右侧状态（相对时间 / 进行中图标）淡出，⋯ 原位顶替，右缘不产生错位 */
+/* hover 时右侧状态（相对时间 / 进行中图标）快速淡出并彻底隐藏，
+   ⋯ 原位顶替；visibility 让时间在淡出后完全消失、不参与命中与绘制 */
 .chat-sidebar :deep(.conversation-entry-time),
 .chat-sidebar :deep(.conversation-entry-spinner) {
-  transition: opacity 120ms ease;
+  transition:
+    opacity 90ms ease,
+    visibility 0s linear 90ms;
 }
 .chat-sidebar :deep(.antd-conversations-item:hover .conversation-entry-time),
 .chat-sidebar :deep(.antd-conversations-item:hover .conversation-entry-spinner) {
   opacity: 0;
+  visibility: hidden;
 }
 .chat-sidebar .conversation-scroll {
   scrollbar-width: thin;

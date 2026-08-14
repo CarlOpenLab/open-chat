@@ -1,8 +1,19 @@
 <script setup lang="ts">
 import { Sender } from "@antdv-next/x";
-import { BrainCircuit, ChevronDown, Cpu, FolderOpen, Globe2, Square } from "@lucide/vue";
+import {
+  ArrowLeft,
+  BrainCircuit,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Cpu,
+  FolderOpen,
+  Globe2,
+  Square,
+} from "@lucide/vue";
 import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
-import { computed, ref, watch, type Component } from "vue";
+import { computed, h, ref, watch, type Component } from "vue";
+import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import ModelIcon from "../Icons/ModelIcon.vue";
 
 interface Props {
@@ -10,7 +21,8 @@ interface Props {
   loading: boolean;
   currentModel: string;
   currentModelLabel?: string;
-  modelItems: NonNullable<MenuProps["items"]>;
+  /** 级联目录：供应商 → 模型列表 */
+  modelCatalog: ModelCatalogEntry[];
   thinkingEnabled: boolean;
   fileModeEnabled: boolean;
   searchEnabled: boolean;
@@ -44,14 +56,125 @@ const props = withDefaults(defineProps<Props>(), {
 });
 const emit = defineEmits<Emits>();
 
-const modelMenu = computed<MenuProps>(() => ({
-  items: props.modelItems,
-  selectedKeys: [props.currentModel],
-  onClick: ({ key }) => emit("modelChange", String(key)),
-}));
+/** 让下拉菜单渲染在 .chat-app 内部，brand CSS 变量才能生效（antd 弹层默认挂到 body）。 */
+const popupIntoChat = (trigger: HTMLElement) => trigger.closest(".chat-app") ?? document.body;
+
+// ============ 模型选择（级联：供应商 → 模型） ============
+
+/** 当前下拉所处层级：null = 供应商列表，否则为该供应商 id 的模型列表。 */
+const cascadeProvider = ref<string | null>(null);
+
+/** 模型下拉的展开状态。antdv Dropdown 默认点击任意菜单项即关闭，
+ *  这里由外部控制，导航（供应商/返回）保持展开，选中模型才关闭。 */
+const modelMenuOpen = ref(false);
+
+/** 当前模型所属供应商 id（`provider/model` 取前段）。 */
+const currentProviderKey = computed(() => {
+  const model = props.currentModel;
+  const index = model.indexOf("/");
+  return index > 0 ? model.slice(0, index) : "";
+});
+
+/** 每次展开时回到供应商层；只有一个供应商时直接进入其模型列表。 */
+const handleModelOpenChange = (open: boolean) => {
+  if (open) {
+    cascadeProvider.value =
+      props.modelCatalog.length === 1 ? props.modelCatalog[0].providerId : null;
+  }
+};
+
+/** 模型上下文窗口的展示文案：128000 → 128K，1000000 → 1M */
+const formatContextLength = (length: number): string => {
+  if (length >= 1_000_000) return `${(length / 1_000_000).toFixed(length % 1_000_000 ? 1 : 0)}M`;
+  if (length >= 1_000) return `${Math.round(length / 1_000)}K`;
+  return String(length);
+};
+
+const modelMenu = computed<MenuProps>(() => {
+  const provider = props.modelCatalog.find((item) => item.providerId === cascadeProvider.value);
+
+  const items: NonNullable<MenuProps["items"]> = provider
+    ? [
+        {
+          key: "__back",
+          kind: "back",
+          label: "全部供应商",
+        },
+        { type: "divider" },
+        ...provider.models.map((model) => ({
+          key: model.id,
+          kind: "model",
+          label: model.name || model.id,
+          contextLength: model.contextLength,
+        })),
+      ]
+    : props.modelCatalog.map((entry) => ({
+        key: `provider:${entry.providerId}`,
+        kind: "provider",
+        label: entry.providerName,
+        modelCount: entry.models.length,
+      }));
+
+  return {
+    rootClass: "chat-model-menu",
+    items,
+    selectable: true,
+    multiple: true,
+    selectedKeys: provider ? [props.currentModel] : [currentProviderKey.value].filter(Boolean),
+    labelRender: (item) => {
+      if (item.type === "divider") return null;
+      if (item.kind === "back") {
+        return h("span", { class: "model-cascade-back" }, [
+          h(ArrowLeft, { class: "model-cascade-back-icon" }),
+          h("span", { class: "model-cascade-back-text" }, "全部供应商"),
+        ]);
+      }
+      if (item.kind === "provider") {
+        const selected = currentProviderKey.value === item.key;
+        return h("span", { class: "model-provider-row" }, [
+          h("span", { class: ["model-provider-name", { "is-selected": selected }] }, [
+            String(item.label),
+          ]),
+          h("span", { class: "model-provider-count" }, String(item.modelCount ?? 0)),
+          h(Check, { class: ["model-provider-check", { "is-visible": selected }] }),
+          h(ChevronRight, { class: "model-provider-chevron" }),
+        ]);
+      }
+      const selected = String(item.key) === props.currentModel;
+      const contextLength =
+        typeof item.contextLength === "number" && item.contextLength > 0
+          ? formatContextLength(item.contextLength)
+          : "";
+      return h("span", { class: "model-menu-row" }, [
+        h("span", { class: ["model-menu-name", { "is-selected": selected }] }, [
+          String(item.label),
+        ]),
+        contextLength
+          ? h("span", { class: "model-menu-ctx" }, contextLength)
+          : h("span", { class: "model-menu-ctx model-menu-ctx-placeholder" }, "—"),
+        h(Check, { class: ["model-menu-check", { "is-visible": selected }] }),
+      ]);
+    },
+    onClick: ({ key }) => {
+      const value = String(key);
+      if (value === "__back") {
+        cascadeProvider.value = null;
+        return;
+      }
+      if (value.startsWith("provider:")) {
+        cascadeProvider.value = value.slice("provider:".length);
+        return;
+      }
+      modelMenuOpen.value = false;
+      emit("modelChange", value);
+    },
+  };
+});
 
 /** 模型图标：只有确实认得的模型才用品牌图标，其余用通用字形，避免张冠李戴。 */
 const brandedModel = computed(() => (/qwen/i.test(props.currentModel) ? "qwen" : ""));
+
+// ============ 推理强度 ============
 
 /**
  * 推理强度：分为高 / 中 / 低三档。底层仍是 useXChat 的 enable_thinking
@@ -66,25 +189,44 @@ const REASONING_LABEL: Record<ReasoningLevel, string> = {
 };
 
 const reasoningLevel = ref<ReasoningLevel>(props.thinkingEnabled ? "high" : "low");
+/** 记住关闭前的档位：再次开启时恢复上次选择，而不是总是回到「高」 */
+let lastEnabledLevel: ReasoningLevel = "high";
 
 watch(
   () => props.thinkingEnabled,
   (enabled) => {
-    // 父级把开关关掉时降到「低」；重新打开时恢复到上次的高/中档位
-    if (!enabled) reasoningLevel.value = "low";
-    else if (reasoningLevel.value === "low") reasoningLevel.value = "high";
+    if (enabled) {
+      reasoningLevel.value = lastEnabledLevel;
+    } else {
+      if (reasoningLevel.value !== "low") lastEnabledLevel = reasoningLevel.value;
+      reasoningLevel.value = "low";
+    }
   },
 );
 
+/** 主按钮点击：直接开关深度思考 */
+const handleThinkingToggle = () => {
+  emit("thinkingChange", !props.thinkingEnabled);
+};
+
 const reasoningMenu = computed<MenuProps>(() => ({
+  rootClass: "reasoning-level-menu",
   items: (["high", "medium", "low"] as ReasoningLevel[]).map((level) => ({
     key: level,
     label: REASONING_LABEL[level],
   })),
   selectedKeys: [reasoningLevel.value],
+  labelRender: (item) =>
+    h("span", { class: "reasoning-level-row" }, [
+      h("span", { class: "reasoning-level-name" }, [String(item.label)]),
+      item.key === reasoningLevel.value
+        ? h(Check, { class: "reasoning-level-check" })
+        : h("span", { class: "reasoning-level-check reasoning-level-check-blank" }),
+    ]),
   onClick: ({ key }) => {
     const level = String(key) as ReasoningLevel;
     reasoningLevel.value = level;
+    if (level !== "low") lastEnabledLevel = level;
     emit("thinkingChange", level !== "low");
   },
 }));
@@ -116,7 +258,7 @@ const chipClass = (active: boolean, disabled = false) => {
 
 <template>
   <section
-    class="chat-footer relative z-12 pt-[20px] px-[max(20px,calc((100%_-_720px)/2))] pb-[max(16px,env(safe-area-inset-bottom))] bg-[linear-gradient(to_bottom,transparent_0,var(--brand-workspace)_32px,var(--brand-workspace)_100%)] lt-md:px-[18px] lt-sm:px-[10px]"
+    class="chat-footer relative z-12 pt-[20px] px-[max(20px,calc((100%_-_760px)/2))] pb-[max(16px,env(safe-area-inset-bottom))] bg-[linear-gradient(to_bottom,transparent_0,var(--brand-workspace)_32px,var(--brand-workspace)_100%)] lt-md:px-[18px] lt-sm:px-[10px]"
     aria-label="消息输入区"
   >
     <Sender
@@ -132,12 +274,17 @@ const chipClass = (active: boolean, disabled = false) => {
         <div class="flex min-h-[26px] w-full items-center justify-between gap-3">
           <!-- composer 左排：能力 chips（深度思考 / 联网搜索 / 文件） -->
           <div class="flex min-w-0 items-center gap-[3px]">
-            <Dropdown :menu="reasoningMenu" :trigger="['click']" placement="topLeft">
+            <div
+              class="reasoning-control flex h-[26px] flex-none items-center rounded-[6px]"
+              :class="thinkingEnabled ? 'is-active' : ''"
+            >
               <button
                 type="button"
-                :class="chipClass(thinkingEnabled)"
-                :aria-label="`推理强度：${REASONING_LABEL[reasoningLevel]}`"
-                title="推理强度"
+                class="reasoning-toggle"
+                :aria-pressed="thinkingEnabled"
+                aria-label="深度思考"
+                title="深度思考"
+                @click="handleThinkingToggle"
               >
                 <component
                   :is="props.thinkingIcon"
@@ -145,14 +292,27 @@ const chipClass = (active: boolean, disabled = false) => {
                   :class="thinkingEnabled ? 'text-brand-accent' : ''"
                 />
                 <span>深度思考</span>
-                <span
-                  v-if="thinkingEnabled"
-                  class="rounded-[4px] bg-[color-mix(in_srgb,var(--brand-accent)_12%,transparent)] px-[4px] py-px text-[10px] font-600 leading-[12px] text-brand-accent"
-                  >{{ REASONING_LABEL[reasoningLevel] }}</span
-                >
-                <ChevronDown class="!h-[10px] !w-[10px] flex-none text-brand-muted-strong" />
+                <span v-if="thinkingEnabled" class="reasoning-level-badge">{{
+                  REASONING_LABEL[reasoningLevel]
+                }}</span>
               </button>
-            </Dropdown>
+              <Dropdown
+                :menu="reasoningMenu"
+                :trigger="['click']"
+                placement="topLeft"
+                :get-popup-container="popupIntoChat"
+              >
+                <button
+                  type="button"
+                  class="reasoning-chevron"
+                  :class="thinkingEnabled ? 'is-active' : ''"
+                  aria-label="推理强度"
+                  title="推理强度"
+                >
+                  <ChevronDown class="!h-[10px] !w-[10px] flex-none" />
+                </button>
+              </Dropdown>
+            </div>
             <Tooltip :title="searchAvailable ? '联网搜索' : '当前模型不支持联网搜索'">
               <button
                 type="button"
@@ -188,9 +348,16 @@ const chipClass = (active: boolean, disabled = false) => {
             </Tooltip>
           </div>
 
-          <!-- composer 右排：模型选择 + 发送 / 停止（圆形 26px，有内容时 inverse 填充） -->
+          <!-- composer 右排：模型选择（级联：供应商 → 模型）+ 发送 / 停止 -->
           <div class="flex min-w-0 flex-none items-center gap-[6px]">
-            <Dropdown :menu="modelMenu" :trigger="['click']" placement="topRight">
+            <Dropdown
+              :menu="modelMenu"
+              v-model:open="modelMenuOpen"
+              :trigger="['click']"
+              placement="topRight"
+              :get-popup-container="popupIntoChat"
+              @open-change="handleModelOpenChange"
+            >
               <button
                 type="button"
                 :class="chipClass(false)"
@@ -227,7 +394,7 @@ const chipClass = (active: boolean, disabled = false) => {
 /* 保留原因：以下均为 :deep() 覆盖 antd / antd-x 内部类，按迁移规范保留在 scoped CSS 中 */
 .chat-footer :deep(.antd-sender) {
   width: 100%;
-  max-width: 720px;
+  max-width: 760px;
   margin: 0 auto;
 }
 .chat-footer :deep(.antd-sender-main) {
@@ -280,6 +447,221 @@ const chipClass = (active: boolean, disabled = false) => {
   color: var(--brand-ghost);
   opacity: 1;
 }
+
+/* ============ 深度思考：主按钮切换 + 分档下拉 ============ */
+
+.reasoning-control {
+  transition:
+    background 150ms ease,
+    color 150ms ease;
+}
+.reasoning-control:hover,
+.reasoning-control.is-active {
+  background: var(--brand-surface-subtle);
+}
+.reasoning-toggle {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 0 0 0 8px;
+  color: var(--brand-muted);
+  font-size: 11.5px;
+  line-height: 14px;
+  cursor: pointer;
+  transition: color 150ms ease;
+}
+.reasoning-control:hover .reasoning-toggle,
+.reasoning-control.is-active .reasoning-toggle {
+  color: var(--brand-foreground);
+}
+.reasoning-level-badge {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--brand-accent) 12%, transparent);
+  padding: 1px 4px;
+  color: var(--brand-accent);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 12px;
+}
+.reasoning-chevron {
+  display: grid;
+  width: 22px;
+  height: 100%;
+  flex: none;
+  place-items: center;
+  margin-left: 3px;
+  border: 0;
+  border-left: 1px solid transparent;
+  border-radius: 0 6px 6px 0;
+  background: transparent;
+  color: var(--brand-muted-strong);
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    background 150ms ease;
+}
+.reasoning-chevron.is-active {
+  border-left-color: var(--brand-border);
+}
+.reasoning-chevron:hover {
+  background: color-mix(in srgb, var(--brand-surface-subtle) 80%, var(--brand-surface));
+  color: var(--brand-foreground);
+}
+
+/* ============ 下拉弹层（getPopupContainer 挂到 .chat-app 内，brand 变量可用） ============ */
+
+/* 模型级联菜单 */
+:global(.chat-model-menu) {
+  min-width: 240px;
+  max-width: min(320px, calc(100vw - 32px));
+  max-height: min(360px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+}
+:global(.chat-model-menu .ant-dropdown-menu-item) {
+  padding: 5px 8px;
+}
+:global(.chat-model-menu .ant-dropdown-menu-item-selected) {
+  background-color: transparent;
+}
+:global(.chat-model-menu .ant-dropdown-menu-item-divider) {
+  margin: 4px 0;
+}
+
+/* 返回行（模型层顶部） */
+:global(.model-cascade-back) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--brand-muted-strong);
+  font-size: 11px;
+  font-weight: 600;
+}
+:global(.model-cascade-back-icon) {
+  width: 12px;
+  height: 12px;
+}
+
+/* 供应商行 */
+:global(.model-provider-row) {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+:global(.model-provider-name) {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--brand-foreground);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:global(.model-provider-name.is-selected) {
+  color: var(--brand-accent);
+}
+:global(.model-provider-count) {
+  flex: none;
+  border-radius: 999px;
+  background: var(--brand-surface-subtle);
+  padding: 1px 6px;
+  color: var(--brand-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 14px;
+}
+:global(.model-provider-check) {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--brand-accent);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+:global(.model-provider-check.is-visible) {
+  opacity: 1;
+}
+:global(.model-provider-chevron) {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--brand-ghost);
+}
+
+/* 模型行 */
+:global(.model-menu-row) {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+:global(.model-menu-name) {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--brand-muted);
+  font-size: 12px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:global(.model-menu-name.is-selected) {
+  color: var(--brand-foreground);
+  font-weight: 600;
+}
+:global(.model-menu-ctx) {
+  flex: none;
+  color: var(--brand-ghost);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+:global(.model-menu-check) {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--brand-accent);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+:global(.model-menu-check.is-visible) {
+  opacity: 1;
+}
+
+/* 推理强度菜单 */
+:global(.reasoning-level-menu) {
+  min-width: 120px;
+  padding: 4px;
+}
+:global(.reasoning-level-menu .ant-dropdown-menu-item) {
+  padding: 4px 8px;
+}
+:global(.reasoning-level-row) {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+:global(.reasoning-level-name) {
+  min-width: 0;
+  flex: 1;
+  color: var(--brand-foreground);
+  font-size: 12px;
+}
+:global(.reasoning-level-check) {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--brand-accent);
+}
+:global(.reasoning-level-check-blank) {
+  opacity: 0;
+}
+
 @media (max-width: 560px) {
   .chat-footer :deep(.antd-sender-main) {
     min-height: 102px;

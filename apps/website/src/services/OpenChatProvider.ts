@@ -12,6 +12,30 @@ import type { WebSearchSourceItem } from "./ai";
  * a web search round. Replaced by real text/reasoning as soon as it arrives. */
 export const WEB_SEARCHING_MARKER = "🔍 正在联网搜索…";
 
+/** 本地 opencode 工具调用（由网关 `tool_call` SSE 事件驱动，供 ThoughtChain 渲染）。 */
+export interface ToolCallItem {
+  id: string;
+  name: string;
+  status: "pending" | "running" | "completed" | "error";
+  input?: unknown;
+  output?: string;
+  error?: string;
+  durationMs?: number;
+}
+
+/** opencode 权限询问（由网关 `chat_permission` SSE 事件驱动，供前端弹窗批准）。 */
+export interface PermissionRequest {
+  id: string;
+  /** v1 走 `/session/{id}/permissions/{permissionID}`，v2 走 `/permission/{requestID}/reply`。 */
+  version: "v1" | "v2";
+  /** v1 权限名（如 bash / edit / webfetch），v2 动作名（如 bash）。 */
+  permission: string;
+  /** v1 匹配模式（如命令、路径），v2 资源列表。 */
+  patterns: string[];
+  metadata: Record<string, unknown>;
+  tool?: { messageID?: string; callID?: string };
+}
+
 /** OpenAI function-tool definition for web search. Declared in the request
  * `tools` array so the model autonomously decides whether to call it; the
  * gateway intercepts the call and runs the configured search provider. */
@@ -38,7 +62,10 @@ export interface OpenChatParams extends XModelParams {
   /** When true, declares a `web_search` tool in the request so the model can
    * autonomously decide whether to search. The gateway executes the call. */
   web_search?: boolean;
-  /** 无状态代理的转发目标：随每次请求携带（baseUrl / apiKey / api）。 */
+  /** 前端会话 id：本地 opencode（服务端）用它复用长会话。 */
+  conversationId?: string;
+  /** 无状态代理的转发目标：随每次请求携带（baseUrl / apiKey / api）。
+   * 本地模型（opencode/...）不携带。 */
   provider?: {
     baseUrl: string;
     apiKey: string;
@@ -54,13 +81,88 @@ export class OpenChatProvider extends DeepSeekChatProvider<
   /** Called when the gateway emits a `web_search` event carrying source results. */
   onWebSearchSources?: (sources: WebSearchSourceItem[]) => void;
 
+  /** Called when the gateway emits a `tool_call` event (工具调用状态变化)。 */
+  onToolCall?: (tool: ToolCallItem) => void;
+
+  /** Called when the gateway emits a `chat_error` event（上游回合失败）。 */
+  onChatError?: (message: string) => void;
+
+  /** Called when the gateway emits a `chat_notice` event（如模型请求重试提示）。 */
+  onChatNotice?: (message: string) => void;
+
+  /** Called when the gateway emits a `chat_permission` event（opencode 权限询问）。 */
+  onPermissionRequest?: (request: PermissionRequest) => void;
+
   override transformMessage(info: TransformMessage<XModelMessage, XModelResponse>): XModelMessage {
     const chunk = info.chunk as { event?: string; data?: string } | undefined;
 
     // useXChat calls transformMessage with no chunk when the stream succeeds.
     // Preserve the accumulated message, including a search marker when the
-    // model finished without emitting answer text.
+    // model finished without emitting answer text; also finalize any unclosed
+    // <think> block so the Think panel stops showing as "思考中".
     if (chunk === undefined) {
+      const origin = info.originMessage ?? { content: "", role: "assistant" };
+      const content = typeof origin.content === "string" ? origin.content : "";
+      const closed = closeOpenThink(content);
+      return closed === content ? origin : { ...origin, content: closed };
+    }
+
+    if (chunk?.event === "tool_call" && chunk.data && chunk.data !== "[DONE]") {
+      try {
+        const tool = JSON.parse(chunk.data) as ToolCallItem;
+        this.onToolCall?.(tool);
+        const origin = info.originMessage ?? { content: "", role: "assistant" };
+        return { ...origin, toolCalls: mergeToolCalls(origin.toolCalls, tool) };
+      } catch (err) {
+        console.error("Failed to parse tool_call event:", err);
+      }
+      return info.originMessage ?? { content: "", role: "assistant" };
+    }
+
+    if (chunk?.event === "chat_error" && chunk.data && chunk.data !== "[DONE]") {
+      try {
+        const parsed = JSON.parse(chunk.data) as { message?: string };
+        const message = parsed.message || "请求失败";
+        this.onChatError?.(message);
+        const origin = info.originMessage ?? { content: "", role: "assistant" };
+        return { ...origin, chatError: message };
+      } catch (err) {
+        console.error("Failed to parse chat_error event:", err);
+      }
+      return info.originMessage ?? { content: "", role: "assistant" };
+    }
+
+    if (chunk?.event === "chat_notice" && chunk.data && chunk.data !== "[DONE]") {
+      try {
+        const parsed = JSON.parse(chunk.data) as { message?: string };
+        const notice = parsed.message || "";
+        this.onChatNotice?.(notice);
+        const origin = info.originMessage ?? { content: "", role: "assistant" };
+        const notices = Array.isArray(origin.chatNotices) ? origin.chatNotices : [];
+        const next =
+          notices[notices.length - 1] === notice ? notices : [...notices, notice].slice(-5);
+        return { ...origin, chatNotices: next };
+      } catch (err) {
+        console.error("Failed to parse chat_notice event:", err);
+      }
+      return info.originMessage ?? { content: "", role: "assistant" };
+    }
+
+    if (chunk?.event === "chat_permission" && chunk.data && chunk.data !== "[DONE]") {
+      try {
+        const permission = JSON.parse(chunk.data) as PermissionRequest;
+        this.onPermissionRequest?.(permission);
+        const origin = info.originMessage ?? { content: "", role: "assistant" };
+        const permissions = Array.isArray(origin.pendingPermissions)
+          ? origin.pendingPermissions
+          : [];
+        return {
+          ...origin,
+          pendingPermissions: [...permissions.filter((p) => p.id !== permission.id), permission],
+        };
+      } catch (err) {
+        console.error("Failed to parse chat_permission event:", err);
+      }
       return info.originMessage ?? { content: "", role: "assistant" };
     }
 
@@ -85,10 +187,10 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       // Show a searching indicator while the model consumes the results.
       const origin = info.originMessage;
       const originContent = typeof origin?.content === "string" ? origin.content : "";
-      return {
+      return preserveMessageMeta(origin, {
         content: originContent || WEB_SEARCHING_MARKER,
         role: "assistant",
-      };
+      });
     }
     // Replace the searching marker only when this chunk contains actual
     // text/reasoning. Terminal and metadata-only frames must keep the marker,
@@ -103,9 +205,9 @@ export class OpenChatProvider extends DeepSeekChatProvider<
         typeof transformed.content === "string"
           ? transformed.content
           : (transformed.content?.text ?? "");
-      return transformedContent ? transformed : origin;
+      return transformedContent ? preserveMessageMeta(origin, transformed) : origin;
     }
-    return super.transformMessage(info);
+    return preserveMessageMeta(origin, super.transformMessage(info));
   }
 
   override transformParams(
@@ -133,4 +235,46 @@ export class OpenChatProvider extends DeepSeekChatProvider<
         : messages,
     };
   }
+}
+
+/** 按工具 id 合并流式 `tool_call` 事件（后到的完整状态覆盖旧状态）。 */
+function mergeToolCalls(existing: unknown, incoming: ToolCallItem): ToolCallItem[] {
+  const list = Array.isArray(existing) ? (existing as ToolCallItem[]) : [];
+  const index = list.findIndex((tool) => tool.id && tool.id === incoming.id);
+  if (index === -1) return [...list, incoming];
+  const next = list.slice();
+  next[index] = { ...next[index], ...incoming };
+  return next;
+}
+
+/** 把消息上累积的工具调用 / 错误 / 提示 / 权限字段回接到转换后的消息上（super 只返回 content/role）。 */
+function preserveMessageMeta(
+  origin: XModelMessage | undefined,
+  next: XModelMessage,
+): XModelMessage {
+  const meta: {
+    toolCalls?: ToolCallItem[];
+    chatError?: string;
+    chatNotices?: string[];
+    pendingPermissions?: PermissionRequest[];
+  } = {};
+  if (Array.isArray(origin?.toolCalls)) meta.toolCalls = origin.toolCalls;
+  if (typeof origin?.chatError === "string") meta.chatError = origin.chatError;
+  if (Array.isArray(origin?.chatNotices)) meta.chatNotices = origin.chatNotices;
+  if (Array.isArray(origin?.pendingPermissions))
+    meta.pendingPermissions = origin.pendingPermissions;
+  return Object.keys(meta).length > 0 ? { ...next, ...meta } : next;
+}
+
+/** 流结束时把未闭合的 `<think>` 标记为完成并补上闭合标签。 */
+function closeOpenThink(content: string): string {
+  if (!content.includes("<think")) return content;
+  const openMatch = content.match(/<think(?:\s+status=["']?[^"'>\s]+["']?)?>/i);
+  if (!openMatch) return content;
+  const thinkStart = openMatch.index ?? 0;
+  const status = (openMatch[1] || "").toLowerCase();
+  if (status === "done" || content.indexOf("</think>", thinkStart + openMatch[0].length) !== -1) {
+    return content;
+  }
+  return content.replace(/<think([^>]*)>/i, `<think$1 status="done">`) + "</think>";
 }

@@ -10,6 +10,7 @@ import {
   OpenChatProvider,
   WEB_SEARCHING_MARKER,
   type OpenChatParams,
+  type PermissionRequest,
 } from "../services/OpenChatProvider";
 import {
   A2UI_SUBMISSION_MESSAGE_KIND,
@@ -45,6 +46,7 @@ import RightPanel from "./chat/RightPanel.vue";
 import CommandPalette from "./chat/CommandPalette.vue";
 import SettingsDialog from "./chat/SettingsDialog.vue";
 import DeleteConversationModal from "./chat/DeleteConversationModal.vue";
+import PermissionRequestModal from "./chat/PermissionRequestModal.vue";
 import AssistantCenterModal from "./chat/AssistantCenterModal.vue";
 
 interface Props {
@@ -150,9 +152,8 @@ const conversationList = ref<OpenChatConversation[]>([]);
 const {
   currentModel,
   searchAvailable,
-  modelDropdownItems,
+  modelCatalog,
   currentModelLabel,
-  modelOptions,
   reconcileCurrentModel,
   getForwardProvider,
   loadModels,
@@ -380,12 +381,17 @@ const createProvider = () => {
       manual: true,
       params: { stream: true } as OpenChatParams,
       headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
-      streamTimeout: 60000,
+      // 权限询问期间模型回合暂停，前端可能长时间无流数据；调大避免被 streamTimeout 提前掐断。
+      streamTimeout: 10 * 60 * 1000,
     }),
   });
 };
 
 const provider = createProvider();
+const pendingPermission = ref<PermissionRequest | null>(null);
+provider.onPermissionRequest = (request) => {
+  pendingPermission.value = request;
+};
 provider.onWebSearchSources = (sources) => {
   // A single request may run several search rounds; accumulate every round's
   // sources (with re-keyed indices to keep them unique) so the Sources UI
@@ -488,6 +494,7 @@ watch(isRequesting, (requesting) => {
   attachPendingSearchSources();
   activeRequestConversationKey.value = "";
   pendingA2UISurfaceId.value = "";
+  pendingPermission.value = null;
   requestStartedAt.value = 0;
 });
 
@@ -603,6 +610,12 @@ const bubbleItems = computed<BubbleItemType[]>(() => {
       status,
       loading: status === "loading",
       content: typeof modelMessage.content === "string" ? modelMessage.content : "",
+      // 工具调用 / 上游错误 / 重试提示：由 OpenChatProvider 累积在消息对象上。
+      extraInfo: {
+        toolCalls: Array.isArray(modelMessage.toolCalls) ? modelMessage.toolCalls : undefined,
+        chatError: typeof modelMessage.chatError === "string" ? modelMessage.chatError : undefined,
+        chatNotices: Array.isArray(modelMessage.chatNotices) ? modelMessage.chatNotices : undefined,
+      },
     }));
 });
 
@@ -626,6 +639,39 @@ const handlePromptClick = (info: { data: { key?: string; description?: string } 
 
 const handleCancel = () => {
   abort();
+};
+
+/** 回复 opencode 权限询问：允许一次 / 始终允许 / 拒绝。 */
+const handlePermissionResponse = async (response: "once" | "always" | "reject"): Promise<void> => {
+  const permission = pendingPermission.value;
+  if (!permission) return;
+  const conversationId = activeRequestConversationKey.value || currentConversationKey.value;
+  if (!conversationId) return;
+
+  const responseText = response === "reject" ? "reject" : response === "always" ? "always" : "once";
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/chat/permission`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : {}),
+      },
+      body: JSON.stringify({
+        conversationId,
+        permissionId: permission.id,
+        response: responseText,
+        version: permission.version,
+      }),
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+      throw new Error(data.error?.message || `权限回复失败（HTTP ${res.status}）`);
+    }
+    // 回复成功后由 opencode 侧 session.replied 事件结束本轮权限等待。
+    pendingPermission.value = null;
+  } catch (err) {
+    message.error(err instanceof Error ? err.message : "权限回复失败，请重试");
+  }
 };
 
 const handleChange = (value: string) => {
@@ -696,7 +742,9 @@ const handleSubmit = (
       ),
       enable_thinking: thinkingEnabled.value,
       thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
-      // 无状态代理：随请求携带转发目标（baseUrl / apiKey / api）
+      // 本地 opencode（服务端 AI）：按会话复用长会话，无需转发目标。
+      conversationId: String(conversation.key),
+      // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
       ...(forwardProvider ? { provider: forwardProvider } : {}),
       ...(searchEnabled.value ? { web_search: true } : {}),
     },
@@ -820,7 +868,9 @@ const handleReloadMessage = (messageId: string | number) => {
   onReload(messageId, {
     model: currentModel.value,
     systemPrompt: getRequestSystemPrompt(baseSystemPrompt),
-    // 无状态代理：随请求携带转发目标（baseUrl / apiKey / api）
+    // 本地 opencode：复用同一会话长会话
+    conversationId: String(currentConversation?.key ?? ""),
+    // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
     ...(forwardProvider ? { provider: forwardProvider } : {}),
     ...(searchEnabled.value ? { web_search: true } : {}),
   });
@@ -1001,7 +1051,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :loading="isRequesting"
         :current-model="currentModel"
         :current-model-label="currentModelLabel"
-        :model-items="modelDropdownItems ?? []"
+        :model-catalog="modelCatalog ?? []"
         :thinking-enabled="thinkingEnabled"
         :file-mode-enabled="fileModeEnabled"
         :search-enabled="searchEnabled"
@@ -1051,6 +1101,11 @@ const handleCommandPaletteSelectConversation = (key: string) => {
     </div>
 
     <DeleteConversationModal v-model:open="deleteOpen" @confirm="handleDeleteConversation" />
+    <PermissionRequestModal
+      :open="!!pendingPermission"
+      :request="pendingPermission"
+      @allow="handlePermissionResponse($event)"
+    />
     <AssistantCenterModal
       :open="assistantCenterOpen"
       :dark="dark"
@@ -1084,7 +1139,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       @export-history="handleExportLocalHistory"
       @import-history="handleImportLocalHistory"
       @clear-history="handleClearLocalHistory"
-      @providers-changed="loadModels"
     />
   </div>
 </template>

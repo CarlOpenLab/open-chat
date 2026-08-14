@@ -1,22 +1,10 @@
 <script setup lang="ts">
-import {
-  CloudUpload,
-  Database,
-  Info,
-  Monitor,
-  Moon,
-  Server,
-  Settings2,
-  Sun,
-  Trash2,
-  X,
-} from "@lucide/vue";
+import { CloudUpload, Database, Info, Monitor, Moon, Settings2, Sun, Trash2, X } from "@lucide/vue";
 import { Button, Modal, Segmented, Upload } from "antdv-next";
 import { computed, h, ref, watch } from "vue";
-import ProviderSettings from "./ProviderSettings.vue";
 
 type ThemeMode = "system" | "light" | "dark";
-type SettingsTab = "general" | "providers" | "data" | "about";
+type SettingsTab = "general" | "data" | "about";
 
 interface Props {
   open: boolean;
@@ -30,8 +18,6 @@ interface Emits {
   (e: "exportHistory"): void;
   (e: "importHistory", file: File): void;
   (e: "clearHistory"): void;
-  /** 服务商增删改后触发，用于刷新模型列表 */
-  (e: "providersChanged"): void;
 }
 
 const props = defineProps<Props>();
@@ -62,7 +48,6 @@ watch(
 
 const navItems = [
   { key: "general", label: "常规", description: "外观与主题", icon: Settings2 },
-  { key: "providers", label: "模型服务", description: "服务商与模型", icon: Server },
   { key: "data", label: "数据", description: "导入与备份", icon: Database },
   { key: "about", label: "关于", description: "版本信息", icon: Info },
 ] as const;
@@ -84,7 +69,7 @@ const navItems = [
           <span class="settings-dialog-logo"><Settings2 class="!h-[17px] !w-[17px]" /></span>
           <div class="min-w-0">
             <h2 class="m-0 truncate text-[15px] font-720">设置</h2>
-            <p class="m-0 mt-0.5 truncate text-[10px] text-brand-muted">调整外观、模型与服务商</p>
+            <p class="m-0 mt-0.5 truncate text-[10px] text-brand-muted">调整外观与数据</p>
           </div>
         </div>
         <button
@@ -136,10 +121,6 @@ const navItems = [
                 />
               </div>
             </div>
-          </section>
-
-          <section v-else-if="activeTab === 'providers'" aria-label="服务商设置">
-            <ProviderSettings @changed="emit('providersChanged')" />
           </section>
 
           <section v-else-if="activeTab === 'data'" aria-label="数据设置">

@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import type { BubbleItemType, BubbleListProps } from "@antdv-next/x";
-import { BubbleList } from "@antdv-next/x";
+import type { BubbleItemType, BubbleListProps, ItemType } from "@antdv-next/x";
+import { Actions, BubbleList } from "@antdv-next/x";
 import type { XCardCommand } from "@antdv-next/x-card";
-import { RotateCcw } from "@lucide/vue";
-import { Tooltip } from "antdv-next";
-import { computed, provide, ref, watch } from "vue";
+import { Copy, RotateCcw } from "@lucide/vue";
+import { computed, h, provide, ref, watch } from "vue";
 import {
   getA2UISurfaceId,
   parseA2UIContent,
@@ -167,8 +166,20 @@ const displayItems = computed<BubbleItemType[]>(() => {
     const hasVisibleA2UI =
       parsedA2UI.commands.length > 0 || parsedA2UI.errors.length > 0 || parsedA2UI.hasPendingBlock;
     const hasVisibleWorkspace = Boolean(item.extraInfo?.parsedWorkspace?.hasWorkspaceBlock);
+    const hasVisibleToolCalls =
+      Array.isArray(item.extraInfo?.toolCalls) && item.extraInfo.toolCalls.length > 0;
+    const hasVisibleChatMeta =
+      Boolean(item.extraInfo?.chatError) ||
+      (Array.isArray(item.extraInfo?.chatNotices) && item.extraInfo.chatNotices.length > 0);
 
-    if (item.role === "assistant" && !hasVisibleText && !hasVisibleA2UI && !hasVisibleWorkspace)
+    if (
+      item.role === "assistant" &&
+      !hasVisibleText &&
+      !hasVisibleA2UI &&
+      !hasVisibleWorkspace &&
+      !hasVisibleToolCalls &&
+      !hasVisibleChatMeta
+    )
       return [];
 
     return [
@@ -207,6 +218,28 @@ const setThinkExpanded = (messageId: string | number, expanded: boolean) => {
   };
 };
 
+/** 气泡下方操作栏：复制 + 重新生成（x Actions 原生样式）。 */
+const buildMessageActions = (item: BubbleItemType): ItemType[] => {
+  const content = typeof item.content === "string" ? item.content : "";
+  return [
+    {
+      key: "copy",
+      label: "复制",
+      icon: h(Copy, { class: "h-3.5 w-3.5" }),
+      onItemClick: () => {
+        if (!content) return;
+        navigator.clipboard?.writeText(content).catch(() => {});
+      },
+    },
+    {
+      key: "reload",
+      label: "重新生成",
+      icon: h(RotateCcw, { class: "h-3.5 w-3.5" }),
+      onItemClick: () => emit("reload", item.key),
+    },
+  ];
+};
+
 watch(
   displayItems,
   (items) => {
@@ -239,11 +272,11 @@ watch(
 <template>
   <main
     id="chat-content"
-    class="messages-wrapper h-full min-h-0 flex-1 overflow-hidden bg-brand-workspace pt-6 pb-6 px-[max(20px,calc((100%_-_720px)/2))] lt-md:pt-6 lt-md:px-6 lt-md:pb-6 lt-sm:pt-[18px] lt-sm:px-[15px] lt-sm:pb-5"
+    class="messages-wrapper h-full min-h-0 flex-1 overflow-hidden bg-brand-workspace py-6 px-4 lt-md:py-6 lt-md:px-4 lt-sm:py-5 lt-sm:px-3"
     :class="showWelcome ? 'flex flex-col justify-center' : ''"
     tabindex="-1"
   >
-    <section v-if="showWelcome" class="empty-state m-auto w-[min(100%,700px)] p-0 text-center">
+    <section v-if="showWelcome" class="empty-state m-auto w-[min(100%,760px)] p-0 text-center">
       <EmptyState>
         <StarterPrompts :items="starterPrompts" @prompt-click="emit('promptClick', $event)" />
       </EmptyState>
@@ -273,28 +306,19 @@ watch(
           @a2ui-action="emit('a2uiAction', $event)"
           @update:think-expanded="setThinkExpanded(item.key, $event)"
         />
-        <span v-else>{{ content }}</span>
+        <span v-else class="whitespace-pre-wrap break-words">{{ content }}</span>
       </template>
 
       <template #footer="{ item }">
-        <Tooltip
+        <Actions
           v-if="
             item.role === 'assistant' &&
             item.status === 'success' &&
             item.key === lastAssistantMessageKey
           "
-          title="重新生成"
-        >
-          <Button
-            class="h-[30px] w-[30px] min-w-[30px] rounded-1 p-0 text-brand-muted"
-            size="small"
-            type="text"
-            aria-label="重新生成回答"
-            @click="emit('reload', item.key)"
-          >
-            <RotateCcw class="!h-3.5 !w-3.5" />
-          </Button>
-        </Tooltip>
+          class="message-actions"
+          :items="buildMessageActions(item)"
+        />
       </template>
     </BubbleList>
   </main>
@@ -305,99 +329,45 @@ watch(
 .empty-state {
   animation: empty-in 360ms ease-out both;
 }
-/* 保留：:deep() 覆盖 antd/x 组件内部类，无法用工具类表达 */
+
+/*
+ * 消息列表：气泡保持 @antdv-next/x 原生样式（filled 浅灰 + 圆角），
+ * 内容列限宽居中（主流 AI 聊天 760px 量级），气泡在列内按组件默认
+ * start/end 各留 15% 侧边距。
+ */
 .messages-wrapper :deep(.antd-bubble-list) {
-  width: min(100%, 720px);
+  width: 100%;
+  max-width: 760px;
   min-width: 0;
-  max-width: 100%;
   margin: 0 auto;
 }
 .messages-wrapper :deep(.antd-bubble-list-scroll-box) {
-  min-width: 0;
   overflow-x: hidden;
   overscroll-behavior-x: none;
 }
 .messages-wrapper :deep(.antd-bubble-list-scroll-content) {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
   padding-inline: 0;
 }
-.messages-wrapper :deep(.antd-bubble) {
-  min-width: 0;
-  max-width: 100%;
-  /* 每行 py(8px)，首行 pt(22px)，末行 pb(22px) */
-  padding-block: 8px;
+/* 气泡下方操作栏：与气泡左缘对齐，hover 才有底色（组件库原生交互） */
+.message-actions {
+  margin-top: 2px;
 }
-.messages-wrapper :deep(.antd-bubble:first-child) {
-  padding-top: 22px;
-}
-.messages-wrapper :deep(.antd-bubble:last-child) {
-  padding-bottom: 22px;
-}
-.messages-wrapper :deep(.antd-bubble-start) {
-  padding-inline-end: 0 !important;
-}
-.messages-wrapper :deep(.antd-bubble-end) {
-  padding-inline-start: 0 !important;
-}
-.messages-wrapper :deep(.antd-bubble-body),
-.messages-wrapper :deep(.antd-bubble-content) {
-  min-width: 0;
-  max-width: 100%;
-}
-.messages-wrapper :deep(.antd-bubble-start .antd-bubble-body) {
-  width: min(100%, 720px);
-}
-.messages-wrapper :deep(.antd-bubble-end .antd-bubble-body) {
-  max-width: min(78%, 540px);
-}
-.messages-wrapper :deep(.antd-bubble-content) {
-  font-size: 13.5px;
-  line-height: 21px;
-}
-.messages-wrapper :deep(.antd-bubble-start .antd-bubble-content) {
-  background: transparent;
-  color: var(--brand-foreground);
-}
-/* 用户消息：右对齐 raised 卡片，圆角 12px，14px/20px */
-.messages-wrapper :deep(.antd-bubble-end .antd-bubble-content) {
-  padding: 8px 12px;
-  border-radius: 12px;
-  background: var(--brand-surface);
-  color: var(--brand-foreground);
-  font-size: 14px;
-  line-height: 20px;
-}
-.messages-wrapper :deep(.antd-bubble-footer) {
-  margin-top: 8px;
+.message-actions :deep(.antd-actions-item) {
+  color: var(--brand-muted);
 }
 .messages-wrapper :deep(.chat-markdown) {
-  width: 100%;
   min-width: 0;
   max-width: 100%;
   color: var(--brand-foreground);
-  /* MarkdownMetrics::BODY：13.5px / 21px */
-  font-size: 13.5px;
-  line-height: 21px;
   overflow-wrap: anywhere;
 }
 .messages-wrapper :deep(.chat-markdown pre),
 .messages-wrapper :deep(.chat-markdown table),
 .messages-wrapper :deep(.antd-code-highlighter) {
-  width: 100%;
   min-width: 0;
   max-width: 100%;
-}
-.messages-wrapper :deep(.chat-markdown pre),
-.messages-wrapper :deep(.chat-markdown table) {
   overflow-x: auto;
   overscroll-behavior-x: contain;
-}
-.messages-wrapper :deep(.antd-code-highlighter-content),
-.messages-wrapper :deep(.antd-code-highlighter-code) {
-  min-width: 0;
-  max-width: 100%;
 }
 .messages-wrapper :deep(.chat-markdown p) {
   margin: 0 0 13px;
@@ -414,19 +384,6 @@ watch(
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-@media (max-width: 820px) {
-  .messages-wrapper :deep(.antd-bubble) {
-    padding-block: 8px;
-  }
-  .messages-wrapper :deep(.antd-bubble-end .antd-bubble-body) {
-    max-width: 88%;
-  }
-}
-@media (max-width: 560px) {
-  .messages-wrapper :deep(.antd-bubble-end .antd-bubble-body) {
-    max-width: 88%;
   }
 }
 </style>
