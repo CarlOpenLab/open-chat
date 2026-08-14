@@ -29,9 +29,5 @@ dist-ssr
 .env
 .env.*
 
-# Local provider config (contains secrets)
+# Local provider config (contains the optional Tavily search key)
 apps/server/config/providers.toml
-# User-added providers stored via the settings UI (apiKeys encrypted)
-apps/server/config/providers.json
-# Auto-generated AES-256-GCM key for the provider store
-apps/server/config/.provider-store-key

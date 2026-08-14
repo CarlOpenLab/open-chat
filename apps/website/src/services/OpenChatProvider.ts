@@ -38,6 +38,12 @@ export interface OpenChatParams extends XModelParams {
   /** When true, declares a `web_search` tool in the request so the model can
    * autonomously decide whether to search. The gateway executes the call. */
   web_search?: boolean;
+  /** 无状态代理的转发目标：随每次请求携带（baseUrl / apiKey / api）。 */
+  provider?: {
+    baseUrl: string;
+    apiKey: string;
+    api: "chat/completions" | "responses";
+  };
 }
 
 export class OpenChatProvider extends DeepSeekChatProvider<
@@ -115,7 +121,8 @@ export class OpenChatProvider extends DeepSeekChatProvider<
     const normalizedSystemPrompt = systemPrompt.trim();
 
     // `web_search: true` declares the web-search tool so the model can decide
-    // whether to call it; the gateway intercepts and executes the call.
+    // whether to call it; the gateway intercepts the call, runs the configured
+    // search provider (Tavily) and feeds results back to the model.
     const searchTools = web_search ? { tools: [WEB_SEARCH_TOOL], tool_choice: "auto" } : {};
 
     return {

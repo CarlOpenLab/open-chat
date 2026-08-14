@@ -43,14 +43,14 @@ const emit = defineEmits<Emits>();
 
 <style scoped>
 /* :global() 覆盖 wrap-class-name 挂载的 antd Modal 结构，保留 */
-:global(.delete-dialog-wrap .ant-modal-content) {
+:global(.delete-dialog-wrap .ant-modal-container) {
   padding: 20px;
   border: 1px solid var(--brand-border);
   border-radius: 8px;
 }
 
 @media (max-width: 560px) {
-  :global(.delete-dialog-wrap .ant-modal-content) {
+  :global(.delete-dialog-wrap .ant-modal-container) {
     border-width: 1px 0 0;
     border-radius: 8px 8px 0 0;
   }

@@ -5,8 +5,8 @@
  * - opencode-go → OpenAI Chat Completions API
  * - deepseek → OpenAI Chat Completions API
  *
- * API Key 均可引用服务端环境变量（`$OPENCODE_API_KEY` / `$DEEPSEEK_API_KEY`），
- * 与 pi 的 `auth.json` 行为一致；密钥在服务端加密落盘，不会出现在前端。
+ * API Key 由用户在本机填写，仅保存在浏览器本地（IndexedDB），
+ * 随每次聊天请求转发给服务端，服务端不落盘。
  */
 import type { ProviderApi, ProviderModelInfo } from "../../services/providers";
 
@@ -16,8 +16,6 @@ export interface ProviderPreset {
   description: string;
   baseUrl: string;
   api: ProviderApi;
-  /** 服务端环境变量名提示（仅展示，不强制）。 */
-  apiKeyEnv?: string;
   models: ProviderModelInfo[];
 }
 
@@ -28,7 +26,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: "OpenAI Responses 协议，适合 GPT-5.x 系列",
     baseUrl: "https://opencode.ai/zen/v1",
     api: "responses",
-    apiKeyEnv: "OPENCODE_API_KEY",
     models: [
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", contextLength: 1050000 },
       { id: "gpt-5.5", name: "GPT-5.5", contextLength: 1050000 },
@@ -49,7 +46,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: "OpenAI Chat Completions 协议，多模型聚合",
     baseUrl: "https://opencode.ai/zen/go/v1",
     api: "chat/completions",
-    apiKeyEnv: "OPENCODE_API_KEY",
     models: [
       { id: "grok-4.5", name: "Grok 4.5" },
       { id: "glm-5.2", name: "GLM-5.2" },
@@ -78,7 +74,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: "DeepSeek 官方 Chat Completions API",
     baseUrl: "https://api.deepseek.com",
     api: "chat/completions",
-    apiKeyEnv: "DEEPSEEK_API_KEY",
     models: [
       { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", contextLength: 1000000 },
       { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", contextLength: 1000000 },

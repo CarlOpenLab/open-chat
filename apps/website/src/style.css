@@ -37,6 +37,7 @@
   --brand-primary: var(--foreground);
   --brand-primary-hover: #27272a;
   --brand-primary-foreground: var(--background);
+  --brand-accent: #c85f44; /* 珊瑚色 accent */
   --brand-danger: var(--danger);
   --brand-danger-subtle: var(--danger-subtle);
   --brand-success: var(--success);
@@ -198,23 +199,22 @@ a {
 }
 
 /* ============================================================
-   Waku-style chat theme
-   1:1 取自 waku/src/theme.rs 的 Theme::dark() / Theme::light()
+   聊天主题：深 / 浅两套 CSS 变量（默认深色）
    ============================================================ */
 
-/* 默认即深色（Waku 以深色为主）；html[data-theme="dark"] 重定义了少数
+/* 默认即深色；html[data-theme="dark"] 重定义了少数
    brand 变量，需用更高特异性再压一次 */
-.waku-chat {
+.chat-app {
   color-scheme: dark;
-  --chat-content-width: 720px; /* Waku CONTENT_MAX_WIDTH = 720 */
+  --chat-content-width: 720px; /* 内容最大宽度 */
   --brand-background: #1a1a1a; /* canvas */
   --brand-surface: #232323; /* raised */
   --brand-surface-muted: #1e1e1e;
   --brand-surface-subtle: hsla(0, 0%, 94%, 0.06); /* 6% neutral wash */
-  --brand-workspace: #1a1a1a; /* surface：Waku 主区与 canvas 同色 */
+  --brand-workspace: #1a1a1a; /* surface：主区与 canvas 同色 */
   --brand-composer: #212121; /* composer */
-  /* Waku 的侧栏是透明的，底下压着 macOS 原生 sidebar 材质；#181818 是它自己
-     在拖拽时用的不透明替身（sidebar_drag_background），Web 端照搬这个值 */
+  /* 侧栏透明、底下压着系统 sidebar 材质；#181818 是拖拽时用的
+     不透明替身，Web 端照搬这个值 */
   --brand-sidebar: #181818;
   --brand-sidebar-muted: #7d7d7d; /* text_tertiary */
   --brand-sidebar-foreground: #e2e2e2; /* text */
@@ -241,7 +241,7 @@ a {
   --brand-shadow-float: 0 4px 20px rgba(0, 0, 0, 0.28);
 }
 
-html[data-theme="dark"] .waku-chat {
+html[data-theme="dark"] .chat-app {
   /* 覆盖 html[data-theme="dark"] 在 :root 重定义的 4 个变量 */
   --brand-muted-strong: #7d7d7d;
   --brand-primary-hover: #ffffff;
@@ -249,7 +249,7 @@ html[data-theme="dark"] .waku-chat {
   --brand-shadow-float: 0 4px 20px rgba(0, 0, 0, 0.28);
 }
 
-html[data-theme="light"] .waku-chat {
+html[data-theme="light"] .chat-app {
   color-scheme: light;
   --brand-background: #f6f5f6; /* canvas */
   --brand-surface: #ececec; /* raised */
@@ -283,12 +283,12 @@ html[data-theme="light"] .waku-chat {
   --brand-shadow-float: 0 4px 20px rgba(20, 20, 24, 0.08);
 }
 
-/* Waku selection 洗色：浏览器蓝而非品牌色 */
-.waku-chat ::selection {
+/* selection 洗色：浏览器蓝而非品牌色 */
+.chat-app ::selection {
   background: hsla(211, 100%, 50%, 0.55);
   color: inherit;
 }
-html[data-theme="light"] .waku-chat ::selection {
+html[data-theme="light"] .chat-app ::selection {
   background: hsla(211, 100%, 50%, 0.35);
   color: inherit;
 }

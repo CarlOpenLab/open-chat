@@ -37,12 +37,12 @@ describe("Chat product surface contracts", () => {
     expect(componentPaths).toHaveLength(0);
   });
 
-  test("Waku-style sidebar keeps new-task and search commands", () => {
+  test("sidebar keeps new-task and search commands", () => {
     expect(sidebar).toContain("新任务");
     expect(sidebar).toContain("搜索");
   });
 
-  test("Waku-style composer keeps model chip and circular send action", () => {
+  test("composer keeps model chip and circular send action", () => {
     expect(input).toContain("currentModel");
     expect(input).toContain("defaultNode");
   });
@@ -128,7 +128,7 @@ describe("Chat product surface contracts", () => {
     expect(chat).toContain("conversationsOpen ? sidebarWidth : 0");
   });
 
-  test("empty state uses the Waku asterisk prompt", () => {
+  test("empty state uses the asterisk prompt", () => {
     expect(emptyState).toContain("Asterisk");
     expect(emptyState).toContain("中构建什么？");
     // ProjectNameSelector 的 1px 虚线（dash 1 / gap 2）用背景渐变实现，
@@ -160,7 +160,7 @@ describe("Chat product surface contracts", () => {
     expect(input).not.toContain("StarterPrompts");
   });
 
-  test("sidebar list keeps the Waku session-card metrics", () => {
+  test("sidebar list keeps the session-card metrics", () => {
     // SIDEBAR_SESSION_CARD_HEIGHT = 51（py 7×2 + 标题 18 + gap 4 + 副行 15），
     // 行距 SIDEBAR_SESSION_ROW_GAP = 1，整列 px 10 内缩要和新任务/搜索行同轴
     expect(sidebar).toContain("min-height: 51px");

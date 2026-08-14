@@ -54,8 +54,8 @@ const modelMenu = computed<MenuProps>(() => ({
 const brandedModel = computed(() => (/qwen/i.test(props.currentModel) ? "qwen" : ""));
 
 /**
- * 推理强度：Waku 的「高」chip。底层仍是 useXChat 的 enable_thinking 布尔值，
- * 高/中映射为开启、低为关闭；本地记住具体档位以便再次展开时回显。
+ * 推理强度：分为高 / 中 / 低三档。底层仍是 useXChat 的 enable_thinking
+ * 布尔值，高/中映射为开启、低为关闭；本地记住具体档位以便再次展开时回显。
  */
 type ReasoningLevel = "high" | "medium" | "low";
 
@@ -130,7 +130,7 @@ const chipClass = (active: boolean, disabled = false) => {
     >
       <template #footer="{ defaultNode }">
         <div class="flex min-h-[26px] w-full items-center justify-between gap-3">
-          <!-- Waku composer 左排：能力 chips（深度思考 / 联网搜索 / 文件） -->
+          <!-- composer 左排：能力 chips（深度思考 / 联网搜索 / 文件） -->
           <div class="flex min-w-0 items-center gap-[3px]">
             <Dropdown :menu="reasoningMenu" :trigger="['click']" placement="topLeft">
               <button
@@ -188,7 +188,7 @@ const chipClass = (active: boolean, disabled = false) => {
             </Tooltip>
           </div>
 
-          <!-- Waku composer 右排：模型选择 + 发送 / 停止（圆形 26px，有内容时 inverse 填充） -->
+          <!-- composer 右排：模型选择 + 发送 / 停止（圆形 26px，有内容时 inverse 填充） -->
           <div class="flex min-w-0 flex-none items-center gap-[6px]">
             <Dropdown :menu="modelMenu" :trigger="['click']" placement="topRight">
               <button
@@ -233,11 +233,11 @@ const chipClass = (active: boolean, disabled = false) => {
 .chat-footer :deep(.antd-sender-main) {
   min-height: 96px;
   padding: 0;
-  /* Waku composer 卡片：圆角 13px，border，composer 底色，无重阴影 */
+  /* composer 卡片：圆角 13px，border，composer 底色，无重阴影 */
   border: 1px solid var(--brand-border);
   border-radius: 13px;
   background: var(--brand-composer);
-  /* Waku 的 composer 卡片没有投影，只有 1px border */
+  /* composer 卡片没有投影，只有 1px border */
   box-shadow: none;
   transition: border-color 160ms ease;
 }
@@ -265,7 +265,7 @@ const chipClass = (active: boolean, disabled = false) => {
   color: var(--brand-muted-strong);
   opacity: 1;
 }
-/* Waku 发送按钮：圆形 26px，inverse 底色，无阴影 */
+/* 发送按钮：圆形 26px，inverse 底色，无阴影 */
 .chat-footer :deep(.antd-sender-actions-btn) {
   width: 26px;
   min-width: 26px;

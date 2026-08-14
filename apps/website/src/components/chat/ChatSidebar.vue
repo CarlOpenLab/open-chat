@@ -291,7 +291,7 @@ onBeforeUnmount(() => {
     :class="open ? 'border-r border-r-solid border-r-brand-border' : ''"
     aria-label="会话导航"
   >
-    <!-- Waku sidebar titlebar：48px，折叠按钮 + 历史导航 -->
+    <!-- 侧栏标题栏：48px，折叠按钮 + 历史导航 -->
     <div class="flex h-[48px] flex-none items-center gap-[2px] px-[10px]">
       <button
         type="button"
@@ -417,7 +417,7 @@ onBeforeUnmount(() => {
 <style scoped>
 /* 保留原因：以下全部是 antd/x Conversations 内部类（.antd-*）与滚动条伪元素的
    :deep 覆盖，无法迁移为模板工具类。 */
-/* Waku 侧栏整列（含新任务/搜索行）都是 px 10 内缩，会话列表必须同轴 */
+/* 侧栏整列（含新任务/搜索行）都是 px 10 内缩，会话列表必须同轴 */
 .chat-sidebar :deep(.antd-conversations) {
   min-height: 100%;
   padding: 0 10px 10px;
@@ -439,7 +439,7 @@ onBeforeUnmount(() => {
   font-weight: 500;
   line-height: 28px;
 }
-/* Waku 的折叠箭头紧跟分组名（gap 5），且只在分组 hover 时显形 */
+/* 折叠箭头紧跟分组名（gap 5），且只在分组 hover 时显形 */
 .chat-sidebar :deep(.antd-conversations-group-label) {
   flex: none;
 }
@@ -570,7 +570,7 @@ onBeforeUnmount(() => {
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);
 }
-/* Waku 里选中 / hover / 按下都是同一层 6% 中性色，不加粗 */
+/* 选中 / hover / 按下都是同一层 6% 中性色，不加粗 */
 .chat-sidebar :deep(.antd-conversations-item-active) {
   background: var(--brand-surface-subtle);
   color: var(--brand-foreground);

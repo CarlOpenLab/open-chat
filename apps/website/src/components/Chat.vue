@@ -43,7 +43,7 @@ import ChatMessages from "./chat/ChatMessages.vue";
 import ChatInput from "./chat/ChatInput.vue";
 import RightPanel from "./chat/RightPanel.vue";
 import CommandPalette from "./chat/CommandPalette.vue";
-import SettingsDrawer from "./chat/SettingsDrawer.vue";
+import SettingsDialog from "./chat/SettingsDialog.vue";
 import DeleteConversationModal from "./chat/DeleteConversationModal.vue";
 import AssistantCenterModal from "./chat/AssistantCenterModal.vue";
 
@@ -85,13 +85,13 @@ const assistantCenterView = ref<"market" | "installed">("market");
 const commandPaletteOpen = ref(false);
 const settingsOpen = ref(false);
 
-// Waku 面板尺寸（sidebar 180–420，right panel 280–1000）
-/** Waku DEFAULT_SIDEBAR_WIDTH = 252，拖拽区间 SIDEBAR_MIN/MAX_WIDTH = 180 / 420 */
+// 面板尺寸（sidebar 180–420，right panel 280–1000）
+/** 默认 sidebar 252，拖拽区间 SIDEBAR_MIN/MAX_WIDTH = 180 / 420 */
 const sidebarWidth = ref(252);
 const rightPanelWidth = ref(420);
 const resizing = ref<"sidebar" | "right-panel" | null>(null);
 
-// 会话历史导航（Waku header/sidebar 的 ◀ ▶）
+// 会话历史导航（◀ ▶）
 const historyBack = ref<string[]>([]);
 const historyForward = ref<string[]>([]);
 const historyLocked = ref(false);
@@ -154,6 +154,7 @@ const {
   currentModelLabel,
   modelOptions,
   reconcileCurrentModel,
+  getForwardProvider,
   loadModels,
 } = useChatModels();
 
@@ -685,6 +686,7 @@ const handleSubmit = (
   activeRequestConversationKey.value = currentConversationKey.value;
 
   showWelcome.value = false;
+  const forwardProvider = getForwardProvider(currentModel.value);
   onRequest(
     {
       messages: [{ role: "user", content: nextContent }],
@@ -694,6 +696,8 @@ const handleSubmit = (
       ),
       enable_thinking: thinkingEnabled.value,
       thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
+      // 无状态代理：随请求携带转发目标（baseUrl / apiKey / api）
+      ...(forwardProvider ? { provider: forwardProvider } : {}),
       ...(searchEnabled.value ? { web_search: true } : {}),
     },
     options.extraInfo ? { extraInfo: options.extraInfo } : undefined,
@@ -812,9 +816,12 @@ const handleReloadMessage = (messageId: string | number) => {
   const currentConversation = getCurrentConversation();
   const baseSystemPrompt =
     currentConversation?.assistant?.renderedSystemPrompt ?? currentConversation?.systemPrompt ?? "";
+  const forwardProvider = getForwardProvider(currentModel.value);
   onReload(messageId, {
     model: currentModel.value,
     systemPrompt: getRequestSystemPrompt(baseSystemPrompt),
+    // 无状态代理：随请求携带转发目标（baseUrl / apiKey / api）
+    ...(forwardProvider ? { provider: forwardProvider } : {}),
     ...(searchEnabled.value ? { web_search: true } : {}),
   });
 };
@@ -887,7 +894,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
 
 <template>
   <div
-    class="waku-chat chat-layout relative flex h-screen min-h-[100dvh] overflow-hidden bg-brand-background text-brand-foreground selection:bg-brand-surface-subtle selection:text-brand-foreground"
+    class="chat-app chat-layout relative flex h-screen min-h-[100dvh] overflow-hidden bg-brand-background text-brand-foreground selection:bg-brand-surface-subtle selection:text-brand-foreground"
   >
     <a class="skip-link" href="#chat-content">跳到消息内容</a>
 
@@ -900,7 +907,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       @click="closeSidebar"
     ></button>
 
-    <!-- Waku 左侧栏：可拖拽宽度，收起 / 展开有滑动动画 -->
+    <!-- 左侧栏：可拖拽宽度，收起 / 展开有滑动动画 -->
     <div
       class="sidebar-shell relative flex h-full flex-none"
       :class="{
@@ -1011,7 +1018,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       />
     </div>
 
-    <!-- Waku 右侧面板：可拖拽宽度 -->
+    <!-- 右侧面板：可拖拽宽度 -->
     <div
       v-if="rightPanelOpen"
       class="right-panel-shell relative flex h-full flex-none"
@@ -1068,15 +1075,12 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       @select-conversation="handleCommandPaletteSelectConversation"
     />
 
-    <SettingsDrawer
+    <SettingsDialog
       :open="settingsOpen"
       :dark="dark"
       :theme-mode="themeMode"
-      :current-model="currentModel"
-      :model-options="modelOptions"
       @update:open="settingsOpen = $event"
       @theme-mode-change="emit('themeModeChange', $event)"
-      @model-change="handleModelChange"
       @export-history="handleExportLocalHistory"
       @import-history="handleImportLocalHistory"
       @clear-history="handleClearLocalHistory"

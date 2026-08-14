@@ -249,7 +249,7 @@ watch(
       </EmptyState>
     </section>
 
-    <!-- Waku 1:1：转录无头像列，消息贴左/右缘渲染 -->
+    <!-- 转录无头像列，消息贴左/右缘渲染 -->
     <BubbleList v-else class="h-full" :role="roleConfig" :items="displayItems" :auto-scroll="true">
       <template #contentRender="{ content, item }">
         <AssistantMessageContent
@@ -326,7 +326,7 @@ watch(
 .messages-wrapper :deep(.antd-bubble) {
   min-width: 0;
   max-width: 100%;
-  /* Waku：每行 py(8px)，首行 pt(22px)，末行 pb(22px) */
+  /* 每行 py(8px)，首行 pt(22px)，末行 pb(22px) */
   padding-block: 8px;
 }
 .messages-wrapper :deep(.antd-bubble:first-child) {
@@ -360,7 +360,7 @@ watch(
   background: transparent;
   color: var(--brand-foreground);
 }
-/* Waku 用户消息：右对齐 raised 卡片，圆角 12px，14px/20px */
+/* 用户消息：右对齐 raised 卡片，圆角 12px，14px/20px */
 .messages-wrapper :deep(.antd-bubble-end .antd-bubble-content) {
   padding: 8px 12px;
   border-radius: 12px;
@@ -377,7 +377,7 @@ watch(
   min-width: 0;
   max-width: 100%;
   color: var(--brand-foreground);
-  /* Waku MarkdownMetrics::BODY：13.5px / 21px */
+  /* MarkdownMetrics::BODY：13.5px / 21px */
   font-size: 13.5px;
   line-height: 21px;
   overflow-wrap: anywhere;

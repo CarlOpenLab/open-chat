@@ -22,16 +22,48 @@ export interface SearchProvider {
   search(query: string): Promise<{ answer?: string; results: WebSearchResult[] }>;
 }
 
+/**
+ * 解析 `$ENV_VAR` / `${ENV_VAR}` 引用（pi 风格）；其余按字面使用。
+ * 引用缺失时抛错（服务端配置错误应显式暴露）。
+ */
+function resolveApiKey(value: string): string {
+  if (value === undefined || value === null) return "";
+  const match = value.trim().match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/);
+  if (match) {
+    const resolved = process.env[match[1]];
+    if (!resolved) {
+      throw GatewayError.invalidRequest(
+        `API key references ${match[1]}, but it is not set in the server environment`,
+      );
+    }
+    return resolved;
+  }
+  const direct = value.trim().match(/^\$([A-Za-z_][A-Za-z0-9_]*)$/);
+  if (direct) {
+    const resolved = process.env[direct[1]];
+    if (!resolved) {
+      throw GatewayError.invalidRequest(
+        `API key references ${direct[1]}, but it is not set in the server environment`,
+      );
+    }
+    return resolved;
+  }
+  return value;
+}
+
 /** Build a search provider from config, or return null when search is disabled. */
 export function createSearchProvider(config: SearchConfig): SearchProvider | null {
   const provider = config.provider.trim().toLowerCase();
   if (!provider || provider === "disabled" || provider === "off") return null;
-  if (!config.apiKey.trim()) {
+  // 与存储的服务商 key 一致：支持 `$ENV_VAR` / `${ENV_VAR}` 引用，
+  // 密钥不必写进 TOML 明文；引用缺失时启动即报错（配置错误应显式暴露）。
+  const apiKey = resolveApiKey(config.apiKey);
+  if (!apiKey.trim()) {
     throw GatewayError.invalidRequest(
       `search.api_key is required when search.provider is "${config.provider}"`,
     );
   }
-  if (provider === "tavily") return new TavilySearchProvider(config);
+  if (provider === "tavily") return new TavilySearchProvider({ ...config, apiKey });
   throw GatewayError.invalidRequest(`Unsupported search provider: ${config.provider}`);
 }
 

@@ -1,6 +1,5 @@
 /**
- * Waku 风格的会话日期分组（1:1 取自 waku/src/app/sidebar.rs 的
- * session_date_group_for_dates / SessionDateGroup::label）。
+ * 会话日期分组：按时间把会话归入「今天 / 昨天 / 本周 / 本月 / 今年 / 更早」。
  */
 
 export type SessionDateGroup = "今天" | "昨天" | "本周" | "本月" | "今年" | "更早";

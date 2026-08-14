@@ -40,21 +40,14 @@ vp install
 
 ### 2. Configure Providers
 
-Copy `apps/server/config/providers.example.toml` to `apps/server/config/providers.toml`, then configure each upstream provider:
+Copy `apps/server/config/providers.example.toml` to `apps/server/config/providers.toml` (gateway settings only):
 
 ```toml
-[[providers]]
-name = "openrouter"
-base_url = "https://openrouter.ai/api/v1"
-api_key = "replace-with-your-key"
-api = "chat/completions"
-
-[[providers.models]]
-id = "openai/gpt-4o-mini"
-name = "GPT-4o Mini"
+bind_addr = "127.0.0.1:8082"
+cors_allowed_origins = ["http://localhost:3000"]
 ```
 
-`api` controls the upstream protocol and supports `"chat/completions"` (the default) or `"responses"`. The gateway normalizes both protocols behind its public `/api/chat/completions` endpoint.
+Providers (baseUrl / apiKey / models) are **not** configured on the server — it is a stateless proxy. Open the settings UI in the app (设置 → 模型服务) and add them there; they are stored in the browser (IndexedDB). Each chat request carries the forwarding target in its body, so the server never stores API keys. The only server-side secret is the optional Tavily key for web search (below).
 
 ### 3. Development
 
@@ -82,12 +75,17 @@ vp run dev:website
 
 ### POST /api/chat/completions
 
-Chat completion endpoint compatible with OpenAI API format.
+Chat endpoint — a **stateless proxy**: the request body carries the forwarding target (`provider: { baseUrl, apiKey, api }`), the server forwards it verbatim to `{baseUrl}/{api}` and pipes the upstream response (status, headers, body) back unchanged. When the request declares a `web_search` tool and a search provider is configured, the server runs the search agent loop instead: it intercepts the tool call, queries Tavily, and feeds results back to the model (emitting `event: web_search` SSE frames for the Sources UI).
 
 **Request Body:**
 
 ```json
 {
+  "provider": {
+    "baseUrl": "https://api.example.com/v1",
+    "apiKey": "sk-...",
+    "api": "chat/completions"
+  },
   "messages": [{ "role": "user", "content": "Hello!" }],
   "stream": true,
   "model": "gpt-3.5-turbo",
@@ -97,8 +95,13 @@ Chat completion endpoint compatible with OpenAI API format.
 
 **Response:**
 
-- Streaming: `text/event-stream` with SSE format
+- Streaming: `text/event-stream` with SSE format (upstream frames pass through)
 - Non-streaming: JSON response
+- Upstream 4xx/5xx errors are returned as-is, so clients see the upstream's real error
+
+### GET /api/models
+
+Returns only `{ search: { enabled, provider } }` — providers/models live in the browser (IndexedDB), not on the server.
 
 ## Technology Stack
 

@@ -1,8 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { Request, Response } from "express";
 import { expect, test } from "vite-plus/test";
-import type { ChatCompletionRequest, ChatProvider } from "./provider";
-import type { ProviderRoute } from "./registry";
+import type { ChatCompletionRequest } from "./provider";
 import { runSearchAgentLoop } from "./search-agent";
 import type { SearchProvider } from "./search";
 
@@ -79,14 +78,15 @@ const searchProvider: SearchProvider = {
   },
 };
 
-const runWithProvider = async (provider: ChatProvider) => {
+const runWithStreamRequest = async (
+  streamRequest: (body: ChatCompletionRequest) => Promise<ReadableStream<Uint8Array>>,
+) => {
   const response = new TestResponse();
-  const route: ProviderRoute = { model: "test-model", provider };
 
   await runSearchAgentLoop(
     {} as Request,
     response as unknown as Response,
-    route,
+    streamRequest,
     requestBody,
     searchProvider,
   );
@@ -96,22 +96,18 @@ const runWithProvider = async (provider: ChatProvider) => {
 
 test("forces a tool-free final answer after repeated searches and an empty model pass", async () => {
   const requests: ChatCompletionRequest[] = [];
-  const provider: ChatProvider = {
-    name: "test-provider",
-    api: "chat/completions",
-    async chat() {
-      return {};
-    },
-    async chatStream(request) {
-      requests.push(structuredClone(request));
-      const requestNumber = requests.length;
-      if (requestNumber <= 4) return sseStream([toolCallPayload(requestNumber), "[DONE]"]);
-      if (requestNumber === 5) return sseStream(["[DONE]"]);
-      return sseStream([answerPayload("final answer"), "[DONE]"]);
-    },
+  const streamRequest: (body: ChatCompletionRequest) => Promise<ReadableStream<Uint8Array>> = (
+    request,
+  ) => {
+    requests.push(structuredClone(request));
+    const requestNumber = requests.length;
+    if (requestNumber <= 4)
+      return Promise.resolve(sseStream([toolCallPayload(requestNumber), "[DONE]"]));
+    if (requestNumber === 5) return Promise.resolve(sseStream(["[DONE]"]));
+    return Promise.resolve(sseStream([answerPayload("final answer"), "[DONE]"]));
   };
 
-  const response = await runWithProvider(provider);
+  const response = await runWithStreamRequest(streamRequest);
 
   expect(requests).toHaveLength(6);
   expect(requests[5]?.tools).toBeUndefined();
@@ -124,21 +120,17 @@ test("forces a tool-free final answer after repeated searches and an empty model
 
 test("forces a tool-free answer after reaching the search round limit", async () => {
   const requests: ChatCompletionRequest[] = [];
-  const provider: ChatProvider = {
-    name: "test-provider",
-    api: "chat/completions",
-    async chat() {
-      return {};
-    },
-    async chatStream(request) {
-      requests.push(structuredClone(request));
-      const requestNumber = requests.length;
-      if (requestNumber <= 5) return sseStream([toolCallPayload(requestNumber), "[DONE]"]);
-      return sseStream([answerPayload("answer after limit"), "[DONE]"]);
-    },
+  const streamRequest: (body: ChatCompletionRequest) => Promise<ReadableStream<Uint8Array>> = (
+    request,
+  ) => {
+    requests.push(structuredClone(request));
+    const requestNumber = requests.length;
+    if (requestNumber <= 5)
+      return Promise.resolve(sseStream([toolCallPayload(requestNumber), "[DONE]"]));
+    return Promise.resolve(sseStream([answerPayload("answer after limit"), "[DONE]"]));
   };
 
-  const response = await runWithProvider(provider);
+  const response = await runWithStreamRequest(streamRequest);
 
   expect(requests).toHaveLength(6);
   expect(requests[5]?.tools).toBeUndefined();
@@ -149,19 +141,14 @@ test("forces a tool-free answer after reaching the search round limit", async ()
 
 test("emits visible fallback text when the forced final response is also empty", async () => {
   const requests: ChatCompletionRequest[] = [];
-  const provider: ChatProvider = {
-    name: "test-provider",
-    api: "chat/completions",
-    async chat() {
-      return {};
-    },
-    async chatStream(request) {
-      requests.push(structuredClone(request));
-      return sseStream(["[DONE]"]);
-    },
+  const streamRequest: (body: ChatCompletionRequest) => Promise<ReadableStream<Uint8Array>> = (
+    request,
+  ) => {
+    requests.push(structuredClone(request));
+    return Promise.resolve(sseStream(["[DONE]"]));
   };
 
-  const response = await runWithProvider(provider);
+  const response = await runWithStreamRequest(streamRequest);
 
   expect(requests).toHaveLength(2);
   expect(requests[1]?.tools).toBeUndefined();

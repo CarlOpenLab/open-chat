@@ -38,7 +38,7 @@ withDefaults(defineProps<Props>(), {
 </template>
 
 <style scoped>
-/* Waku 的 ProjectNameSelector：贴着元素底边的 1px 虚线（dash 1 / gap 2），
+/* 项目名选择器：贴着元素底边的 1px 虚线（dash 1 / gap 2），
    颜色是 text_tertiary。text-decoration 的 dotted 点距不可控，改用背景渐变。 */
 .project-name {
   padding-bottom: 1px;

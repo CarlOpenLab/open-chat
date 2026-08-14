@@ -1,78 +1,28 @@
+# Gateway settings. The server is a stateless proxy: each chat request carries
+# the forwarding target (baseUrl / apiKey / api) in its body, so providers are
+# managed from the browser (设置 → 模型服务), stored in IndexedDB — nothing
+# provider-related lives in this file.
+#
+# Copy this file to config/providers.toml (git-ignored) and adjust as needed.
+
 # Gateway bearer token. Omit or leave empty to disable auth.
 # When set, clients must send `Authorization: Bearer <gateway_api_key>`.
 # gateway_api_key = "change-me"
 
 bind_addr = "127.0.0.1:8082"
-default_model = "xopqwen35v35b"
 
 # Optional. Omit or leave empty to disable CORS (use a reverse proxy instead).
 # Use ["*"] for development, or list exact origins for production.
 cors_allowed_origins = ["http://localhost:3000"]
 
-[[providers]]
-name = "xfyun-maas"
-base_url = "https://maas-coding-api.cn-huabei-1.xf-yun.com/v2"
-api_key = "replace-with-xfyun-maas-key"
-# Optional; defaults to "chat/completions".
-api = "chat/completions"
-
-[[providers.models]]
-id = "xsparkx2flash"
-name = "Spark-X2-Flash"
-context_length = 262144
-
-[[providers.models]]
-id = "xopqwen36v35b"
-name = "Qwen3.6-35B-A3B"
-context_length = 131072
-
-[[providers.models]]
-id = "xopqwen35v35b"
-name = "Qwen3.5-35B-A3B"
-context_length = 131072
-
-[[providers.models]]
-id = "xop3qwencodernext"
-name = "Qwen3-Coder-Next-FP8"
-context_length = 262144
-
-[[providers.models]]
-id = "xopglmv47flash"
-name = "GLM-4.7-Flash"
-context_length = 131072
-
 # Web search (optional). Powers the "联网搜索" toggle in the UI.
-# Register at https://tavily.com and paste your API key below.
-# Omit the [search] table or set provider = "disabled" to turn it off.
+# Register at https://tavily.com and paste your API key below (or reference a
+# server environment variable: api_key = "$TAVILY_API_KEY" so the key never
+# appears in this file). Omit the [search] table or set provider = "disabled"
+# to turn it off.
 [search]
 provider = "tavily"
 api_key = "replace-with-your-tavily-key"
 max_results = 5
 search_depth = "basic" # "basic" or "advanced"
 include_answer = true
-
-# Additional OpenAI-compatible providers can be added like this:
-#
-# [[providers]]
-# name = "openrouter"
-# base_url = "https://openrouter.ai/api/v1"
-# api_key = "replace-with-openrouter-key"
-# api = "chat/completions"
-#
-# [[providers.models]]
-# id = "openai/gpt-4o-mini"
-# name = "GPT-4o Mini via OpenRouter"
-# context_length = 128000
-#
-# A provider that only exposes the OpenAI Responses API:
-#
-# [[providers]]
-# name = "openai-responses"
-# base_url = "https://api.openai.com/v1"
-# api_key = "replace-with-openai-key"
-# api = "responses"
-#
-# [[providers.models]]
-# id = "gpt-5.1"
-# name = "GPT-5.1"
-# context_length = 400000

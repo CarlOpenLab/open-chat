@@ -21,7 +21,6 @@
  */
 import type { Request, Response } from "express";
 import type { ChatCompletionRequest } from "./provider";
-import type { ProviderRoute } from "./registry";
 import type { SearchProvider, WebSearchResult } from "./search";
 
 /** Max search rounds per request to guard against runaway loops. */
@@ -47,11 +46,16 @@ interface AccumulatedToolCall {
  * Run the agent search loop, streaming the final answer to `res`.
  * Throws on unrecoverable upstream errors (caller is responsible for sending
  * an error response when the stream has not yet started).
+ *
+ * `streamRequest` performs the upstream chat/completions call and returns its
+ * SSE body stream; the caller supplies it so the loop stays independent of
+ * how requests are forwarded (in production it wraps the proxy's
+ * `forwardChatRequest`).
  */
 export async function runSearchAgentLoop(
   req: Request,
   res: Response,
-  route: ProviderRoute,
+  streamRequest: (body: ChatCompletionRequest) => Promise<ReadableStream<Uint8Array>>,
   body: ChatCompletionRequest,
   searchProvider: SearchProvider,
 ): Promise<void> {
@@ -91,7 +95,7 @@ export async function runSearchAgentLoop(
   const streamModel = async (
     requestBody: ChatCompletionRequest,
   ): Promise<{ toolCalls: AccumulatedToolCall[]; hasText: boolean }> => {
-    const upstream = await route.provider.chatStream(requestBody, route.model);
+    const upstream = await streamRequest(requestBody);
     const toolCalls: AccumulatedToolCall[] = [];
     let hasText = false;
 
