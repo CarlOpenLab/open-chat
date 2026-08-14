@@ -142,6 +142,10 @@ const hasConversations = computed(() => props.conversationList.length > 0);
 const activeAgent = computed(
   () => props.agents.find((agent) => agent.id === props.activeAgentId) ?? props.agents[0],
 );
+const selectableAgents = computed(() => props.agents.filter((agent) => agent.id !== "api"));
+const activeAgentLabel = computed(() =>
+  activeAgent.value?.id === "api" ? "模型" : activeAgent.value?.name || "选择供应商",
+);
 
 const agentStatus = (agent: Partial<AgentView>): string => {
   if (!agent.enabled) return "已禁用";
@@ -354,7 +358,7 @@ onBeforeUnmount(() => {
         <span class="agent-provider-mark"><Bot class="!h-[14px] !w-[14px]" /></span>
         <span class="min-w-0 flex-1 text-left">
           <span class="block truncate text-[12px] font-medium text-brand-foreground">{{
-            activeAgent?.name || "选择供应商"
+            activeAgentLabel
           }}</span>
           <span class="flex items-center gap-[5px] text-[10px] text-brand-muted-strong">
             <Circle
@@ -439,7 +443,7 @@ onBeforeUnmount(() => {
     <Modal v-model:open="agentDialogOpen" title="选择供应商" :footer="null" :width="520">
       <div class="agent-picker-grid">
         <button
-          v-for="agent in agents"
+          v-for="agent in selectableAgents"
           :key="agent.id"
           type="button"
           class="agent-picker-card"

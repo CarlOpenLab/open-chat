@@ -9,7 +9,6 @@ import {
   Pin,
   PanelLeftOpen,
   PanelRight,
-  SquareTerminal,
   Trash2,
 } from "@lucide/vue";
 import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
@@ -26,10 +25,6 @@ interface Props {
   /** 工作区草稿相对 AI 版本的增删行数，两者皆为 0 时不展示 */
   diffAdded?: number;
   diffRemoved?: number;
-  agentName?: string;
-  agentAvailable?: boolean;
-  agentProtocol?: string;
-  agentKind?: "api" | "acp";
 }
 
 interface Emits {
@@ -51,10 +46,6 @@ const props = withDefaults(defineProps<Props>(), {
   canGoForward: false,
   diffAdded: 0,
   diffRemoved: 0,
-  agentName: "Model API",
-  agentAvailable: true,
-  agentProtocol: "OpenAI-compatible API",
-  agentKind: "api",
 });
 const emit = defineEmits<Emits>();
 
@@ -173,25 +164,6 @@ const titleMenu = computed<MenuProps>(() => ({
         ><ChevronDown class="!h-3.5 !w-3.5 text-brand-muted-strong" />
       </button>
     </Dropdown>
-    <span
-      class="ml-1 inline-flex h-[26px] max-w-[180px] items-center gap-[6px] rounded-[5px] border border-solid border-brand-border bg-brand-surface-subtle px-2 text-[10px] font-medium text-brand-muted"
-      :title="
-        agentAvailable
-          ? `${agentName} · ${agentProtocol}`
-          : `${agentName} 当前不可用，请检查本地 CLI 环境`
-      "
-    >
-      <SquareTerminal
-        class="!h-[12px] !w-[12px]"
-        :class="agentKind === 'acp' ? 'text-brand-accent' : ''"
-      />
-      <span class="truncate">{{ agentName }}</span>
-      <span
-        class="h-[6px] w-[6px] flex-none rounded-full"
-        :class="agentAvailable ? 'bg-brand-success' : 'bg-brand-ghost'"
-      />
-    </span>
-
     <div class="min-w-0 flex-1" />
 
     <!-- 右侧：diff 统计 + 保存状态 + 右侧面板开关 -->

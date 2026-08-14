@@ -172,6 +172,8 @@ function main(): void {
       // 转发目标由客户端在请求体携带；解析后从 body 剔除，避免上游报未知字段。
       const endpoint = parseRequestProvider(body);
       delete body.provider;
+      delete body.mode;
+      delete body.permission;
 
       const stream = body.stream === true;
 

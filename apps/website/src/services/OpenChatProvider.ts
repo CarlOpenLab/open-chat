@@ -64,6 +64,9 @@ export const WEB_SEARCH_TOOL = {
 };
 
 export interface OpenChatParams extends XModelParams {
+  /** Composer execution preferences (consumed by compatible local agents). */
+  mode?: "build" | "plan";
+  permission?: "supervised" | "auto" | "full";
   systemPrompt?: string;
   /** When true, declares a `web_search` tool in the request so the model can
    * autonomously decide whether to search. The gateway executes the call. */

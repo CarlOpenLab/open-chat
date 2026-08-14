@@ -84,10 +84,13 @@ describe("Chat product surface contracts", () => {
     expect(chat).toContain(":diff-added");
   });
 
-  test("composer keeps reasoning/search chips on the left and the model picker on the right", () => {
+  test("composer keeps reasoning and mode controls on the left and the model picker on the right", () => {
     expect(input).toContain("reasoningMenu");
     expect(input).toContain("REASONING_LABEL");
-    expect(input).toContain("联网搜索");
+    expect(input).toContain("modeMenu");
+    expect(input).toContain("permissionMenu");
+    expect(input).not.toContain("#header");
+    expect(input).not.toContain("联网搜索");
     // 模型选择挪到右排（发送按钮旁），下拉朝右上展开
     expect(input).toContain('placement="topRight"');
     // sender 下方的 open-chat / 本地 / 模型状态条已按需求移除
@@ -97,17 +100,22 @@ describe("Chat product surface contracts", () => {
     expect(input).not.toMatch(/可能会出错/);
   });
 
-  test("composer chips accept configurable icons for thinking / search / files", () => {
-    // 深度思考、联网搜索、文件三个 chip 的图标支持通过 props 自定义，默认值保留原图标
+  test("Pi locks the permission policy to full access", () => {
+    expect(chat).toContain("isPiAgent");
+    expect(chat).toContain("effectivePermissionMode");
+    expect(chat).toContain(':permission-locked="isPiAgent"');
+    expect(chat).toContain("permissionMode.value = value");
+    expect(input).toContain("Pi 供应商固定为完全访问");
+  });
+
+  test("composer chips accept configurable icons for thinking / files", () => {
+    // 深度思考、文件两个 chip 的图标支持通过 props 自定义，默认值保留原图标
     expect(input).toContain("thinkingIcon");
-    expect(input).toContain("searchIcon");
     expect(input).toContain("fileIcon");
     expect(input).toContain("thinkingIcon: () => BrainCircuit");
-    expect(input).toContain("searchIcon: () => Globe2");
     expect(input).toContain("fileIcon: () => FolderOpen");
     // 渲染走动态组件，而不是写死某个 lucide 图标
     expect(input).toContain(':is="props.thinkingIcon"');
-    expect(input).toContain(':is="props.searchIcon"');
     expect(input).toContain(':is="props.fileIcon"');
   });
 

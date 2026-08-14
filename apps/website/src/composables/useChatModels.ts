@@ -7,7 +7,7 @@ import {
 } from "../services/ai";
 import { providerService, type StoredLocalProvider } from "../services/providers";
 
-/** 模型下拉的级联数据：供应商 → 该供应商的模型列表。 */
+/** 模型下拉数据：按供应商分组的模型列表。 */
 export interface ModelCatalogEntry {
   providerId: string;
   providerName: string;
@@ -18,14 +18,13 @@ export interface ModelCatalogEntry {
  * 模型加载与选择：
  * - 本地 AI（服务端 opencode 发现的 `provider/model`）优先展示；
  * - 手动配置的服务商数据仍在浏览器本地（IndexedDB）；
- * 两者合并成级联的模型目录，按当前模型解析转发目标（本地模型无需 baseUrl/apiKey，
+ * 两者合并成按供应商分组的模型目录，按当前模型解析转发目标（本地模型无需 baseUrl/apiKey，
  * 直接走服务端本地 provider；手动配置的模型随请求体带 provider 交给代理）。
  */
 export function useChatModels() {
   const models = ref<ModelsProvider[]>([]);
   const defaultModelId = ref("");
   const currentModel = ref("");
-  const searchAvailable = ref(false);
   const storedProviders = ref<StoredLocalProvider[]>([]);
   const localInfo = ref<LocalModelsInfo | null>(null);
 
@@ -124,7 +123,6 @@ export function useChatModels() {
         })),
       ];
       defaultModelId.value = localModels[0]?.models[0]?.id ?? providers[0]?.models[0]?.id ?? "";
-      searchAvailable.value = !!modelsResp?.search?.enabled;
       reconcileCurrentModel();
     } catch (e) {
       console.error("Failed to load models:", e);
@@ -133,7 +131,7 @@ export function useChatModels() {
 
   watch(models, () => reconcileCurrentModel());
 
-  /** 级联目录：供应商 → 模型（本地 opencode + 手动配置的服务商合并，按 provider 分组）。 */
+  /** 模型目录：本地 opencode + 手动配置的服务商合并，按 provider 分组。 */
   const modelCatalog = computed<ModelCatalogEntry[]>(() => {
     const entries = new Map<string, ModelCatalogEntry>();
     const entryFor = (providerId: string, providerName: string): ModelCatalogEntry => {
@@ -172,7 +170,6 @@ export function useChatModels() {
     models,
     defaultModelId,
     currentModel,
-    searchAvailable,
     storedProviders,
     localInfo,
     localModelIds,

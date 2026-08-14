@@ -50,7 +50,6 @@ import RightPanel from "./chat/RightPanel.vue";
 import CommandPalette from "./chat/CommandPalette.vue";
 import SettingsDialog from "./chat/SettingsDialog.vue";
 import DeleteConversationModal from "./chat/DeleteConversationModal.vue";
-import PermissionRequestModal from "./chat/PermissionRequestModal.vue";
 
 interface Props {
   dark: boolean;
@@ -74,9 +73,10 @@ const rightPanelOpen = ref(false);
 const deleteOpen = ref(false);
 const currentConversationKey = ref<string>("");
 const thinkingEnabled = ref(true);
+const workMode = ref<"build" | "plan">("build");
+const permissionMode = ref<"supervised" | "auto" | "full">("supervised");
 const fileModeEnabled = ref(false);
 const selectedWorkspacePath = ref<string[]>([]);
-const searchEnabled = ref(false);
 const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const pendingA2UISurfaceId = ref("");
 const showWelcome = ref(true);
@@ -129,12 +129,16 @@ const activeAgent = computed(
   () => agents.value.find((agent) => agent.id === activeAgentId.value) ?? API_AGENT,
 );
 const isAcpAgent = computed(() => activeAgent.value.kind === "acp");
+const isPiAgent = computed(
+  () =>
+    activeAgent.value.id.toLowerCase() === "pi" || activeAgent.value.name.toLowerCase() === "pi",
+);
+const effectivePermissionMode = computed(() => (isPiAgent.value ? "full" : permissionMode.value));
 
 // ============ 模型加载 ============
 
 const {
   currentModel,
-  searchAvailable,
   modelCatalog,
   currentModelLabel,
   reconcileCurrentModel,
@@ -778,6 +782,8 @@ const handleSubmit = (
     {
       messages: [{ role: "user", content: nextContent }],
       model: inputCurrentModel.value,
+      mode: workMode.value,
+      permission: effectivePermissionMode.value,
       systemPrompt: getRequestSystemPrompt(conversation.systemPrompt ?? ""),
       enable_thinking: thinkingEnabled.value,
       thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
@@ -786,7 +792,6 @@ const handleSubmit = (
       ...(isAcpAgent.value ? { acpAgentId: activeAgentId.value } : {}),
       // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
       ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
-      ...(!isAcpAgent.value && searchEnabled.value ? { web_search: true } : {}),
     },
     options.extraInfo ? { extraInfo: options.extraInfo } : undefined,
   );
@@ -875,6 +880,15 @@ const handleThinkingChange = (value: boolean) => {
   thinkingEnabled.value = value;
 };
 
+const handleModeChange = (value: "build" | "plan") => {
+  workMode.value = value;
+};
+
+const handlePermissionChange = (value: "supervised" | "auto" | "full") => {
+  if (isPiAgent.value && value !== "full") return;
+  permissionMode.value = value;
+};
+
 const handleFileModeChange = (value: boolean) => {
   fileModeEnabled.value = value;
   if (value) rightPanelOpen.value = true;
@@ -914,14 +928,6 @@ const clearWorkspaceDraft = (path: string, successMessage: string) => {
   message.success(successMessage);
 };
 
-const handleSearchChange = (value: boolean) => {
-  if (value && !searchAvailable.value) {
-    message.warning("未配置联网搜索能力");
-    return;
-  }
-  searchEnabled.value = value;
-};
-
 const handleReloadMessage = (messageId: string | number) => {
   const lastAssistantMessage = [...currentConversationMessages.value]
     .reverse()
@@ -942,13 +948,14 @@ const handleReloadMessage = (messageId: string | number) => {
   const forwardProvider = getForwardProvider(currentModel.value);
   onReload(messageId, {
     model: inputCurrentModel.value,
+    mode: workMode.value,
+    permission: effectivePermissionMode.value,
     systemPrompt: getRequestSystemPrompt(baseSystemPrompt),
     // 本地 opencode：复用同一会话长会话
     conversationId: String(currentConversation?.key ?? ""),
     ...(isAcpAgent.value ? { acpAgentId: activeAgentId.value } : {}),
     // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
     ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
-    ...(!isAcpAgent.value && searchEnabled.value ? { web_search: true } : {}),
   });
 };
 
@@ -1094,10 +1101,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :can-go-forward="historyForward.length > 0"
         :diff-added="workspaceDiffStats.added"
         :diff-removed="workspaceDiffStats.removed"
-        :agent-name="activeAgent.name"
-        :agent-available="activeAgent.available"
-        :agent-protocol="activeAgent.protocol"
-        :agent-kind="activeAgent.kind"
         @toggle-sidebar="handleSidebarToggle"
         @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
         @navigate-back="handleNavigateBack"
@@ -1132,21 +1135,23 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :current-model-label="inputCurrentModelLabel"
         :model-catalog="inputModelCatalog"
         :thinking-enabled="thinkingEnabled"
+        :mode="workMode"
+        :permission="effectivePermissionMode"
+        :permission-locked="isPiAgent"
+        :pending-permission="pendingPermission"
         :file-mode-enabled="fileModeEnabled"
-        :search-enabled="searchEnabled"
-        :search-available="searchAvailable"
         :agent-mode="isAcpAgent"
-        :agent-name="activeAgent.name"
         :agent-available="activeAgent.available"
-        :agent-protocol="activeAgent.protocol"
         :agent-configuring="acpSessionLoading"
         @change="handleChange"
         @cancel="handleCancel"
         @submit="handleSubmit"
         @model-change="handleModelChange"
         @thinking-change="handleThinkingChange"
+        @mode-change="handleModeChange"
+        @permission-change="handlePermissionChange"
+        @permission-response="handlePermissionResponse"
         @file-mode-change="handleFileModeChange"
-        @search-change="handleSearchChange"
       />
     </div>
 
@@ -1183,11 +1188,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
     </div>
 
     <DeleteConversationModal v-model:open="deleteOpen" @confirm="handleDeleteConversation" />
-    <PermissionRequestModal
-      :open="!!pendingPermission"
-      :request="pendingPermission"
-      @allow="handlePermissionResponse($event)"
-    />
 
     <CommandPalette
       :open="commandPaletteOpen"
