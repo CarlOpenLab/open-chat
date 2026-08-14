@@ -64,6 +64,9 @@ const form = reactive({
   models: [] as ModelRow[],
 });
 
+/** 用户是否手动编辑过 API Key；切预设时未手动编辑才覆盖默认值。 */
+const apiKeyTouched = ref(false);
+
 const presetOptions = [
   ...PROVIDER_PRESETS.map((preset) => ({ label: preset.name, value: preset.id })),
   { label: "自定义", value: "custom" },
@@ -71,12 +74,14 @@ const presetOptions = [
 
 const openCreate = () => {
   editingId.value = null;
+  apiKeyTouched.value = false;
   applyPreset("opencode");
   modalOpen.value = true;
 };
 
 const openEdit = (provider: ProviderView) => {
   editingId.value = provider.id;
+  apiKeyTouched.value = true;
   form.presetId = "custom";
   form.name = provider.name;
   form.baseUrl = provider.baseUrl;
@@ -105,8 +110,8 @@ const applyPreset = (presetId: string) => {
     name: model.name ?? "",
     contextLength: model.contextLength ?? null,
   }));
-  // 保留已输入的 key，切预设时不清空
-  if (!form.apiKey) form.apiKey = preset.apiKeyEnv ? `$${preset.apiKeyEnv}` : "";
+  // 未手动编辑过密钥时才跟随预设更新默认值，避免覆盖用户输入
+  if (!apiKeyTouched.value) form.apiKey = preset.apiKeyEnv ? `$${preset.apiKeyEnv}` : "";
 };
 
 const addModelRow = () => {
@@ -296,6 +301,7 @@ const apiLabel = (api: ProviderApi) => (api === "responses" ? "Responses" : "Cha
             v-model:value="form.apiKey"
             placeholder="sk-... 或 $ENV_VAR 引用服务端环境变量"
             autocomplete="new-password"
+            @input="apiKeyTouched = true"
           />
         </div>
 

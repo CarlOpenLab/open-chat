@@ -12,7 +12,7 @@ import {
   Trash2,
 } from "@lucide/vue";
 import { Drawer, Segmented, Select, Upload, Button, type SelectProps } from "antdv-next";
-import { computed, ref, watch } from "vue";
+import { computed, h, ref, watch } from "vue";
 import ProviderSettings from "./ProviderSettings.vue";
 
 type ThemeMode = "system" | "light" | "dark";
@@ -50,6 +50,15 @@ const modelValue = computed({
   get: () => props.currentModel,
   set: (value: string) => emit("modelChange", value),
 });
+
+// @lucide/vue 图标是函数式组件，直接作为 Segmented 的 icon 会被 antdv-next
+// 当作普通函数调用导致崩溃（Cannot destructure property 'slots' of undefined）。
+// 包一层渲染函数，由 Vue 的 h() 负责创建 vnode。
+const themeSegmentedOptions = [
+  { label: "跟随系统", value: "system", icon: () => h(Monitor) },
+  { label: "浅色", value: "light", icon: () => h(Sun) },
+  { label: "深色", value: "dark", icon: () => h(Moon) },
+];
 
 watch(
   () => props.open,
@@ -102,11 +111,7 @@ const navItems = [
           <div class="mb-1 text-[11px] text-brand-muted">主题</div>
           <Segmented
             :value="themeModeValue"
-            :options="[
-              { label: '跟随系统', value: 'system', icon: Monitor },
-              { label: '浅色', value: 'light', icon: Sun },
-              { label: '深色', value: 'dark', icon: Moon },
-            ]"
+            :options="themeSegmentedOptions"
             @change="themeModeValue = $event as ThemeMode"
           />
           <p class="mt-2 mb-0 text-[11px] leading-[16px] text-brand-muted-strong">
