@@ -2,8 +2,8 @@
 import type { BubbleItemType, BubbleListProps, ItemType } from "@antdv-next/x";
 import { Actions, BubbleList } from "@antdv-next/x";
 import type { XCardCommand } from "@antdv-next/x-card";
-import { Copy, RotateCcw } from "@lucide/vue";
-import { computed, h, provide, ref, watch } from "vue";
+import { ArrowDown, Copy, RotateCcw } from "@lucide/vue";
+import { computed, h, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import {
   getA2UISurfaceId,
   parseA2UIContent,
@@ -15,18 +15,13 @@ import { parseFileWorkspaceContent } from "../../utils/fileWorkspace";
 import AssistantMessageContent from "./AssistantMessageContent.vue";
 import EmptyState from "./EmptyState.vue";
 import StarterPrompts from "./StarterPrompts.vue";
-import ToolCallThoughtChain from "./ToolCallThoughtChain.vue";
-import type { ToolCallItem } from "../../services/OpenChatProvider";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
-import type { AssistantStarterPrompt } from "../../features/assistant-market/types";
 
 interface Props {
   showWelcome: boolean;
   bubbleItems: BubbleItemType[];
   dark: boolean;
   conversationKey: string;
-  /** 空状态标题下方的推荐提示词 */
-  starterPrompts?: AssistantStarterPrompt[];
   a2uiPendingSurfaceId?: string;
   a2uiSubmissions?: A2UISubmission[];
   searchResultsByMessageId?: Record<string, WebSearchSourceItem[]>;
@@ -56,6 +51,33 @@ const props = withDefaults(defineProps<Props>(), {
   searchResultsByMessageId: () => ({}),
 });
 const emit = defineEmits<Emits>();
+const messagesRoot = ref<HTMLElement | null>(null);
+const showScrollToBottom = ref(false);
+let scrollBox: HTMLElement | null = null;
+
+const updateScrollState = () => {
+  if (!scrollBox) {
+    showScrollToBottom.value = false;
+    return;
+  }
+  const distance = scrollBox.scrollHeight - scrollBox.clientHeight - scrollBox.scrollTop;
+  showScrollToBottom.value = distance > 120;
+};
+
+const bindScrollBox = async () => {
+  await nextTick();
+  if (scrollBox) scrollBox.removeEventListener("scroll", updateScrollState);
+  scrollBox =
+    messagesRoot.value?.querySelector<HTMLElement>(".antd-bubble-list-scroll-box") ?? null;
+  scrollBox?.addEventListener("scroll", updateScrollState, { passive: true });
+  updateScrollState();
+};
+
+const scrollToBottom = () => {
+  if (!scrollBox) return;
+  scrollBox.scrollTo({ top: scrollBox.scrollHeight, behavior: "smooth" });
+  showScrollToBottom.value = false;
+};
 const markdownTheme = computed<MarkdownTheme>(() => (props.dark ? "dark" : "light"));
 const markdownClassName = computed(() => `chat-markdown x-markdown-${markdownTheme.value}`);
 provide(markdownThemeKey, markdownTheme);
@@ -67,22 +89,48 @@ const isStreamingStatus = (status: unknown): boolean =>
   status === "loading" || status === "updating";
 
 const roleConfig: BubbleListProps["role"] = {
-  assistant: { placement: "start" },
-  user: { placement: "end" },
+  // Assistant content is already structured (markdown, thinking, tools). Removing
+  // the extra filled container gives those blocks room to breathe and keeps the
+  // user's message visually distinct.
+  assistant: {
+    placement: "start",
+    variant: "borderless",
+    class: "assistant-bubble",
+  },
+  user: {
+    placement: "end",
+    variant: "filled",
+    shape: "round",
+    class: "user-bubble",
+  },
 };
 
 const parseThinkContent = (value: string): ParsedThinkContent | null => {
-  const openMatch = value.match(/<think(?:\s+status=["']?([^"'>\s]+)["']?)?>/i);
-  if (!openMatch || openMatch.index === undefined) return null;
+  const openMatch = value.match(/<think(?:\s+status\s*=\s*["']?([^"'>\s]+)["']?)?\s*>/i);
+  if (!openMatch || openMatch.index === undefined) {
+    const partialOpenMatch = value.match(/<think\b[^>]*$/i);
+    if (partialOpenMatch?.index !== undefined) {
+      return {
+        thinkContent: "",
+        answerContent: value.slice(0, partialOpenMatch.index).trim(),
+        thinkDone: false,
+      };
+    }
+    const withoutThinkTags = value.replace(/<\/?think(?:\s+[^>]*)?\s*>/gi, "").trim();
+    return withoutThinkTags === value.trim()
+      ? null
+      : { thinkContent: "", answerContent: withoutThinkTags, thinkDone: true };
+  }
 
   const status = (openMatch[1] || "").toLowerCase();
   const thinkStart = openMatch.index + openMatch[0].length;
-  const closeTag = "</think>";
-  const closeIndex = value.indexOf(closeTag, thinkStart);
+  const closeMatch = value.slice(thinkStart).match(/<\/think\s*>/i);
+  const closeIndex = closeMatch ? thinkStart + (closeMatch.index ?? 0) : -1;
+  const closeLength = closeMatch?.[0].length ?? 0;
   const prefix = value.slice(0, openMatch.index).trim();
   const thinkRaw =
     closeIndex === -1 ? value.slice(thinkStart) : value.slice(thinkStart, closeIndex);
-  const suffix = closeIndex === -1 ? "" : value.slice(closeIndex + closeTag.length).trim();
+  const suffix = closeIndex === -1 ? "" : value.slice(closeIndex + closeLength).trim();
 
   return {
     thinkContent: thinkRaw.replace(/^\n+/, "").trim(),
@@ -113,7 +161,14 @@ const displayItems = computed<BubbleItemType[]>(() => {
         parsedA2UI,
         parsedThink:
           item.role === "assistant" && typeof displayContent === "string"
-            ? parseThinkContent(displayContent)
+            ? typeof item.extraInfo?.reasoningContent === "string" &&
+              item.extraInfo.reasoningContent.trim()
+              ? {
+                  thinkContent: item.extraInfo.reasoningContent,
+                  answerContent: displayContent,
+                  thinkDone: !isStreamingStatus(item.status),
+                }
+              : parseThinkContent(displayContent)
             : null,
       },
     };
@@ -165,6 +220,9 @@ const displayItems = computed<BubbleItemType[]>(() => {
       hasPendingBlock: !isFinal && (parsed.hasPendingBlock || parsed.commands.length > 0),
     };
     const hasVisibleText = typeof item.content !== "string" || item.content.trim().length > 0;
+    const hasVisibleReasoning =
+      typeof item.extraInfo?.reasoningContent === "string" &&
+      item.extraInfo.reasoningContent.trim().length > 0;
     const hasVisibleA2UI =
       parsedA2UI.commands.length > 0 || parsedA2UI.errors.length > 0 || parsedA2UI.hasPendingBlock;
     const hasVisibleWorkspace = Boolean(item.extraInfo?.parsedWorkspace?.hasWorkspaceBlock);
@@ -177,6 +235,7 @@ const displayItems = computed<BubbleItemType[]>(() => {
     if (
       item.role === "assistant" &&
       !hasVisibleText &&
+      !hasVisibleReasoning &&
       !hasVisibleA2UI &&
       !hasVisibleWorkspace &&
       !hasVisibleToolCalls &&
@@ -207,11 +266,6 @@ const lastAssistantMessageKey = computed(
 const submissionsForMessage = (messageId: string | number) =>
   props.a2uiSubmissions.filter((submission) => submission.ownerMessageId === String(messageId));
 
-const toolCallsForItem = (item: BubbleItemType): ToolCallItem[] => {
-  const tools = item.extraInfo?.toolCalls;
-  return Array.isArray(tools) ? (tools as ToolCallItem[]) : [];
-};
-
 const getThinkKey = (messageId: string | number) =>
   `${props.conversationKey || "__draft__"}::${String(messageId)}`;
 
@@ -225,9 +279,21 @@ const setThinkExpanded = (messageId: string | number, expanded: boolean) => {
   };
 };
 
+const hasReasoning = (item: BubbleItemType) => {
+  const reasoning = item.extraInfo?.reasoningContent;
+  if (typeof reasoning === "string" && reasoning.trim().length > 0) return true;
+  const legacy = item.extraInfo?.parsedThink as ParsedThinkContent | null | undefined;
+  return Boolean(legacy?.thinkContent?.trim());
+};
+
 /** 气泡下方操作栏：复制 + 重新生成（x Actions 原生样式）。 */
 const buildMessageActions = (item: BubbleItemType): ItemType[] => {
-  const content = typeof item.content === "string" ? item.content : "";
+  const parsedThink = item.extraInfo?.parsedThink as ParsedThinkContent | null | undefined;
+  const content = parsedThink
+    ? parsedThink.answerContent
+    : typeof item.content === "string"
+      ? item.content.replace(/<\/?think(?:\s+[^>]*)?\s*>/gi, "")
+      : "";
   return [
     {
       key: "copy",
@@ -254,38 +320,55 @@ watch(
     const nextDoneMap = { ...thinkDoneMap.value };
 
     items.forEach((item) => {
-      const parsed = item.extraInfo?.parsedThink as ParsedThinkContent | null;
-      if (!parsed) return;
+      if (!hasReasoning(item)) return;
 
       const key = getThinkKey(item.key);
       const previousDone = thinkDoneMap.value[key];
       const previousExpanded = thinkExpandedMap.value[key];
-      nextDoneMap[key] = parsed.thinkDone;
+      const done = !isStreamingStatus(item.status);
+      nextDoneMap[key] = done;
 
       if (previousExpanded === undefined) {
-        nextExpandedMap[key] = !parsed.thinkDone;
-      } else if (previousDone === false && parsed.thinkDone) {
+        nextExpandedMap[key] = !done;
+      } else if (previousDone === false && done) {
         nextExpandedMap[key] = false;
       }
     });
 
     thinkExpandedMap.value = nextExpandedMap;
     thinkDoneMap.value = nextDoneMap;
+    void bindScrollBox();
   },
   { immediate: true },
 );
+
+watch(
+  () => props.showWelcome,
+  () => {
+    void bindScrollBox();
+  },
+);
+
+onMounted(() => {
+  void bindScrollBox();
+});
+
+onBeforeUnmount(() => {
+  scrollBox?.removeEventListener("scroll", updateScrollState);
+});
 </script>
 
 <template>
   <main
     id="chat-content"
-    class="messages-wrapper h-full min-h-0 flex-1 overflow-hidden bg-brand-workspace py-6 px-4 lt-md:py-6 lt-md:px-4 lt-sm:py-5 lt-sm:px-3"
+    ref="messagesRoot"
+    class="messages-wrapper relative h-full min-h-0 flex-1 overflow-hidden bg-brand-workspace py-6 px-4 lt-md:py-6 lt-md:px-4 lt-sm:py-5 lt-sm:px-3"
     :class="showWelcome ? 'flex flex-col justify-center' : ''"
     tabindex="-1"
   >
     <section v-if="showWelcome" class="empty-state m-auto w-[min(100%,760px)] p-0 text-center">
       <EmptyState>
-        <StarterPrompts :items="starterPrompts" @prompt-click="emit('promptClick', $event)" />
+        <StarterPrompts @prompt-click="emit('promptClick', $event)" />
       </EmptyState>
     </section>
 
@@ -299,9 +382,7 @@ watch(
           :markdown-class-name="markdownClassName"
           :streaming="isStreamingStatus(item.status)"
           :think-expanded="
-            item.extraInfo?.parsedThink
-              ? isThinkExpanded(item.key, item.extraInfo.parsedThink.thinkDone)
-              : false
+            hasReasoning(item) ? isThinkExpanded(item.key, !isStreamingStatus(item.status)) : false
           "
           :a2ui-action-pending="
             item.extraInfo?.parsedA2UI
@@ -318,34 +399,36 @@ watch(
 
       <template #footer="{ item }">
         <template v-if="item.role === 'assistant'">
-          <div class="assistant-bubble-footer">
-            <ToolCallThoughtChain :tools="toolCallsForItem(item)" />
-            <Actions
-              v-if="item.status === 'success' && item.key === lastAssistantMessageKey"
-              class="message-actions"
-              :items="buildMessageActions(item)"
-            />
-          </div>
+          <Actions
+            v-if="item.status === 'success' && item.key === lastAssistantMessageKey"
+            class="message-actions"
+            :items="buildMessageActions(item)"
+          />
         </template>
       </template>
     </BubbleList>
+
+    <button
+      v-if="!showWelcome && showScrollToBottom"
+      type="button"
+      class="scroll-to-bottom"
+      aria-label="回到底部"
+      title="回到底部"
+      @click="scrollToBottom"
+    >
+      <ArrowDown class="h-4 w-4" />
+    </button>
   </main>
 </template>
 
 <style scoped>
-/* 保留：@keyframes 及引用它的 animation 声明（scoped 会重写 keyframes 名，二者需同处） */
 .empty-state {
   animation: empty-in 360ms ease-out both;
 }
 
-/*
- * 消息列表：气泡保持 @antdv-next/x 原生样式（filled 浅灰 + 圆角），
- * 内容列限宽居中（主流 AI 聊天 760px 量级），气泡在列内按组件默认
- * start/end 各留 15% 侧边距。
- */
 .messages-wrapper :deep(.antd-bubble-list) {
   width: 100%;
-  max-width: 760px;
+  max-width: min(100%, 820px);
   min-width: 0;
   margin: 0 auto;
 }
@@ -354,21 +437,13 @@ watch(
   overscroll-behavior-x: none;
 }
 .messages-wrapper :deep(.antd-bubble-list-scroll-content) {
-  padding-inline: 0;
+  padding-inline: clamp(4px, 1.5vw, 16px);
 }
-/* 气泡下方操作栏：与气泡左缘对齐，hover 才有底色（组件库原生交互） */
-.message-actions {
-  margin-top: 2px;
+.messages-wrapper :deep(.antd-bubble) {
+  animation: message-in 260ms cubic-bezier(0.2, 0, 0, 1) both;
 }
-.assistant-bubble-footer {
-  display: flex;
-  min-width: min(100%, 760px);
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-}
-.message-actions :deep(.antd-actions-item) {
-  color: var(--brand-muted);
+.messages-wrapper :deep(.antd-thought-chain) {
+  animation: activity-in 220ms ease-out both;
 }
 .messages-wrapper :deep(.chat-markdown) {
   min-width: 0;
@@ -399,6 +474,64 @@ watch(
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+.scroll-to-bottom {
+  position: absolute;
+  right: max(20px, calc((100% - 820px) / 2));
+  bottom: 20px;
+  z-index: 2;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--brand-border-strong);
+  border-radius: 999px;
+  background: var(--brand-composer);
+  color: var(--brand-foreground);
+  box-shadow: var(--brand-shadow-float);
+  animation: scroll-button-in 180ms ease-out both;
+  transition:
+    background 150ms ease,
+    transform 150ms ease;
+}
+
+.scroll-to-bottom:hover {
+  background: var(--brand-surface-subtle);
+  transform: translateY(-1px);
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes activity-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scroll-button-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 </style>

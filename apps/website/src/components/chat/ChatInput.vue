@@ -28,7 +28,6 @@ interface Props {
   fileModeEnabled: boolean;
   searchEnabled: boolean;
   searchAvailable: boolean;
-  assistantName?: string;
   agentMode?: boolean;
   agentName?: string;
   agentAvailable?: boolean;
@@ -51,7 +50,6 @@ interface Emits {
   (e: "thinkingChange", value: boolean): void;
   (e: "fileModeChange", value: boolean): void;
   (e: "searchChange", value: boolean): void;
-  (e: "assistantSelect"): void;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -413,9 +411,7 @@ const chipClass = (active: boolean, disabled = false) => {
                     ? agentMode
                       ? currentModelLabel
                       : '请先配置模型供应商'
-                    : assistantName
-                      ? `助手：${assistantName}`
-                      : undefined
+                    : undefined
                 "
               >
                 <ModelIcon v-if="brandedModel" :model="brandedModel" :size="13" />

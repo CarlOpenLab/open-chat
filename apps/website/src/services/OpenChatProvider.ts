@@ -111,8 +111,17 @@ export class OpenChatProvider extends DeepSeekChatProvider<
     if (chunk === undefined) {
       const origin = info.originMessage ?? { content: "", role: "assistant" };
       const content = typeof origin.content === "string" ? origin.content : "";
-      const closed = closeOpenThink(content);
-      return closed === content ? origin : { ...origin, content: closed };
+      if (origin.reasoningContent) {
+        return { ...origin, reasoningDone: true };
+      }
+      const split = splitReasoningContent(closeOpenThink(content));
+      if (!split.hasThink) return origin;
+      return preserveMessageMeta(origin, {
+        role: origin.role || "assistant",
+        content: split.answerContent,
+        reasoningContent: split.reasoningContent,
+        reasoningDone: true,
+      });
     }
 
     if (chunk?.event === "tool_call" && chunk.data && chunk.data !== "[DONE]") {
@@ -120,7 +129,11 @@ export class OpenChatProvider extends DeepSeekChatProvider<
         const tool = JSON.parse(chunk.data) as ToolCallItem;
         this.onToolCall?.(tool);
         const origin = info.originMessage ?? { content: "", role: "assistant" };
-        return { ...origin, toolCalls: mergeToolCalls(origin.toolCalls, tool) };
+        return {
+          ...origin,
+          toolCalls: mergeToolCalls(origin.toolCalls, tool),
+          ...(origin.reasoningContent ? { reasoningDone: true } : {}),
+        };
       } catch (err) {
         console.error("Failed to parse tool_call event:", err);
       }
@@ -178,7 +191,11 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       try {
         const plan = JSON.parse(chunk.data) as Record<string, unknown>;
         const origin = info.originMessage ?? { content: "", role: "assistant" };
-        return { ...origin, agentPlan: plan };
+        return {
+          ...origin,
+          agentPlan: plan,
+          ...(origin.reasoningContent ? { reasoningDone: true } : {}),
+        };
       } catch (err) {
         console.error("Failed to parse acp_plan event:", err);
       }
@@ -226,7 +243,30 @@ export class OpenChatProvider extends DeepSeekChatProvider<
           : (transformed.content?.text ?? "");
       return transformedContent ? preserveMessageMeta(origin, transformed) : origin;
     }
-    return preserveMessageMeta(origin, super.transformMessage(info));
+
+    // DeepSeekChatProvider stores reasoning in a synthetic <think> block. Keep
+    // that state internal to the provider, then expose it as a first-class
+    // message field for the activity UI.
+    const originContent = getMessageText(origin?.content);
+    const originReasoning =
+      typeof origin?.reasoningContent === "string" ? origin.reasoningContent : "";
+    const parentOrigin: XModelMessage | undefined =
+      origin && originReasoning ? { ...origin, content: `<think>\n${originReasoning}\n` } : origin;
+    const transformed = super.transformMessage({ ...info, originMessage: parentOrigin });
+    const transformedText = getMessageText(transformed.content);
+    const split = splitReasoningContent(transformedText);
+    const answerContent = joinAnswerContent(
+      originReasoning ? originContent : "",
+      split.answerContent,
+    );
+    return preserveMessageMeta(origin, {
+      role: transformed.role || origin?.role || "assistant",
+      content: answerContent,
+      ...(split.reasoningContent || originReasoning
+        ? { reasoningContent: split.reasoningContent || originReasoning }
+        : {}),
+      ...(split.hasThink || originReasoning ? { reasoningDone: split.reasoningDone } : {}),
+    });
   }
 
   override transformParams(
@@ -236,9 +276,9 @@ export class OpenChatProvider extends DeepSeekChatProvider<
     const { systemPrompt = "", web_search, ...modelRequestParams } = requestParams;
     const params = super.transformParams(modelRequestParams, options);
     delete params.systemPrompt;
-    const messages = (params.messages ?? []).filter(
-      (modelMessage) => modelMessage.openChatLocalOnly !== true,
-    );
+    const messages = (params.messages ?? [])
+      .filter((modelMessage) => modelMessage.openChatLocalOnly !== true)
+      .map((modelMessage) => stripLocalMessageFields(modelMessage));
     const normalizedSystemPrompt = systemPrompt.trim();
 
     // `web_search: true` declares the web-search tool so the model can decide
@@ -276,6 +316,8 @@ function preserveMessageMeta(
     chatError?: string;
     chatNotices?: string[];
     pendingPermissions?: PermissionRequest[];
+    reasoningContent?: string;
+    reasoningDone?: boolean;
   } = {};
   if (Array.isArray(origin?.toolCalls)) meta.toolCalls = origin.toolCalls;
   if (typeof origin?.chatError === "string") meta.chatError = origin.chatError;
@@ -285,17 +327,93 @@ function preserveMessageMeta(
   if (origin?.agentPlan && typeof origin.agentPlan === "object") {
     (meta as Record<string, unknown>).agentPlan = origin.agentPlan;
   }
+  if (
+    typeof next.reasoningContent !== "string" &&
+    typeof (origin as Record<string, unknown> | undefined)?.reasoningContent === "string"
+  ) {
+    meta.reasoningContent = (origin as Record<string, unknown>).reasoningContent as string;
+  }
+  if (
+    typeof next.reasoningDone !== "boolean" &&
+    typeof (origin as Record<string, unknown> | undefined)?.reasoningDone === "boolean"
+  ) {
+    meta.reasoningDone = (origin as Record<string, unknown>).reasoningDone as boolean;
+  }
   return Object.keys(meta).length > 0 ? { ...next, ...meta } : next;
+}
+
+function getMessageText(content: XModelMessage["content"] | undefined): string {
+  return typeof content === "string" ? content : content?.text || "";
+}
+
+interface SplitReasoningResult {
+  hasThink: boolean;
+  thinkContent: string;
+  answerContent: string;
+  reasoningContent: string;
+  reasoningDone: boolean;
+}
+
+function splitReasoningContent(value: string): SplitReasoningResult {
+  const openMatch = value.match(/<think(?:\s+status\s*=\s*["']?([^"'>\s]+)["']?)?\s*>/i);
+  if (!openMatch || openMatch.index === undefined) {
+    return {
+      hasThink: false,
+      thinkContent: "",
+      answerContent: value.trim(),
+      reasoningContent: "",
+      reasoningDone: true,
+    };
+  }
+
+  const thinkStart = openMatch.index + openMatch[0].length;
+  const closeMatch = value.slice(thinkStart).match(/<\/think\s*>/i);
+  const closeIndex = closeMatch ? thinkStart + (closeMatch.index ?? 0) : -1;
+  const closeLength = closeMatch?.[0].length ?? 0;
+  const prefix = value.slice(0, openMatch.index).trim();
+  const thinkRaw =
+    closeIndex === -1 ? value.slice(thinkStart) : value.slice(thinkStart, closeIndex);
+  const suffix = closeIndex === -1 ? "" : value.slice(closeIndex + closeLength).trim();
+  const status = (openMatch[1] || "").toLowerCase();
+
+  return {
+    hasThink: true,
+    thinkContent: thinkRaw.replace(/^\s+/, "").trim(),
+    answerContent: [prefix, suffix].filter(Boolean).join("\n\n").trim(),
+    reasoningContent: thinkRaw.replace(/^\s+/, "").trim(),
+    reasoningDone: closeIndex !== -1 || status === "done",
+  };
+}
+
+function joinAnswerContent(previous: string, next: string): string {
+  if (!previous) return next;
+  if (!next) return previous;
+  if (next.startsWith(previous)) return next;
+  return `${previous}${next}`;
+}
+
+function stripLocalMessageFields(message: XModelMessage): XModelMessage {
+  const next = { ...message };
+  delete next.reasoningContent;
+  delete next.reasoningDone;
+  delete next.toolCalls;
+  delete next.agentPlan;
+  delete next.chatError;
+  delete next.chatNotices;
+  delete next.pendingPermissions;
+  delete next.openChatLocalOnly;
+  return next;
 }
 
 /** 流结束时把未闭合的 `<think>` 标记为完成并补上闭合标签。 */
 function closeOpenThink(content: string): string {
-  if (!content.includes("<think")) return content;
-  const openMatch = content.match(/<think(?:\s+status=["']?[^"'>\s]+["']?)?>/i);
+  if (!/<think\b/i.test(content)) return content;
+  const openMatch = content.match(/<think(?:\s+status\s*=\s*["']?([^"'>\s]+)["']?)?\s*>/i);
   if (!openMatch) return content;
   const thinkStart = openMatch.index ?? 0;
   const status = (openMatch[1] || "").toLowerCase();
-  if (status === "done" || content.indexOf("</think>", thinkStart + openMatch[0].length) !== -1) {
+  const hasCloseTag = /<\/think\s*>/i.test(content.slice(thinkStart + openMatch[0].length));
+  if (status === "done" || hasCloseTag) {
     return content;
   }
   return content.replace(/<think([^>]*)>/i, `<think$1 status="done">`) + "</think>";

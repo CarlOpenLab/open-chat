@@ -2,7 +2,6 @@ import type { ConversationItemType } from "@antdv-next/x";
 import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
 import { message } from "antdv-next";
 import { onBeforeUnmount, watch, type Ref } from "vue";
-import type { AssistantConversationSnapshot } from "../features/assistant-market/types";
 import {
   clearChatState,
   normalizePersistedChatState,
@@ -16,15 +15,20 @@ import type { WorkspaceFileDraft } from "../utils/fileWorkspace";
 export interface OpenChatConversation extends ConversationItemType {
   /** 会话所属兼容层供应商；历史数据缺省时归入 API。 */
   agentId?: string;
+  /** 创建会话时使用的模型；历史数据缺省时由当前模型补齐。 */
+  modelId?: string;
   messages?: DefaultMessageInfo<XModelMessage>[];
   a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
   systemPrompt?: string;
-  assistant?: AssistantConversationSnapshot;
 }
 
 export const getMessagePreview = (content: string, maxLength: number = 20): string => {
-  const normalized = content.replace(/\s+/g, " ").trim();
+  const withoutThink = content
+    .replace(/<think\b[^>]*>[\s\S]*?(?:<\/think\s*>|$)/gi, "")
+    .replace(/<\/?think(?:\s+[^>]*)?\s*>/gi, "");
+  const normalized = withoutThink.replace(/\s+/g, " ").trim();
+  if (!normalized && /<think\b/i.test(content)) return "思考中...";
   if (!normalized) return "新对话";
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
 };
@@ -107,7 +111,10 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
             typeof conversation.agentId === "string" && conversation.agentId
               ? conversation.agentId
               : "api",
-          ...(conversation.assistant ? { assistant: conversation.assistant } : {}),
+          modelId:
+            typeof conversation.modelId === "string" && conversation.modelId
+              ? conversation.modelId
+              : currentModel.value,
         };
       });
   };
@@ -143,6 +150,8 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
         ...conv,
         key: String(conv.key),
         agentId: typeof conv.agentId === "string" && conv.agentId ? conv.agentId : "api",
+        modelId:
+          typeof conv.modelId === "string" && conv.modelId ? conv.modelId : currentModel.value,
         label: typeof conv.label === "string" && conv.label.trim() ? conv.label : "新对话",
       };
     });

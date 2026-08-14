@@ -63,12 +63,10 @@ describe("Chat product surface contracts", () => {
   });
 
   test("sidebar entries get an icon tile and a filled meta row", () => {
-    // 左侧图标 tile：助手会话用品牌图标（accent 色），普通会话用聊天气泡
+    // 左侧图标 tile：普通会话用聊天气泡
     expect(sidebar).toContain("conversation-entry-icon");
     expect(sidebar).toContain("conversation-entry-body");
-    expect(sidebar).toContain("conversation-entry-assistant-icon");
     expect(sidebar).toContain("MessageSquare");
-    expect(sidebar).toContain("AssistantIcon");
     // 普通会话副行回退到最后一条消息预览，避免整行空白
     expect(sidebar).toContain("lastMessagePreview");
     expect(sidebar).toContain("getMessagePreview");

@@ -8,7 +8,6 @@ import {
   Search,
   Settings2,
   SquarePen,
-  Store,
   Sun,
   Trash2,
 } from "@lucide/vue";
@@ -25,7 +24,6 @@ interface Props {
 interface Emits {
   (e: "update:open", value: boolean): void;
   (e: "newConversation"): void;
-  (e: "openAssistantCenter"): void;
   (e: "openSettings"): void;
   (e: "toggleTheme"): void;
   (e: "toggleSidebar"): void;
@@ -37,7 +35,6 @@ interface Emits {
 
 type PaletteCommand =
   | { kind: "new"; label: string }
-  | { kind: "assistantCenter"; label: string }
   | { kind: "settings"; label: string }
   | { kind: "theme"; label: string }
   | { kind: "sidebar"; label: string }
@@ -63,7 +60,6 @@ const commandGroups: { title: string; items: PaletteCommand[] }[] = [
     title: "命令",
     items: [
       { kind: "new", label: "新建任务" },
-      { kind: "assistantCenter", label: "打开助手广场" },
       { kind: "settings", label: "打开设置" },
       { kind: "sidebar", label: "切换侧边栏" },
       { kind: "rightPanel", label: "切换右侧面板" },
@@ -137,9 +133,6 @@ const run = (row: PaletteRow) => {
     case "new":
       emit("newConversation");
       break;
-    case "assistantCenter":
-      emit("openAssistantCenter");
-      break;
     case "settings":
       emit("openSettings");
       break;
@@ -166,8 +159,6 @@ const commandIcon = (command: PaletteCommand) => {
   switch (command.kind) {
     case "new":
       return SquarePen;
-    case "assistantCenter":
-      return Store;
     case "settings":
       return Settings2;
     case "theme":

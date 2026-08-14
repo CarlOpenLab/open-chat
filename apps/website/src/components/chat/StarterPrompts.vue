@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { GitBranch, Lightbulb, Sparkles } from "@lucide/vue";
+import { Lightbulb, Sparkles } from "@lucide/vue";
 import { Tooltip } from "antdv-next";
 import { computed } from "vue";
-import type { AssistantStarterPrompt } from "../../features/assistant-market/types";
+interface StarterPrompt {
+  id: string;
+  label: string;
+  description: string;
+  prompt: string;
+}
 
 interface Props {
-  items?: AssistantStarterPrompt[];
+  items?: StarterPrompt[];
 }
 interface Emits {
   (e: "promptClick", info: { data: { key: string; description: string } }): void;
@@ -16,13 +21,7 @@ const emit = defineEmits<Emits>();
 
 // ============ 推荐提示词（空状态标题下方的胶囊建议） ============
 
-const defaultPromptItems: AssistantStarterPrompt[] = [
-  {
-    id: "ticket-branch",
-    label: "生成工单分支",
-    description: "填写工单 ID（或链接）和需求标题，生成 Git 分支",
-    prompt: "请启动工单分支生成流程，先用表单收集工单 ID（或链接）和需求标题。",
-  },
+const defaultPromptItems: StarterPrompt[] = [
   {
     id: "placeholder-idea",
     label: "梳理一个想法",
@@ -37,17 +36,16 @@ const defaultPromptItems: AssistantStarterPrompt[] = [
   },
 ];
 
-const promptItems = computed<AssistantStarterPrompt[]>(() =>
+const promptItems = computed<StarterPrompt[]>(() =>
   props.items?.length ? props.items : defaultPromptItems,
 );
 
 const iconFor = (id: string) => {
-  if (id === "ticket-branch" || id === "start-ticket-flow") return GitBranch;
   if (id === "placeholder-idea") return Lightbulb;
   return Sparkles;
 };
 
-const handleClick = (item: AssistantStarterPrompt) => {
+const handleClick = (item: StarterPrompt) => {
   emit("promptClick", { data: { key: item.id, description: item.prompt } });
 };
 </script>

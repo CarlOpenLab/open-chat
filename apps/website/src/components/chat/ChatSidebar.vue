@@ -18,13 +18,11 @@ import {
   Search,
   Settings,
   SquarePen,
-  Store,
   Sun,
   Trash2,
 } from "@lucide/vue";
 import { Input, Modal, Tooltip, message } from "antdv-next";
 import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import AssistantIcon from "../../features/assistant-market/components/AssistantIcon.vue";
 import { getMessagePreview, type OpenChatConversation } from "../../composables/useChatPersistence";
 import { resolveConversationGroup } from "../../utils/sessionDateGroup";
 import { formatElapsedDuration, formatRelativeTime } from "../../utils/relativeTime";
@@ -51,7 +49,6 @@ interface Emits {
   (e: "toggleTheme"): void;
   (e: "newConversation"): void;
   (e: "openSearch"): void;
-  (e: "openAssistantCenter"): void;
   (e: "openSettings"): void;
   (e: "navigateBack"): void;
   (e: "navigateForward"): void;
@@ -78,6 +75,7 @@ const search = ref("");
 const renameOpen = ref(false);
 const renameKey = ref("");
 const renameDraft = ref("");
+const agentDialogOpen = ref(false);
 
 // 条目副行的时间需要随时间走动：进行中每秒刷新（要显示秒），空闲时 30 秒刷新即可。
 const nowTick = ref(Date.now());
@@ -152,34 +150,10 @@ const agentStatus = (agent: Partial<AgentView>): string => {
   return "CLI 未安装";
 };
 
-const agentMenu = computed(() => ({
-  rootClass: "agent-provider-menu",
-  items: props.agents.map((agent) => ({
-    key: agent.id,
-    label: agent.name,
-    title: agent.description,
-    available: agent.available,
-    installed: agent.installed,
-    enabled: agent.enabled,
-    protocol: agent.protocol,
-  })),
-  selectedKeys: [props.activeAgentId],
-  selectable: true,
-  labelRender: (item: Record<string, unknown>) =>
-    h("span", { class: "agent-provider-option" }, [
-      h("span", {
-        class: [
-          "agent-provider-dot",
-          item.available ? "is-online" : item.installed ? "is-installed" : "is-offline",
-        ],
-      }),
-      h("span", { class: "agent-provider-option-body" }, [
-        h("span", { class: "agent-provider-option-name" }, String(item.label ?? "Agent")),
-        h("span", { class: "agent-provider-option-status" }, agentStatus(item)),
-      ]),
-    ]),
-  onClick: ({ key }: { key: string | number }) => emit("agentChange", String(key)),
-}));
+const selectAgent = (agentId: string) => {
+  agentDialogOpen.value = false;
+  emit("agentChange", agentId);
+};
 
 /**
  * Conversations 的 expandedKeys 默认是空数组，只要开了 collapsible，
@@ -200,10 +174,7 @@ const groupable = computed<ConversationsProps["groupable"]>(() => ({
   },
 }));
 
-/**
- * 副行文案：助手会话显示助手名，普通会话回退到最后一条消息预览，
- * 避免副行只剩一个孤零零的时间。
- */
+/** 副行文案：回退到最后一条消息预览，避免副行只剩一个孤零零的时间。 */
 const lastMessagePreview = (conversation: OpenChatConversation): string => {
   const messages = conversation.messages ?? [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -214,20 +185,15 @@ const lastMessagePreview = (conversation: OpenChatConversation): string => {
 };
 
 /**
- * 条目 = 左侧图标 + 右侧两行文本：标题行 +（助手名 / 消息预览 + 时间）。
+ * 条目 = 左侧图标 + 右侧两行文本：标题行 + 消息预览 + 时间。
  * 进行中的会话把时间换成「工作中 · 已运行时长」并附一个转圈图标。
  */
 const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
   const conversation = item as OpenChatConversation;
   const busy = Boolean(props.busyKey) && String(item.key) === props.busyKey;
   const title = String(conversation.label ?? "").trim() || "新对话";
-  const assistant = conversation.assistant;
-  const metaText = assistant?.name || lastMessagePreview(conversation);
-
-  // 左侧图标：助手会话用其品牌图标（accent 色），普通会话用聊天气泡（中性色）
-  const iconNode = assistant
-    ? h(AssistantIcon, { name: assistant.icon, class: "conversation-entry-assistant-icon" })
-    : h(MessageSquare, { class: "conversation-entry-default-icon" });
+  const metaText = lastMessagePreview(conversation);
+  const iconNode = h(MessageSquare, { class: "conversation-entry-default-icon" });
 
   return h("span", { class: "conversation-entry" }, [
     h("span", { class: "conversation-entry-icon" }, [iconNode]),
@@ -238,7 +204,7 @@ const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
         busy ? h(LoaderCircle, { class: "conversation-entry-spinner" }) : null,
       ]),
       h("span", { class: "conversation-entry-meta" }, [
-        // 副行：助手名 / 消息预览 + 时间，文案弹性占位把时间推到右端
+        // 副行：消息预览 + 时间，文案弹性占位把时间推到右端
         metaText ? h("span", { class: "conversation-entry-project" }, metaText) : null,
         h(
           "span",
@@ -378,33 +344,32 @@ onBeforeUnmount(() => {
 
     <!-- CLI / API 供应商切换：下方会话列表始终只属于当前供应商。 -->
     <div class="px-[10px] pb-[8px]">
-      <Dropdown :menu="agentMenu" :trigger="['click']" placement="bottomLeft">
-        <button
-          type="button"
-          class="agent-provider-trigger"
-          aria-label="切换 CLI 供应商"
-          :title="activeAgent?.description"
-        >
-          <span class="agent-provider-mark"><Bot class="!h-[14px] !w-[14px]" /></span>
-          <span class="min-w-0 flex-1 text-left">
-            <span class="block truncate text-[12px] font-medium text-brand-foreground">{{
-              activeAgent?.name || "选择供应商"
-            }}</span>
-            <span class="flex items-center gap-[5px] text-[10px] text-brand-muted-strong">
-              <Circle
-                class="!h-[6px] !w-[6px]"
-                :class="
-                  activeAgent?.available
-                    ? 'fill-brand-success text-brand-success'
-                    : 'fill-brand-ghost text-brand-ghost'
-                "
-              />
-              {{ agentStatus(activeAgent) }}
-            </span>
+      <button
+        type="button"
+        class="agent-provider-trigger"
+        aria-label="选择供应商"
+        :title="activeAgent?.description"
+        @click="agentDialogOpen = true"
+      >
+        <span class="agent-provider-mark"><Bot class="!h-[14px] !w-[14px]" /></span>
+        <span class="min-w-0 flex-1 text-left">
+          <span class="block truncate text-[12px] font-medium text-brand-foreground">{{
+            activeAgent?.name || "选择供应商"
+          }}</span>
+          <span class="flex items-center gap-[5px] text-[10px] text-brand-muted-strong">
+            <Circle
+              class="!h-[6px] !w-[6px]"
+              :class="
+                activeAgent?.available
+                  ? 'fill-brand-success text-brand-success'
+                  : 'fill-brand-ghost text-brand-ghost'
+              "
+            />
+            {{ agentStatus(activeAgent) }}
           </span>
-          <ChevronDown class="!h-[13px] !w-[13px] text-brand-muted-strong" />
-        </button>
-      </Dropdown>
+        </span>
+        <ChevronDown class="!h-[13px] !w-[13px] text-brand-muted-strong" />
+      </button>
     </div>
 
     <!-- 新任务 / 搜索 -->
@@ -413,10 +378,6 @@ onBeforeUnmount(() => {
       <button type="button" :class="newTaskRowClass" @click="emit('newConversation')">
         <SquarePen class="!h-[14px] !w-[14px] flex-none text-brand-accent" />
         <span class="min-w-0 flex-1 truncate">新任务</span>
-      </button>
-      <button type="button" :class="actionRowClass" @click="emit('openAssistantCenter')">
-        <Store class="!h-[15px] !w-[15px] flex-none text-brand-accent" />
-        <span class="min-w-0 flex-1 truncate">助手广场</span>
       </button>
       <button type="button" :class="actionRowClass" @click="emit('openSearch')">
         <Search class="!h-[15px] !w-[15px] flex-none" />
@@ -475,6 +436,36 @@ onBeforeUnmount(() => {
       </Tooltip>
     </div>
 
+    <Modal v-model:open="agentDialogOpen" title="选择供应商" :footer="null" :width="520">
+      <div class="agent-picker-grid">
+        <button
+          v-for="agent in agents"
+          :key="agent.id"
+          type="button"
+          class="agent-picker-card"
+          :class="{ 'is-selected': agent.id === activeAgentId }"
+          @click="selectAgent(agent.id)"
+        >
+          <span class="agent-picker-icon"><Bot class="!h-[17px] !w-[17px]" /></span>
+          <span class="agent-picker-copy">
+            <span class="agent-picker-name">{{ agent.name }}</span>
+            <span class="agent-picker-description">{{ agent.description }}</span>
+            <span class="agent-picker-status">
+              <Circle
+                class="!h-[6px] !w-[6px]"
+                :class="
+                  agent.available
+                    ? 'fill-brand-success text-brand-success'
+                    : 'fill-brand-ghost text-brand-ghost'
+                "
+              />
+              {{ agentStatus(agent) }}
+            </span>
+          </span>
+          <span v-if="agent.id === activeAgentId" class="agent-picker-current">当前</span>
+        </button>
+      </div>
+    </Modal>
     <Modal
       v-model:open="renameOpen"
       title="重命名对话"
@@ -529,46 +520,78 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--brand-accent) 12%, transparent);
   color: var(--brand-accent);
 }
-:global(.agent-provider-menu) {
-  width: 236px;
-  padding: 5px;
+.agent-picker-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
-:global(.agent-provider-option) {
+.agent-picker-card {
   display: flex;
   min-width: 0;
+  width: 100%;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--brand-border);
+  border-radius: 9px;
+  background: var(--brand-surface-subtle);
+  color: var(--brand-foreground);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    transform 150ms ease;
 }
-:global(.agent-provider-dot) {
-  width: 7px;
-  height: 7px;
+.agent-picker-card:hover {
+  border-color: var(--brand-border-strong);
+  background: var(--brand-surface);
+  transform: translateY(-1px);
+}
+.agent-picker-card.is-selected {
+  border-color: var(--brand-accent);
+  background: color-mix(in srgb, var(--brand-accent) 8%, var(--brand-surface-subtle));
+}
+.agent-picker-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
   flex: none;
-  border-radius: 50%;
-  background: var(--brand-ghost);
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--brand-accent) 12%, transparent);
+  color: var(--brand-accent);
 }
-:global(.agent-provider-dot.is-online) {
-  background: var(--brand-success);
-}
-:global(.agent-provider-dot.is-installed) {
-  background: var(--brand-accent);
-}
-:global(.agent-provider-option-body) {
+.agent-picker-copy {
   display: flex;
   min-width: 0;
   flex: 1;
   flex-direction: column;
+  gap: 2px;
 }
-:global(.agent-provider-option-name) {
-  overflow: hidden;
+.agent-picker-name {
   color: var(--brand-foreground);
   font-size: 12px;
   font-weight: 500;
+}
+.agent-picker-description,
+.agent-picker-status {
+  overflow: hidden;
+  color: var(--brand-muted-strong);
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-:global(.agent-provider-option-status) {
-  color: var(--brand-muted-strong);
+.agent-picker-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.agent-picker-current {
+  flex: none;
+  color: var(--brand-accent);
   font-size: 10px;
+  font-weight: 600;
 }
 /* 行距只由 SIDEBAR_SESSION_ROW_GAP = 1 决定，清掉组件自带的 gap / 顶部留白 */
 .chat-sidebar :deep(.antd-conversations-list) {
@@ -641,10 +664,6 @@ onBeforeUnmount(() => {
 .chat-sidebar :deep(.conversation-entry-icon svg) {
   width: 14px;
   height: 14px;
-}
-/* 助手会话的品牌图标用 accent 色，与卡片列表的着色一致 */
-.chat-sidebar :deep(.conversation-entry-assistant-icon) {
-  color: var(--brand-accent);
 }
 .chat-sidebar :deep(.conversation-entry-body) {
   display: flex;

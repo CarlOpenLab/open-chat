@@ -184,6 +184,23 @@ a {
   transform: translateY(0);
 }
 
+.route-fade-enter-active,
+.route-fade-leave-active {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.route-fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.route-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
 .x-markdown-light {
   --primary-color: var(--foreground);
   --primary-color-hover: var(--foreground);

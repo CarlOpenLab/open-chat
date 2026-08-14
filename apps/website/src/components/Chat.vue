@@ -26,11 +26,6 @@ import {
   type EditableWorkspaceFile,
 } from "../utils/fileWorkspace";
 import { FILE_WORKSPACE_SYSTEM_PROMPT } from "../prompts/fileWorkspace";
-import {
-  createAssistantConversationSnapshot,
-  getAssistantById,
-} from "../features/assistant-market/catalog";
-import type { AssistantConversationSnapshot } from "../features/assistant-market/types";
 import { loadChatState } from "../services/chatStorage";
 import {
   API_AGENT,
@@ -56,7 +51,6 @@ import CommandPalette from "./chat/CommandPalette.vue";
 import SettingsDialog from "./chat/SettingsDialog.vue";
 import DeleteConversationModal from "./chat/DeleteConversationModal.vue";
 import PermissionRequestModal from "./chat/PermissionRequestModal.vue";
-import AssistantCenterModal from "./chat/AssistantCenterModal.vue";
 
 interface Props {
   dark: boolean;
@@ -90,9 +84,6 @@ const isHydrating = ref(true);
 const activeRequestConversationKey = ref<string>("");
 /** 请求开始时间，供侧栏「工作中」条目计时 */
 const requestStartedAt = ref(0);
-const draftAssistant = ref<AssistantConversationSnapshot | null>(null);
-const assistantCenterOpen = ref(false);
-const assistantCenterView = ref<"market" | "installed">("market");
 const commandPaletteOpen = ref(false);
 const settingsOpen = ref(false);
 const agents = ref<AgentView[]>([API_AGENT]);
@@ -112,61 +103,28 @@ const historyBack = ref<string[]>([]);
 const historyForward = ref<string[]>([]);
 const historyLocked = ref(false);
 
-const assistantFromLocation = () => {
-  const assistantId = new URLSearchParams(window.location.search).get("assistant");
-  const definition = assistantId ? getAssistantById(assistantId) : undefined;
-  return definition ? createAssistantConversationSnapshot(definition) : null;
-};
-
-draftAssistant.value = assistantFromLocation();
-const initialStarterId = new URLSearchParams(window.location.search).get("starter");
-const initialStarterPrompt = draftAssistant.value?.starterPrompts.find(
-  (prompt) => prompt.id === initialStarterId,
-);
-if (initialStarterPrompt) content.value = initialStarterPrompt.prompt;
-
 const createNewConversation = (
   systemPrompt: string = "",
-  assistant: AssistantConversationSnapshot | null = null,
   preferredKey: string = "",
+  modelId: string = "",
 ): OpenChatConversation => {
   const key = preferredKey || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const initialContent = assistant?.initialAssistantMessage?.trim();
-  const initialMessages: DefaultMessageInfo<XModelMessage>[] = initialContent
-    ? [
-        {
-          id: `initial-assistant-${key}`,
-          status: "local",
-          message: {
-            content: initialContent,
-            openChatLocalOnly: true,
-            role: "assistant",
-          },
-          extraInfo: { kind: "initial-assistant-message" },
-        },
-      ]
-    : [];
 
   return {
     key,
-    label: initialMessages.length > 0 && assistant ? assistant.name : "新对话",
+    label: "新对话",
     group: "今天",
     updatedAt: Date.now(),
-    messages: initialMessages,
+    messages: [],
     a2uiSubmissions: [],
     workspaceDrafts: [],
     systemPrompt,
     agentId: activeAgentId.value,
-    ...(assistant ? { assistant } : {}),
+    modelId,
   };
 };
 
 const conversationList = ref<OpenChatConversation[]>([]);
-const visibleConversationList = computed(() =>
-  conversationList.value.filter(
-    (conversation) => (conversation.agentId || "api") === activeAgentId.value,
-  ),
-);
 const activeAgent = computed(
   () => agents.value.find((agent) => agent.id === activeAgentId.value) ?? API_AGENT,
 );
@@ -228,6 +186,24 @@ const inputCurrentModelLabel = computed(() => {
   return selected?.name || option.currentValue;
 });
 
+const selectedHistoryModel = computed(() =>
+  isAcpAgent.value
+    ? activeAcpModelOption.value?.type === "select"
+      ? activeAcpModelOption.value.currentValue
+      : ""
+    : currentModel.value,
+);
+const visibleConversationList = computed(() =>
+  conversationList.value.filter((conversation) => {
+    if ((conversation.agentId || "api") !== activeAgentId.value) return false;
+    return (
+      !selectedHistoryModel.value ||
+      !conversation.modelId ||
+      conversation.modelId === selectedHistoryModel.value
+    );
+  }),
+);
+
 const ensureDraftConversationKey = (): string => {
   if (!draftConversationKey.value) {
     draftConversationKey.value = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -263,33 +239,6 @@ const refreshAcpSession = async () => {
 const getCurrentConversation = (): OpenChatConversation | undefined => {
   return conversationList.value.find((c) => c.key === currentConversationKey.value);
 };
-
-const activeAssistant = computed<AssistantConversationSnapshot | null>(() => {
-  const conversation = getCurrentConversation();
-  return conversation ? (conversation.assistant ?? null) : draftAssistant.value;
-});
-const activeStarterPrompts = computed(() => activeAssistant.value?.starterPrompts ?? []);
-
-watch(
-  activeAssistant,
-  (assistant) => {
-    if (assistant?.capabilities.includes("files")) {
-      fileModeEnabled.value = true;
-      rightPanelOpen.value = true;
-    }
-  },
-  { immediate: true },
-);
-
-watch(
-  [activeAssistant, searchAvailable],
-  ([assistant, canSearch]) => {
-    if (assistant?.capabilities.includes("web-search") && canSearch) {
-      searchEnabled.value = true;
-    }
-  },
-  { immediate: true },
-);
 
 const isInDraftMode = computed(() => !currentConversationKey.value);
 const currentConversationTitle = computed(() => {
@@ -376,48 +325,16 @@ const updateConversationMessages = (
 const handleNewConversation = () => {
   // 草稿态下重复点击只提示，不重复创建
   if (isInDraftMode.value) {
-    if (draftAssistant.value) {
-      draftAssistant.value = null;
-      content.value = "";
-      window.history.replaceState({}, "", "/chat");
-      message.success("已切换到普通新对话");
-      return;
-    }
     showWelcome.value = true;
     message.info("当前已经是新对话");
     return;
   }
 
   currentConversationKey.value = "";
-  draftAssistant.value = null;
   window.history.replaceState({}, "", "/chat");
   showWelcome.value = true;
   historyBack.value = [];
   historyForward.value = [];
-};
-
-const openAssistantCenter = (nextView: "market" | "installed" = "market") => {
-  assistantCenterView.value = nextView;
-  assistantCenterOpen.value = true;
-  if (window.matchMedia("(max-width: 767px)").matches) closeSidebar();
-};
-
-const handleAssistantUse = (assistant: AssistantConversationSnapshot, starterPrompt?: string) => {
-  // A conversation keeps the assistant version it was created with. Selecting
-  // another assistant therefore starts a clean draft while keeping Chat in place.
-  if (currentConversationKey.value) {
-    currentConversationKey.value = "";
-    setMessages([]);
-  }
-  draftAssistant.value = assistant;
-  content.value = starterPrompt ?? "";
-  showWelcome.value = !materializeInitialAssistantConversation(assistant);
-  fileModeEnabled.value = assistant.capabilities.includes("files");
-  rightPanelOpen.value = fileModeEnabled.value;
-  searchEnabled.value = assistant.capabilities.includes("web-search") && searchAvailable.value;
-  assistantCenterOpen.value = false;
-  window.history.replaceState({}, "", "/chat");
-  message.success(`已切换到「${assistant.name}」`);
 };
 
 const pushHistory = (key: string) => {
@@ -483,7 +400,6 @@ const handleAgentChange = (agentId: string) => {
   showWelcome.value = true;
   historyBack.value = [];
   historyForward.value = [];
-  draftAssistant.value = null;
   if (!next.available) {
     message.warning(next.adapterHint || `${next.name} 当前不可用，请检查本地 CLI 安装与登录状态`);
   }
@@ -553,7 +469,9 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
       role: "assistant",
     };
   },
-  requestPlaceholder: () => ({ content: "请稍候...", role: "assistant" }),
+  // Keep the assistant row mounted while the gateway is preparing the first
+  // event. The message renderer owns the animated status treatment.
+  requestPlaceholder: () => ({ content: "", role: "assistant" }),
 });
 
 // ============ 会话持久化 ============
@@ -575,20 +493,6 @@ const {
   setMessages,
   reconcileCurrentModel,
 });
-
-const materializeInitialAssistantConversation = (
-  assistant: AssistantConversationSnapshot,
-): boolean => {
-  if (!assistant.initialAssistantMessage?.trim()) return false;
-
-  const conversation = createNewConversation(assistant.renderedSystemPrompt, assistant);
-  conversationList.value.unshift(conversation);
-  currentConversationKey.value = String(conversation.key);
-  setMessages(conversation.messages);
-  showWelcome.value = false;
-  schedulePersistState();
-  return true;
-};
 
 /** Attach sources received mid-stream to the assistant message that produced them. */
 const attachPendingSearchSources = () => {
@@ -697,9 +601,6 @@ onMounted(async () => {
   }
 
   isHydrating.value = false;
-  if (draftAssistant.value) {
-    materializeInitialAssistantConversation(draftAssistant.value);
-  }
 });
 
 onBeforeUnmount(() => {
@@ -747,6 +648,12 @@ const bubbleItems = computed<BubbleItemType[]>(() => {
       content: typeof modelMessage.content === "string" ? modelMessage.content : "",
       // 工具调用 / 上游错误 / 重试提示：由 OpenChatProvider 累积在消息对象上。
       extraInfo: {
+        reasoningContent:
+          typeof modelMessage.reasoningContent === "string"
+            ? modelMessage.reasoningContent
+            : undefined,
+        reasoningDone:
+          typeof modelMessage.reasoningDone === "boolean" ? modelMessage.reasoningDone : undefined,
         toolCalls: Array.isArray(modelMessage.toolCalls) ? modelMessage.toolCalls : undefined,
         chatError: typeof modelMessage.chatError === "string" ? modelMessage.chatError : undefined,
         chatNotices: Array.isArray(modelMessage.chatNotices) ? modelMessage.chatNotices : undefined,
@@ -765,14 +672,6 @@ const handlePromptClick = (info: { data: { key?: string; description?: string } 
   if (isRequesting.value || !prompt) return;
 
   showWelcome.value = false;
-  if (info.data.key === "ticket-branch" && !activeAssistant.value) {
-    const definition = getAssistantById("official-ticket-branch");
-    if (definition) {
-      const assistant = createAssistantConversationSnapshot(definition);
-      draftAssistant.value = assistant;
-      if (materializeInitialAssistantConversation(assistant)) return;
-    }
-  }
   handleSubmit(prompt);
 };
 
@@ -841,7 +740,6 @@ const handleSubmit = (
   options: {
     extraInfo?: Record<string, unknown>;
     systemPrompt?: string;
-    assistant?: AssistantConversationSnapshot;
   } = {},
 ) => {
   if (!nextContent || !nextContent.trim()) return;
@@ -856,11 +754,10 @@ const handleSubmit = (
 
   // 草稿态首次发送时，才创建真实会话并写入侧栏
   if (isInDraftMode.value) {
-    const assistant = options.assistant ?? draftAssistant.value;
     const newConversation = createNewConversation(
-      options.systemPrompt ?? assistant?.renderedSystemPrompt ?? "",
-      assistant,
+      options.systemPrompt ?? "",
       isAcpAgent.value ? ensureDraftConversationKey() : "",
+      selectedHistoryModel.value,
     );
     conversationList.value.unshift(newConversation);
     currentConversationKey.value = String(newConversation.key);
@@ -872,11 +769,6 @@ const handleSubmit = (
   if (options.systemPrompt !== undefined) {
     conversation.systemPrompt = options.systemPrompt.trim();
   }
-  if (options.assistant) {
-    conversation.assistant = options.assistant;
-    conversation.systemPrompt = options.assistant.renderedSystemPrompt;
-  }
-
   setMessages(currentConversationMessages.value);
   activeRequestConversationKey.value = currentConversationKey.value;
 
@@ -886,9 +778,7 @@ const handleSubmit = (
     {
       messages: [{ role: "user", content: nextContent }],
       model: inputCurrentModel.value,
-      systemPrompt: getRequestSystemPrompt(
-        conversation.assistant?.renderedSystemPrompt ?? conversation.systemPrompt ?? "",
-      ),
+      systemPrompt: getRequestSystemPrompt(conversation.systemPrompt ?? ""),
       enable_thinking: thinkingEnabled.value,
       thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
       // 本地 opencode（服务端 AI）：按会话复用长会话，无需转发目标。
@@ -942,8 +832,17 @@ const handleA2UIAction = (payload: A2UIActionPayload) => {
 };
 
 const handleModelChange = async (key: string) => {
+  if (isRequesting.value) {
+    message.warning("请先停止当前任务再切换模型");
+    return;
+  }
   if (!isAcpAgent.value) {
     currentModel.value = key;
+    currentConversationKey.value = "";
+    setMessages([]);
+    showWelcome.value = true;
+    historyBack.value = [];
+    historyForward.value = [];
     return;
   }
   if (isRequesting.value || acpSessionLoading.value) return;
@@ -959,6 +858,11 @@ const handleModelChange = async (key: string) => {
       option.id,
       key,
     );
+    currentConversationKey.value = "";
+    setMessages([]);
+    showWelcome.value = true;
+    historyBack.value = [];
+    historyForward.value = [];
     message.success(`已切换到 ${inputCurrentModelLabel.value}`);
   } catch (error) {
     message.error(error instanceof Error ? error.message : "Agent 模型切换失败");
@@ -1034,8 +938,7 @@ const handleReloadMessage = (messageId: string | number) => {
 
   setMessages(currentConversationMessages.value);
   const currentConversation = getCurrentConversation();
-  const baseSystemPrompt =
-    currentConversation?.assistant?.renderedSystemPrompt ?? currentConversation?.systemPrompt ?? "";
+  const baseSystemPrompt = currentConversation?.systemPrompt ?? "";
   const forwardProvider = getForwardProvider(currentModel.value);
   onReload(messageId, {
     model: inputCurrentModel.value,
@@ -1157,7 +1060,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
             @toggle-theme="emit('toggleTheme')"
             @new-conversation="handleNewConversation"
             @open-search="commandPaletteOpen = true"
-            @open-assistant-center="openAssistantCenter('market')"
             @open-settings="settingsOpen = true"
             @navigate-back="handleNavigateBack"
             @navigate-forward="handleNavigateForward"
@@ -1188,8 +1090,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :right-panel-open="rightPanelOpen"
         :right-panel-available="workspaceAvailable"
         :syncing="isRequesting"
-        :assistant-name="activeAssistant?.name"
-        :assistant-version="activeAssistant?.version"
         :can-go-back="historyBack.length > 0"
         :can-go-forward="historyForward.length > 0"
         :diff-added="workspaceDiffStats.added"
@@ -1216,7 +1116,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
           :bubble-items="bubbleItems"
           :dark="dark"
           :conversation-key="currentConversationKey"
-          :starter-prompts="activeStarterPrompts"
           :a2ui-pending-surface-id="pendingA2UISurfaceId"
           :a2ui-submissions="currentA2UISubmissions"
           :search-results-by-message-id="searchResultsByMessageId"
@@ -1236,7 +1135,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :file-mode-enabled="fileModeEnabled"
         :search-enabled="searchEnabled"
         :search-available="searchAvailable"
-        :assistant-name="activeAssistant?.name"
         :agent-mode="isAcpAgent"
         :agent-name="activeAgent.name"
         :agent-available="activeAgent.available"
@@ -1249,7 +1147,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         @thinking-change="handleThinkingChange"
         @file-mode-change="handleFileModeChange"
         @search-change="handleSearchChange"
-        @assistant-select="openAssistantCenter('market')"
       />
     </div>
 
@@ -1291,13 +1188,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       :request="pendingPermission"
       @allow="handlePermissionResponse($event)"
     />
-    <AssistantCenterModal
-      :open="assistantCenterOpen"
-      :dark="dark"
-      :initial-view="assistantCenterView"
-      @close="assistantCenterOpen = false"
-      @use="handleAssistantUse"
-    />
 
     <CommandPalette
       :open="commandPaletteOpen"
@@ -1305,7 +1195,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       :dark="dark"
       @update:open="commandPaletteOpen = $event"
       @new-conversation="handleNewConversation"
-      @open-assistant-center="openAssistantCenter('market')"
       @open-settings="settingsOpen = true"
       @toggle-theme="emit('toggleTheme')"
       @toggle-sidebar="handleSidebarToggle"

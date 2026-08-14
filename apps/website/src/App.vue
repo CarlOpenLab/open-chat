@@ -13,7 +13,6 @@ import {
 import { shadcnDarkTheme, shadcnTheme } from "./theme/shadcnTheme";
 
 const Chat = defineAsyncComponent(() => import("./components/Chat.vue"));
-const AssistantMarketPage = defineAsyncComponent(() => import("./pages/AssistantMarketPage.vue"));
 const CodeHighlightDemoPage = defineAsyncComponent(
   () => import("./pages/CodeHighlightDemoPage.vue"),
 );
@@ -113,15 +112,13 @@ const locale = computed<XProviderProps["locale"]>(() => {
   return localeType.value === "zh" ? zhCN : enUS;
 });
 const appTheme = computed(() => (dark.value ? shadcnDarkTheme : shadcnTheme));
-const currentPage = computed<"chat" | "assistants" | "code-highlight-demo">(() => {
-  if (route.value.startsWith("/assistants")) return "assistants";
+const currentPage = computed<"chat" | "code-highlight-demo">(() => {
   if (route.value.startsWith("/code-highlight-demo")) return "code-highlight-demo";
   return "chat";
 });
 const currentComponent = computed(() => {
   const pages = {
     chat: Chat,
-    assistants: AssistantMarketPage,
     "code-highlight-demo": CodeHighlightDemoPage,
   };
   return pages[currentPage.value];
@@ -134,7 +131,6 @@ const focusMainContent = async () => {
   const page = currentPage.value;
   const selector = {
     chat: "#chat-content",
-    assistants: "#assistant-market-content",
     "code-highlight-demo": "#code-highlight-demo",
   }[page];
   let attempts = 0;
@@ -154,13 +150,6 @@ const focusMainContent = async () => {
 
 const syncRoute = () => {
   route.value = getLocationPath();
-  void focusMainContent();
-};
-
-const navigate = (path: string) => {
-  if (getLocationPath() !== path) window.history.pushState({}, "", path);
-  route.value = path;
-  window.scrollTo({ top: 0, behavior: "auto" });
   void focusMainContent();
 };
 
@@ -190,7 +179,6 @@ watch(
   (page) => {
     const titles = {
       chat: "工作区 · Open Chat",
-      assistants: "助手市场 · Open Chat",
       "code-highlight-demo": "代码高亮 Demo · Open Chat",
     };
     document.title = titles[page];
@@ -212,20 +200,16 @@ onBeforeUnmount(() => {
 <template>
   <XProvider :theme="appTheme" :locale="locale" layer>
     <Suspense>
-      <component
-        :is="currentComponent"
-        :dark="dark"
-        v-bind="
-          currentPage === 'assistants'
-            ? { routePath: route }
-            : currentPage === 'chat'
-              ? { themeMode }
-              : {}
-        "
-        @navigate="currentPage === 'assistants' ? navigate : undefined"
-        @toggle-theme="toggleTheme"
-        @theme-mode-change="setThemeMode"
-      />
+      <Transition name="route-fade" mode="out-in">
+        <component
+          :is="currentComponent"
+          :key="currentPage"
+          :dark="dark"
+          v-bind="currentPage === 'chat' ? { themeMode } : {}"
+          @toggle-theme="toggleTheme"
+          @theme-mode-change="setThemeMode"
+        />
+      </Transition>
       <template #fallback>
         <main
           class="route-loading grid min-h-[100dvh] w-full place-items-center bg-background"

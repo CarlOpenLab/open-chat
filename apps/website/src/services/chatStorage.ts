@@ -1,9 +1,5 @@
 import type { ConversationItemType } from "@antdv-next/x";
 import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
-import {
-  isAssistantConversationSnapshot,
-  type AssistantConversationSnapshot,
-} from "../features/assistant-market/types";
 import { isValidA2UISubmission, type A2UISubmission } from "../utils/a2ui";
 import { isValidWorkspaceFileDraft, type WorkspaceFileDraft } from "../utils/fileWorkspace";
 import { deleteLocalValue, readLocalValue, writeLocalValue } from "./localDatabase";
@@ -12,11 +8,11 @@ const CHAT_STATE_KEY = "chat-state-v1";
 
 export interface PersistedConversation extends Omit<ConversationItemType, "messages"> {
   agentId?: string;
+  modelId?: string;
   messages: DefaultMessageInfo<XModelMessage>[];
   a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
   systemPrompt?: string;
-  assistant?: AssistantConversationSnapshot;
 }
 
 export interface PersistedChatState {
@@ -57,9 +53,12 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
     currentConversationKey: String(value.currentConversationKey),
     currentModel: value.currentModel,
     conversationList: value.conversationList.map((conversation) => {
-      const { assistant, systemPrompt, ...persistedConversation } = conversation;
+      const { assistant: _assistant, systemPrompt, ...persistedConversation } = conversation;
       return {
         ...persistedConversation,
+        ...(typeof conversation.modelId === "string" && conversation.modelId
+          ? { modelId: conversation.modelId }
+          : {}),
         a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
           ? conversation.a2uiSubmissions.filter(isValidA2UISubmission)
           : [],
@@ -67,7 +66,6 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
           ? { workspaceDrafts: conversation.workspaceDrafts.filter(isValidWorkspaceFileDraft) }
           : {}),
         ...(typeof systemPrompt === "string" ? { systemPrompt } : {}),
-        ...(isAssistantConversationSnapshot(assistant) ? { assistant } : {}),
       };
     }),
   };

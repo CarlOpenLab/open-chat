@@ -9,7 +9,6 @@ import {
   Pin,
   PanelLeftOpen,
   PanelRight,
-  Sparkles,
   SquareTerminal,
   Trash2,
 } from "@lucide/vue";
@@ -22,8 +21,6 @@ interface Props {
   rightPanelOpen: boolean;
   rightPanelAvailable?: boolean;
   syncing?: boolean;
-  assistantName?: string;
-  assistantVersion?: string;
   canGoBack?: boolean;
   canGoForward?: boolean;
   /** 工作区草稿相对 AI 版本的增删行数，两者皆为 0 时不展示 */
@@ -50,8 +47,6 @@ interface Emits {
 const props = withDefaults(defineProps<Props>(), {
   rightPanelAvailable: true,
   syncing: false,
-  assistantName: undefined,
-  assistantVersion: undefined,
   canGoBack: false,
   canGoForward: false,
   diffAdded: 0,
@@ -178,17 +173,6 @@ const titleMenu = computed<MenuProps>(() => ({
         ><ChevronDown class="!h-3.5 !w-3.5 text-brand-muted-strong" />
       </button>
     </Dropdown>
-    <span
-      v-if="assistantName"
-      class="ml-1 inline-flex h-[26px] max-w-[190px] items-center gap-[5px] rounded-[5px] border border-solid border-brand-border bg-brand-surface-subtle px-2 text-[10px] font-medium text-brand-muted"
-      :aria-label="`当前助手：${assistantName}`"
-    >
-      <Sparkles class="!h-[12px] !w-[12px]" />
-      <span class="truncate">{{ assistantName }}</span>
-      <span v-if="assistantVersion" class="text-[9px] text-brand-muted-strong"
-        >v{{ assistantVersion }}</span
-      >
-    </span>
     <span
       class="ml-1 inline-flex h-[26px] max-w-[180px] items-center gap-[6px] rounded-[5px] border border-solid border-brand-border bg-brand-surface-subtle px-2 text-[10px] font-medium text-brand-muted"
       :title="
