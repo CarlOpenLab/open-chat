@@ -1,21 +1,36 @@
 <script setup lang="ts">
-import type { BubbleItemType, ThoughtChainItemType } from "@antdv-next/x";
-import { Sources, Think, ThoughtChain } from "@antdv-next/x";
+import type { BubbleItemType } from "@antdv-next/x";
+import { Sources } from "@antdv-next/x";
 import { XMarkdown } from "@antdv-next/x-markdown";
 import { Globe2, TriangleAlert } from "@lucide/vue";
-import { computed, ref, type Component } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import type { Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
-import { WEB_SEARCHING_MARKER, type ToolCallItem } from "../../services/OpenChatProvider";
+import type { ToolCallItem } from "../../services/OpenChatProvider";
+import { formatWorkedDuration, formatWorkingElapsed } from "../../utils/wakuDuration";
 import type { A2UIActionPayload, A2UISubmission } from "../../utils/a2ui";
 import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
+import WakuActivityList from "./WakuActivityList.vue";
+import WakuTurnFold from "./WakuTurnFold.vue";
 
 interface Props {
   item: BubbleItemType;
   content: string;
   markdownClassName: string;
   streaming: boolean;
-  thinkExpanded: boolean;
+  /** 回合结束后“用时 Xs ▸”折叠是否展开（点击分割线切换）。 */
+  foldExpanded: boolean;
+  /** 活动列表摘要行是否展开。 */
+  summaryExpanded: boolean;
+  /** 已展开的条目 id（思考 / 工具 / 计划 / 文件）。 */
+  itemExpandedIds: string[];
+  /** 整个回合的耗时（用于分割线“用时 Xs”）。 */
+  turnDurationMs?: number;
+  /** 思考阶段的耗时（用于“思考用时 Xs”）。 */
+  reasoningDurationMs?: number;
+  /** 回合开始时间戳（用于底部“工作中 · Xs”跳动）。 */
+  startedAtMs?: number;
   a2uiActionPending: boolean;
   submissions: A2UISubmission[];
   searchResults: WebSearchSourceItem[];
@@ -23,7 +38,9 @@ interface Props {
 
 interface Emits {
   (e: "a2uiAction", payload: A2UIActionPayload): void;
-  (e: "update:thinkExpanded", expanded: boolean): void;
+  (e: "update:foldExpanded", expanded: boolean): void;
+  (e: "update:summaryExpanded", expanded: boolean): void;
+  (e: "update:itemExpandedIds", ids: string[]): void;
 }
 
 const props = defineProps<Props>();
@@ -35,7 +52,7 @@ const markdownComponents: Record<string, Component> = {
 
 const markdownStreaming = computed(() => ({
   hasNextChunk: props.streaming,
-  enableAnimation: true,
+  enableAnimation: props.streaming,
   tail: false,
 }));
 
@@ -55,123 +72,65 @@ const reasoningDone = computed(() => {
   }
   return parsedThink.value ? parsedThink.value.thinkDone : !props.streaming;
 });
-const reasoningStreaming = computed(() => props.streaming && !reasoningDone.value);
-const reasoningMarkdownStreaming = computed(() => ({
-  hasNextChunk: reasoningStreaming.value,
-  enableAnimation: true,
-  tail: false,
-}));
 
 const toolCalls = computed<ToolCallItem[]>(() => {
   const value = props.item.extraInfo?.toolCalls;
   return Array.isArray(value) ? (value as ToolCallItem[]) : [];
 });
 
-const formatDetail = (value: unknown, maxLength = 2400): string => {
-  const text =
-    typeof value === "string"
-      ? value
-      : typeof value === "object" && value !== null
-        ? JSON.stringify(value, null, 2)
-        : String(value ?? "");
-  return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
-};
+const planInfo = computed(() => props.item.extraInfo?.agentPlan ?? null);
+const workspaceInfo = computed(() => props.item.extraInfo?.parsedWorkspace ?? null);
+const reasoningInfo = computed(() => {
+  const content = reasoningContent.value;
+  if (!content.trim()) return null;
+  return {
+    content,
+    done: reasoningDone.value,
+    durationMs: props.reasoningDurationMs,
+  };
+});
 
-const toolStatus = (tool: ToolCallItem): ThoughtChainItemType["status"] => {
-  if (tool.status === "completed") return "success";
-  if (tool.status === "error") return "error";
-  return "loading";
-};
-
-const toolItems = computed<ThoughtChainItemType[]>(() =>
-  toolCalls.value.map((tool) => {
-    const details = [
-      tool.input === undefined ? "" : `输入\n\n${formatDetail(tool.input)}`,
-      tool.output ? `输出\n\n${formatDetail(tool.output)}` : "",
-      tool.error ? `错误\n\n${tool.error}` : "",
-    ].filter(Boolean);
-    const status = toolStatus(tool);
-    return {
-      key: `tool-${tool.id || tool.name}`,
-      title: tool.name || "工具调用",
-      description:
-        tool.status === "completed"
-          ? tool.durationMs
-            ? `已完成 · ${(tool.durationMs / 1000).toFixed(1)}s`
-            : "已完成"
-          : tool.status === "error"
-            ? "失败"
-            : tool.status === "running"
-              ? "执行中"
-              : "等待执行",
-      status,
-      blink: status === "loading",
-      collapsible: details.length > 0,
-      content: details.join("\n\n"),
-    };
-  }),
-);
-
-const planItems = computed<ThoughtChainItemType[]>(() => {
-  const plan = props.item.extraInfo?.agentPlan as
-    | { entries?: Array<{ content?: string; status?: string }> }
+const hasActivities = computed(() => {
+  if (reasoningContent.value.trim()) return true;
+  if (toolCalls.value.length) return true;
+  if (Array.isArray(planInfo.value?.entries) && planInfo.value.entries.length) return true;
+  const workspace = workspaceInfo.value as
+    | { hasWorkspaceBlock?: boolean; files?: unknown[]; errors?: unknown[] }
+    | null
     | undefined;
-  if (!Array.isArray(plan?.entries)) return [];
-  return plan.entries.map((entry, index) => ({
-    key: `plan-${index}`,
-    title: entry.content || `步骤 ${index + 1}`,
-    description:
-      entry.status === "completed"
-        ? "已完成"
-        : entry.status === "in_progress"
-          ? "进行中"
-          : "等待中",
-    status:
-      entry.status === "completed"
-        ? "success"
-        : entry.status === "in_progress"
-          ? "loading"
-          : undefined,
-    blink: entry.status === "in_progress",
-  }));
+  return Boolean(
+    workspace?.hasWorkspaceBlock || workspace?.files?.length || workspace?.errors?.length,
+  );
 });
 
-const workspaceItems = computed<ThoughtChainItemType[]>(() => {
-  const parsed = props.item.extraInfo?.parsedWorkspace;
-  if (!parsed?.hasWorkspaceBlock) return [];
-  const files = parsed.files.map((file: { path: string; status: string }) => ({
-    key: `file-${file.path}`,
-    title: file.path,
-    description: file.status === "streaming" && props.streaming ? "写入中" : "已生成",
-    status: file.status === "streaming" && props.streaming ? "loading" : "success",
-    blink: file.status === "streaming" && props.streaming,
-  }));
-  const errors = parsed.errors.map((error: string, index: number) => ({
-    key: `workspace-error-${index}`,
-    title: "文件生成异常",
-    description: error,
-    status: "error" as const,
-  }));
-  return [...files, ...errors];
-});
-
-const operationItems = computed<ThoughtChainItemType[]>(() => [
-  ...planItems.value,
-  ...toolItems.value,
-  ...workspaceItems.value,
-]);
-const streamingLabel = computed(() => {
-  if (!props.streaming) return "";
-  if (props.content === WEB_SEARCHING_MARKER) return "正在联网搜索";
-  const running = operationItems.value.find((item) => item.status === "loading");
-  if (running) return running.description || "正在执行任务";
-  if (reasoningStreaming.value) return "正在思考";
-  if (!answerContent.value.trim()) return "正在准备回答";
-  return "";
-});
-const expandedOperationKeys = computed(() =>
-  operationItems.value.filter((item) => item.status === "loading").map((item) => String(item.key)),
+const turnDurationLabel = computed(() =>
+  props.turnDurationMs ? `用时 ${formatWorkedDuration(props.turnDurationMs)}` : "",
 );
+
+/** 底部“工作中 · Xs”跳动计时（对齐 waku working indicator）。 */
+const nowMs = ref(Date.now());
+let tickTimer: ReturnType<typeof setInterval> | undefined;
+watch(
+  () => props.streaming,
+  (streaming) => {
+    if (streaming && !tickTimer) {
+      nowMs.value = Date.now();
+      tickTimer = setInterval(() => {
+        nowMs.value = Date.now();
+      }, 1000);
+    } else if (!streaming && tickTimer) {
+      clearInterval(tickTimer);
+      tickTimer = undefined;
+    }
+  },
+  { immediate: true },
+);
+const workingElapsed = computed(() =>
+  props.startedAtMs ? formatWorkingElapsed(Math.max(0, nowMs.value - props.startedAtMs)) : "",
+);
+onBeforeUnmount(() => {
+  if (tickTimer) clearInterval(tickTimer);
+});
 
 const chatNotices = computed(() => {
   const notices = props.item.extraInfo?.chatNotices;
@@ -206,33 +165,27 @@ const onFaviconError = (url: string) => {
       </span>
     </div>
 
-    <Think
-      v-if="reasoningContent"
-      :title="reasoningStreaming ? '正在思考' : '思考过程'"
-      :loading="reasoningStreaming"
-      :expanded="thinkExpanded || reasoningStreaming"
-      :blink="reasoningStreaming"
-      @update:expanded="emit('update:thinkExpanded', $event)"
-    >
-      <XMarkdown
-        :content="reasoningContent"
-        :components="markdownComponents"
-        :streaming="reasoningMarkdownStreaming"
-        :class-name="markdownClassName"
-        escape-raw-html
-        open-links-in-new-tab
+    <!-- Waku 交互：流式中展示活动列表；回合结束折叠为“用时 Xs ▸”分割线（均在回答上方） -->
+    <template v-if="hasActivities">
+      <WakuTurnFold
+        v-if="!streaming && !foldExpanded && turnDurationLabel"
+        :label="turnDurationLabel"
+        :expanded="false"
+        @toggle="emit('update:foldExpanded', true)"
       />
-    </Think>
-
-    <div
-      v-if="streamingLabel"
-      class="streaming-status inline-flex items-center gap-2 text-xs text-brand-muted"
-      role="status"
-      aria-live="polite"
-    >
-      <span class="working-wave" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span>{{ streamingLabel }}</span>
-    </div>
+      <WakuActivityList
+        v-else
+        :reasoning="reasoningInfo"
+        :tools="toolCalls"
+        :plan="planInfo"
+        :workspace="workspaceInfo"
+        :streaming="streaming"
+        :summary-expanded="summaryExpanded"
+        :item-expanded-ids="itemExpandedIds"
+        @update:summary-expanded="emit('update:summaryExpanded', $event)"
+        @update:item-expanded-ids="emit('update:itemExpandedIds', $event)"
+      />
+    </template>
 
     <XMarkdown
       v-if="answerContent.trim()"
@@ -240,15 +193,9 @@ const onFaviconError = (url: string) => {
       :components="markdownComponents"
       :streaming="markdownStreaming"
       :class-name="markdownClassName"
+      :config="{ breaks: true }"
       escape-raw-html
       open-links-in-new-tab
-    />
-
-    <ThoughtChain
-      v-if="operationItems.length"
-      :items="operationItems"
-      line="solid"
-      :default-expanded-keys="expandedOperationKeys"
     />
 
     <div v-if="chatError" class="inline-flex items-start gap-1.5 text-xs text-red-500">
@@ -295,49 +242,59 @@ const onFaviconError = (url: string) => {
         <Globe2 v-else class="h-4 w-4" />
       </template>
     </Sources>
+
+    <!-- Waku 进行中指示：底部“工作中 · Xs”，随内容流式跳动 -->
+    <div v-if="streaming" class="waku-working-row" role="status" aria-live="polite">
+      <span class="waku-wave" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>工作中{{ workingElapsed ? ` · ${workingElapsed}` : "" }}</span>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.streaming-status {
-  min-height: 20px;
+/* ---- 进行中指示行（waku working indicator） ---- */
+.waku-working-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  font-size: 11.5px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--brand-muted-strong);
   animation: status-in 220ms ease-out both;
 }
 
-.working-wave {
+.waku-wave {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  min-width: 18px;
+  gap: 3.5px;
 }
 
-.working-wave i {
-  width: 4px;
-  height: 4px;
+.waku-wave i {
+  width: 4.5px;
+  height: 4.5px;
   border-radius: 999px;
   background: currentColor;
-  opacity: 0.3;
-  animation: working-wave 1.2s ease-in-out infinite;
+  animation: waku-wave 1.4s linear infinite;
+}
+.waku-wave i:nth-child(1) {
+  animation-delay: 0s;
+}
+.waku-wave i:nth-child(2) {
+  animation-delay: 0.09s;
+}
+.waku-wave i:nth-child(3) {
+  animation-delay: 0.18s;
 }
 
-.working-wave i:nth-child(2) {
-  animation-delay: 140ms;
-}
-
-.working-wave i:nth-child(3) {
-  animation-delay: 280ms;
-}
-
-@keyframes working-wave {
+@keyframes waku-wave {
   0%,
-  60%,
   100% {
-    opacity: 0.3;
-    transform: translateY(0);
+    opacity: 0.25;
   }
-  30% {
+  50% {
     opacity: 1;
-    transform: translateY(-2px);
   }
 }
 

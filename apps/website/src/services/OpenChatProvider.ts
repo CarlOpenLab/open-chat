@@ -244,29 +244,50 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       return transformedContent ? preserveMessageMeta(origin, transformed) : origin;
     }
 
-    // DeepSeekChatProvider stores reasoning in a synthetic <think> block. Keep
-    // that state internal to the provider, then expose it as a first-class
-    // message field for the activity UI.
+    // 直接解析当前 chunk 的 delta，content / reasoning_content 各自精确累积，
+    // 避免经 <think> 往返重建导致 chunk 边界换行被 trim / 无分隔拼接丢失。
     const originContent = getMessageText(origin?.content);
     const originReasoning =
       typeof origin?.reasoningContent === "string" ? origin.reasoningContent : "";
-    const parentOrigin: XModelMessage | undefined =
-      origin && originReasoning ? { ...origin, content: `<think>\n${originReasoning}\n` } : origin;
-    const transformed = super.transformMessage({ ...info, originMessage: parentOrigin });
-    const transformedText = getMessageText(transformed.content);
-    const split = splitReasoningContent(transformedText);
-    const answerContent = joinAnswerContent(
-      originReasoning ? originContent : "",
-      split.answerContent,
-    );
-    return preserveMessageMeta(origin, {
-      role: transformed.role || origin?.role || "assistant",
-      content: answerContent,
-      ...(split.reasoningContent || originReasoning
-        ? { reasoningContent: split.reasoningContent || originReasoning }
+
+    let deltaContent = "";
+    let deltaReasoning = "";
+    try {
+      if (chunk?.data && chunk.data !== "[DONE]") {
+        const parsed = JSON.parse(chunk.data) as {
+          choices?: Array<{
+            delta?: { content?: unknown; reasoning_content?: unknown };
+            message?: { content?: unknown; reasoning_content?: unknown };
+          }>;
+        };
+        for (const choice of parsed.choices ?? []) {
+          const delta = choice.delta ?? choice.message ?? {};
+          deltaReasoning = getMessageText(delta.reasoning_content as XModelMessage["content"]);
+          deltaContent = getMessageText(delta.content as XModelMessage["content"]);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to parse stream chunk:", err);
+    }
+
+    const accumulatedContent = `${originContent}${deltaContent}`;
+    const accumulatedReasoning = `${originReasoning}${deltaReasoning}`;
+    // 兼容模型直接在 content 里输出 <think> 标签（DeepSeek 原生风格）。
+    const split = splitReasoningContent(accumulatedContent);
+    const next: XModelMessage = {
+      role: origin?.role || "assistant",
+      content: split.hasThink ? split.answerContent : accumulatedContent,
+      ...(split.reasoningContent || accumulatedReasoning
+        ? { reasoningContent: split.reasoningContent || accumulatedReasoning }
         : {}),
-      ...(split.hasThink || originReasoning ? { reasoningDone: split.reasoningDone } : {}),
-    });
+    };
+    // 思考结束判定：<think> 闭合，或思考结束后开始输出正文。
+    if (split.hasThink) {
+      next.reasoningDone = split.reasoningDone;
+    } else if (deltaContent && accumulatedReasoning) {
+      next.reasoningDone = true;
+    }
+    return preserveMessageMeta(origin, next);
   }
 
   override transformParams(
@@ -383,13 +404,6 @@ function splitReasoningContent(value: string): SplitReasoningResult {
     reasoningContent: thinkRaw.replace(/^\s+/, "").trim(),
     reasoningDone: closeIndex !== -1 || status === "done",
   };
-}
-
-function joinAnswerContent(previous: string, next: string): string {
-  if (!previous) return next;
-  if (!next) return previous;
-  if (next.startsWith(previous)) return next;
-  return `${previous}${next}`;
 }
 
 function stripLocalMessageFields(message: XModelMessage): XModelMessage {

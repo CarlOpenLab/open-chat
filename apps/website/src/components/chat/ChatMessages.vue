@@ -81,8 +81,17 @@ const scrollToBottom = () => {
 const markdownTheme = computed<MarkdownTheme>(() => (props.dark ? "dark" : "light"));
 const markdownClassName = computed(() => `chat-markdown x-markdown-${markdownTheme.value}`);
 provide(markdownThemeKey, markdownTheme);
-const thinkExpandedMap = ref<Record<string, boolean>>({});
-const thinkDoneMap = ref<Record<string, boolean>>({});
+/** Waku 对齐：回合折叠（分割线）、活动摘要、条目展开、耗时统计。 */
+const foldExpandedMap = ref<Record<string, boolean>>({});
+const summaryExpandedMap = ref<Record<string, boolean>>({});
+const itemExpandedMap = ref<Record<string, string[]>>({});
+/** 用户在流式中手动折叠过思考条目（对齐 waku：显式点击优先于自动展开）。 */
+const reasoningCollapsedMap = ref<Record<string, boolean>>({});
+const messageStartMap = ref<Record<string, number>>({});
+const turnDurationMap = ref<Record<string, number>>({});
+const reasoningStartMap = ref<Record<string, number>>({});
+const reasoningDurationMap = ref<Record<string, number>>({});
+const lastStreamingMap = ref<Record<string, boolean>>({});
 
 /** useXChat 中 "loading"（占位等待）和 "updating"（流式接收中）都表示消息仍在进行中 */
 const isStreamingStatus = (status: unknown): boolean =>
@@ -269,21 +278,50 @@ const submissionsForMessage = (messageId: string | number) =>
 const getThinkKey = (messageId: string | number) =>
   `${props.conversationKey || "__draft__"}::${String(messageId)}`;
 
-const isThinkExpanded = (messageId: string | number, thinkDone: boolean) =>
-  thinkExpandedMap.value[getThinkKey(messageId)] ?? !thinkDone;
+/** 历史消息（本次会话未观测到耗时）默认展开活动列表；本次会话中结束的回合默认折叠为分割线。 */
+const defaultFoldExpanded = (key: string): boolean => !turnDurationMap.value[key];
 
-const setThinkExpanded = (messageId: string | number, expanded: boolean) => {
-  thinkExpandedMap.value = {
-    ...thinkExpandedMap.value,
-    [getThinkKey(messageId)]: expanded,
-  };
+const isFoldExpanded = (messageId: string | number): boolean =>
+  foldExpandedMap.value[getThinkKey(messageId)] ?? defaultFoldExpanded(getThinkKey(messageId));
+
+const isSummaryExpanded = (messageId: string | number, streaming: boolean): boolean => {
+  const key = getThinkKey(messageId);
+  const saved = summaryExpandedMap.value[key];
+  return saved !== undefined ? saved : streaming;
 };
 
-const hasReasoning = (item: BubbleItemType) => {
+/** 流式中思考自动展开；其余条目跟随用户手动展开状态。用户手动折叠思考后不再自动展开。 */
+const isItemExpandedIds = (item: BubbleItemType): string[] => {
+  const key = getThinkKey(item.key);
+  const saved = itemExpandedMap.value[key] ?? [];
   const reasoning = item.extraInfo?.reasoningContent;
-  if (typeof reasoning === "string" && reasoning.trim().length > 0) return true;
-  const legacy = item.extraInfo?.parsedThink as ParsedThinkContent | null | undefined;
-  return Boolean(legacy?.thinkContent?.trim());
+  const reasoningLive =
+    isStreamingStatus(item.status) &&
+    typeof reasoning === "string" &&
+    reasoning.trim().length > 0 &&
+    item.extraInfo?.reasoningDone !== true &&
+    !reasoningCollapsedMap.value[key];
+  if (!reasoningLive) return saved;
+  return saved.includes("reasoning") ? saved : [...saved, "reasoning"];
+};
+
+const setFoldExpanded = (messageId: string | number, expanded: boolean) => {
+  foldExpandedMap.value = { ...foldExpandedMap.value, [getThinkKey(messageId)]: expanded };
+};
+const setSummaryExpanded = (messageId: string | number, expanded: boolean) => {
+  summaryExpandedMap.value = { ...summaryExpandedMap.value, [getThinkKey(messageId)]: expanded };
+};
+const setItemExpandedIds = (messageId: string | number, ids: string[]) => {
+  const key = getThinkKey(messageId);
+  itemExpandedMap.value = { ...itemExpandedMap.value, [key]: ids };
+  const collapsed = !ids.includes("reasoning");
+  reasoningCollapsedMap.value = collapsed
+    ? { ...reasoningCollapsedMap.value, [key]: true }
+    : (() => {
+        const next = { ...reasoningCollapsedMap.value };
+        delete next[key];
+        return next;
+      })();
 };
 
 /** 气泡下方操作栏：复制 + 重新生成（x Actions 原生样式）。 */
@@ -316,27 +354,52 @@ const buildMessageActions = (item: BubbleItemType): ItemType[] => {
 watch(
   displayItems,
   (items) => {
-    const nextExpandedMap = { ...thinkExpandedMap.value };
-    const nextDoneMap = { ...thinkDoneMap.value };
+    const now = Date.now();
+    const nextFold = { ...foldExpandedMap.value };
+    const nextSummary = { ...summaryExpandedMap.value };
 
     items.forEach((item) => {
-      if (!hasReasoning(item)) return;
+      if (item.role !== "assistant") return;
 
       const key = getThinkKey(item.key);
-      const previousDone = thinkDoneMap.value[key];
-      const previousExpanded = thinkExpandedMap.value[key];
-      const done = !isStreamingStatus(item.status);
-      nextDoneMap[key] = done;
+      const streaming = isStreamingStatus(item.status);
+      const prevStreaming = lastStreamingMap.value[key] ?? false;
 
-      if (previousExpanded === undefined) {
-        nextExpandedMap[key] = !done;
-      } else if (previousDone === false && done) {
-        nextExpandedMap[key] = false;
+      // 回合计时：首次出现 / 重新生成时记录起点；结束时记录耗时。
+      if (streaming) {
+        if (!prevStreaming) messageStartMap.value[key] = now;
+        if (turnDurationMap.value[key]) {
+          delete turnDurationMap.value[key];
+          delete reasoningDurationMap.value[key];
+          delete reasoningStartMap.value[key];
+        }
+      } else if (messageStartMap.value[key] && !turnDurationMap.value[key]) {
+        turnDurationMap.value[key] = Math.max(1, now - messageStartMap.value[key]);
       }
+
+      // 思考计时。
+      const reasoning = item.extraInfo?.reasoningContent;
+      if (typeof reasoning === "string" && reasoning.trim()) {
+        if (!reasoningStartMap.value[key]) reasoningStartMap.value[key] = now;
+        if (item.extraInfo?.reasoningDone === true && !reasoningDurationMap.value[key]) {
+          reasoningDurationMap.value[key] = Math.max(1, now - reasoningStartMap.value[key]);
+        }
+      }
+
+      // 回合结束 → 折叠为“用时 Xs ▸”分割线；流式中摘要行默认展开。
+      if (prevStreaming && !streaming && nextFold[key] === undefined) {
+        nextFold[key] = false;
+        if (nextSummary[key] === undefined) nextSummary[key] = false;
+      }
+      if (streaming && nextSummary[key] === undefined) {
+        nextSummary[key] = true;
+      }
+
+      lastStreamingMap.value[key] = streaming;
     });
 
-    thinkExpandedMap.value = nextExpandedMap;
-    thinkDoneMap.value = nextDoneMap;
+    foldExpandedMap.value = nextFold;
+    summaryExpandedMap.value = nextSummary;
     void bindScrollBox();
   },
   { immediate: true },
@@ -381,9 +444,12 @@ onBeforeUnmount(() => {
           :content="String(content)"
           :markdown-class-name="markdownClassName"
           :streaming="isStreamingStatus(item.status)"
-          :think-expanded="
-            hasReasoning(item) ? isThinkExpanded(item.key, !isStreamingStatus(item.status)) : false
-          "
+          :fold-expanded="isFoldExpanded(item.key)"
+          :summary-expanded="isSummaryExpanded(item.key, isStreamingStatus(item.status))"
+          :item-expanded-ids="isItemExpandedIds(item)"
+          :turn-duration-ms="turnDurationMap[getThinkKey(item.key)]"
+          :reasoning-duration-ms="reasoningDurationMap[getThinkKey(item.key)]"
+          :started-at-ms="messageStartMap[getThinkKey(item.key)]"
           :a2ui-action-pending="
             item.extraInfo?.parsedA2UI
               ? isA2UIActionPending(item.extraInfo.parsedA2UI.commands)
@@ -392,7 +458,9 @@ onBeforeUnmount(() => {
           :submissions="submissionsForMessage(item.key)"
           :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
           @a2ui-action="emit('a2uiAction', $event)"
-          @update:think-expanded="setThinkExpanded(item.key, $event)"
+          @update:fold-expanded="setFoldExpanded(item.key, $event)"
+          @update:summary-expanded="setSummaryExpanded(item.key, $event)"
+          @update:item-expanded-ids="setItemExpandedIds(item.key, $event)"
         />
         <span v-else class="whitespace-pre-wrap break-words">{{ content }}</span>
       </template>
@@ -449,7 +517,11 @@ onBeforeUnmount(() => {
   min-width: 0;
   max-width: 100%;
   color: var(--brand-foreground);
-  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.messages-wrapper :deep(.chat-markdown p),
+.messages-wrapper :deep(.chat-markdown li) {
+  white-space: normal;
 }
 .messages-wrapper :deep(.chat-markdown pre),
 .messages-wrapper :deep(.chat-markdown table),

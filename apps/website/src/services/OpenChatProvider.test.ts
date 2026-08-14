@@ -125,3 +125,53 @@ test("excludes host-only opening messages from model requests", () => {
     { content: "[表单提交] generate_ticket_branch", role: "user" },
   ]);
 });
+
+test("preserves newlines across chunk boundaries after reasoning (regression)", () => {
+  const delta = (content = "", reasoning = "") => ({
+    data: JSON.stringify({
+      choices: [{ delta: { content, reasoning_content: reasoning, role: "assistant" } }],
+    }),
+  });
+
+  let msg: XModelMessage = { content: "", role: "assistant" };
+  // 先流式思考，再分多块输出正文（每块边界带 \n）
+  msg = transform(msg, delta("", "先分析现有组件的交互方式。"));
+  msg = transform(msg, delta("", "再对照 Waku 的折叠模型。"));
+  expect(msg.content).toBe("");
+  expect((msg as { reasoningContent?: string }).reasoningContent).toBe(
+    "先分析现有组件的交互方式。再对照 Waku 的折叠模型。",
+  );
+  expect((msg as { reasoningDone?: boolean }).reasoningDone).toBeUndefined();
+
+  const parts = [
+    "我在apps/website相关目录看到了项目情况：\n",
+    "- Web应用：apps/website（Vue+Vite+），devserver运行在localhost:3000\n",
+    "- Server：apps/server，运行在localhost:8082\n",
+    "不过你的消息比较简短，想确认一下你的需求：\n1. Web端出现bug？\n2. 需要改某块功能？",
+  ];
+  for (const part of parts) {
+    msg = transform(msg, delta(part));
+  }
+
+  expect(msg.content).toBe(parts.join(""));
+  expect((msg as { reasoningDone?: boolean }).reasoningDone).toBe(true);
+});
+
+test("preserves exact text for multi-chunk answers without reasoning", () => {
+  const delta = (content: string) => ({
+    data: JSON.stringify({ choices: [{ delta: { content, role: "assistant" } }] }),
+  });
+
+  let msg: XModelMessage = { content: "", role: "assistant" };
+  const parts = [
+    "我想确认一下你的需",
+    "求，比如：\n1. Web端出现",
+    "bug/报错？请贴一下控制台。",
+    "告诉我具体要做什么。",
+  ];
+  for (const part of parts) {
+    msg = transform(msg, delta(part));
+  }
+
+  expect(msg.content).toBe(parts.join(""));
+});
