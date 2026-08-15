@@ -46,6 +46,8 @@ interface UseChatPersistenceOptions {
   isRequesting: Ref<boolean>;
   setMessages: (messages: DefaultMessageInfo<XModelMessage>[]) => void;
   reconcileCurrentModel: () => void;
+  /** 会话被重置为草稿态（清空历史 / 导入日志后）时同步 URL */
+  onResetToDraft?: () => void;
 }
 
 /**
@@ -62,6 +64,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
     isRequesting,
     setMessages,
     reconcileCurrentModel,
+    onResetToDraft,
   } = options;
 
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -134,6 +137,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
     conversationList.value = [];
     currentConversationKey.value = "";
     showWelcome.value = true;
+    notifyResetToDraft();
   };
 
   const applyPersistedState = (persistedState: PersistedChatState) => {
@@ -178,6 +182,16 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
     currentConversationKey.value = "";
     setMessages([]);
     showWelcome.value = true;
+    notifyResetToDraft();
+  };
+
+  /**
+   * 重置为草稿态时同步 URL。挂载恢复期间跳过：此时 URL 尚未就绪，
+   * onMounted 会按初始 URL 恢复会话。
+   */
+  const notifyResetToDraft = () => {
+    if (isHydrating.value) return;
+    onResetToDraft?.();
   };
 
   const schedulePersistState = () => {

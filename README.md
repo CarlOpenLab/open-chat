@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/website/public/logo.svg" width="96" height="96" alt="Open Chat logo" />
+  <img src="apps/website/public/logo.png" width="96" height="96" alt="Open Chat logo" />
 </p>
 
 <h1 align="center">Open Chat</h1>
@@ -119,6 +119,19 @@ Example local-agent request:
 ```
 
 In addition to normal assistant chunks, the SSE stream can carry `tool_call`, `acp_plan`, `acp_session`, `acp_turn`, and `chat_permission` events.
+
+## Session deep links
+
+Every open conversation is reflected in the address bar:
+
+```text
+/chat/{agentId}/{sessionId}
+```
+
+- `agentId` is the provider (for example `api`, `codex`, `opencode`, `pi`).
+- `sessionId` is the provider session id when the agent exposes one (ACP / local CLI), otherwise the local conversation key.
+
+Copy the address (or use the **link icon** in the header) and open it later, on any machine with the same provider configured: Open Chat switches to that provider and restores the matching session, including provider-side history for ACP agents. The sidebar's **New task** / agent / model switches keep the URL in sync, and browser back / forward navigates conversations.
 
 ## Development commands
 

@@ -199,6 +199,37 @@ const historyBack = ref<string[]>([]);
 const historyForward = ref<string[]>([]);
 const historyLocked = ref(false);
 
+// ============ URL 会话路由 ============
+// URL 格式：/chat/{agentId}/{sessionId}，sessionId 优先用供应商真实会话 id（ACP），
+// 其次用本地会话 key。复制链接即可直达对应供应商的会话。
+
+const safeDecode = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+/** 将当前打开的会话同步到 URL（push 记历史 / replace 原地替换）。 */
+const syncConversationRoute = (mode: "push" | "replace") => {
+  const conversation = getCurrentConversation();
+  const sessionPart = conversation?.providerSessionId?.trim() || currentConversationKey.value || "";
+  const path = sessionPart
+    ? `/chat/${encodeURIComponent(activeAgentId.value)}/${encodeURIComponent(sessionPart)}`
+    : `/chat/${encodeURIComponent(activeAgentId.value)}`;
+  window.history[mode === "push" ? "pushState" : "replaceState"]({}, "", path);
+};
+
+const parseChatRoute = (path: string): { agentId: string; sessionId: string } | null => {
+  const match = path.match(/^\/chat(?:\/([^/]+)(?:\/([^/]+))?)?\/?$/);
+  if (!match) return null;
+  return {
+    agentId: match[1] ? safeDecode(match[1]) : "",
+    sessionId: match[2] ? safeDecode(match[2]) : "",
+  };
+};
+
 const createNewConversation = (
   systemPrompt: string = "",
   preferredKey: string = "",
@@ -466,7 +497,7 @@ const handleNewConversation = () => {
 
   currentConversationKey.value = "";
   projectPath.value = "";
-  window.history.replaceState({}, "", "/chat");
+  syncConversationRoute("replace");
   showWelcome.value = true;
   historyBack.value = [];
   historyForward.value = [];
@@ -483,6 +514,7 @@ const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
     pushHistory(currentConversationKey.value || "");
   }
   currentConversationKey.value = key;
+  syncConversationRoute("push");
   const conv = getCurrentConversation();
   if (conv) {
     showWelcome.value = conv.messages.length === 0;
@@ -514,6 +546,7 @@ const handleAgentChange = (agentId: string) => {
   showWelcome.value = true;
   historyBack.value = [];
   historyForward.value = [];
+  syncConversationRoute("replace");
   if (!next.available) {
     message.warning(next.adapterHint || `${next.name} 当前不可用，请检查本地 CLI 安装与登录状态`);
   }
@@ -613,6 +646,7 @@ const {
   isRequesting,
   setMessages,
   reconcileCurrentModel,
+  onResetToDraft: () => syncConversationRoute("replace"),
 });
 
 /**
@@ -669,6 +703,75 @@ const syncProviderConversations = async (agentId: string): Promise<void> => {
   } catch (error) {
     console.error(`Failed to load ${agentId} provider sessions:`, error);
   }
+};
+
+/**
+ * 按 URL 恢复对应供应商与会话：直接打开复制的链接、或浏览器前进/后退时调用。
+ * 非 chat 路由返回 false，不干扰页面切换。
+ */
+const restoreRouteConversation = async (
+  path: string = window.location.pathname,
+): Promise<boolean> => {
+  const route = parseChatRoute(path);
+  if (!route) return false;
+  const { agentId: routeAgentId, sessionId: routeSessionId } = route;
+
+  // 1) 供应商：URL 指定优先，其次上次记忆，最后第一个可用 ACP / API
+  const routeAgent = routeAgentId
+    ? agents.value.find((agent) => agent.id === routeAgentId)
+    : undefined;
+  const targetAgent =
+    routeAgent ??
+    agents.value.find((agent) => agent.id === localStorage.getItem("open-chat-agent")) ??
+    agents.value.find((agent) => agent.kind === "acp" && agent.available) ??
+    agents.value[0] ??
+    API_AGENT;
+
+  if (targetAgent.id !== activeAgentId.value) {
+    acpSession.value = null;
+    draftConversationKey.value = "";
+    activeAgentId.value = targetAgent.id;
+    localStorage.setItem("open-chat-agent", targetAgent.id);
+    if (targetAgent.kind === "acp" && targetAgent.available) {
+      // 同步目标供应商的会话列表，让 URL 里的 provider session 出现在侧栏
+      await syncProviderConversations(targetAgent.id);
+    }
+  }
+
+  // 2) 会话：精确 key → ACP 重建 key → providerSessionId 匹配；找不到则落到草稿
+  if (!routeSessionId) {
+    currentConversationKey.value = "";
+    setMessages([]);
+    showWelcome.value = true;
+    return true;
+  }
+  const candidateKeys = routeSessionId.startsWith("acp:")
+    ? [routeSessionId]
+    : [routeSessionId, `acp:${targetAgent.id}:${routeSessionId}`];
+  const conversation = conversationList.value.find(
+    (item) =>
+      candidateKeys.includes(String(item.key)) ||
+      (item.agentId === targetAgent.id && item.providerSessionId === routeSessionId),
+  );
+  if (conversation) {
+    if (conversation.agentId && conversation.agentId !== activeAgentId.value) {
+      acpSession.value = null;
+      activeAgentId.value = conversation.agentId;
+      localStorage.setItem("open-chat-agent", conversation.agentId);
+    }
+    currentConversationKey.value = String(conversation.key);
+    showWelcome.value = (conversation.messages?.length ?? 0) === 0;
+    return true;
+  }
+  // 本地找不到：落到目标供应商的草稿态（ACP 会话会在下次 syncProviderConversations 后出现）
+  currentConversationKey.value = "";
+  setMessages([]);
+  showWelcome.value = true;
+  return true;
+};
+
+const handleRoutePopState = () => {
+  void restoreRouteConversation();
 };
 
 /** Attach sources received mid-stream to the assistant message that produced them. */
@@ -759,11 +862,13 @@ const handleWorkspaceKeydown = (event: KeyboardEvent) => {
 
 onMounted(async () => {
   window.addEventListener("keydown", handleWorkspaceKeydown);
+  window.addEventListener("popstate", handleRoutePopState);
   if (window.matchMedia("(max-width: 767px)").matches) {
     conversationsOpen.value = false;
     rightPanelOpen.value = false;
   }
 
+  const initialChatPath = window.location.pathname;
   const [persistedState, loadedAgents] = await Promise.all([
     loadChatState(),
     loadAcpAgents().catch((error) => {
@@ -787,10 +892,13 @@ onMounted(async () => {
 
   isHydrating.value = false;
   await syncProviderConversations(activeAgentId.value);
+  // URL 直达：打开复制的链接时恢复对应供应商与会话
+  await restoreRouteConversation(initialChatPath);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleWorkspaceKeydown);
+  window.removeEventListener("popstate", handleRoutePopState);
   window.removeEventListener("mousemove", handleResizeMove);
   window.removeEventListener("mouseup", handleResizeEnd);
 });
@@ -975,6 +1083,7 @@ const handleSubmit = (
     conversationList.value.unshift(newConversation);
     currentConversationKey.value = String(newConversation.key);
     draftConversationKey.value = "";
+    syncConversationRoute("push");
   }
 
   const conversation = getCurrentConversation();
@@ -1075,6 +1184,7 @@ const handleModelChange = async (key: string) => {
     showWelcome.value = true;
     historyBack.value = [];
     historyForward.value = [];
+    syncConversationRoute("replace");
     return;
   }
   if (isRequesting.value || acpSessionLoading.value) return;
@@ -1097,6 +1207,7 @@ const handleModelChange = async (key: string) => {
     showWelcome.value = true;
     historyBack.value = [];
     historyForward.value = [];
+    syncConversationRoute("replace");
     message.success(`已切换到 ${inputCurrentModelLabel.value}`);
   } catch (error) {
     message.error(error instanceof Error ? error.message : "Agent 模型切换失败");
@@ -1213,6 +1324,7 @@ const resetAfterRemovingConversation = () => {
   showWelcome.value = true;
   historyBack.value = [];
   historyForward.value = [];
+  syncConversationRoute("replace");
   schedulePersistState();
 };
 

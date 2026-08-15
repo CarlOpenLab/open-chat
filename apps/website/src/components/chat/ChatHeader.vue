@@ -5,13 +5,14 @@ import {
   ArrowRight,
   ChevronDown,
   Download,
+  Link2,
   Pencil,
   Pin,
   PanelLeftOpen,
   PanelRight,
   Trash2,
 } from "@lucide/vue";
-import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
+import { Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, h, nextTick, ref, watch } from "vue";
 
 interface Props {
@@ -50,6 +51,15 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<Emits>();
 
 const hasDiff = computed(() => props.diffAdded > 0 || props.diffRemoved > 0);
+
+const handleCopyLink = async () => {
+  try {
+    await navigator.clipboard.writeText(window.location.href);
+    message.success("会话链接已复制");
+  } catch {
+    message.error("复制失败，请手动复制地址栏链接");
+  }
+};
 
 const editing = ref(false);
 const draftTitle = ref(props.title);
@@ -181,6 +191,16 @@ const titleMenu = computed<MenuProps>(() => ({
       class="mr-1 flex items-center gap-[6px] text-[10px] text-brand-muted-strong"
       ><span class="sync-dot" /><span>处理中</span></span
     >
+    <Tooltip title="复制当前会话链接">
+      <button
+        type="button"
+        :class="iconButtonClass"
+        aria-label="复制当前会话链接"
+        @click="handleCopyLink"
+      >
+        <Link2 class="!h-[14px] !w-[14px]" />
+      </button>
+    </Tooltip>
     <Tooltip v-if="rightPanelAvailable" :title="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'">
       <button
         type="button"
