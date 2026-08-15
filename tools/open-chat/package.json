@@ -1,0 +1,25 @@
+{
+  "name": "@open-chat/cli",
+  "version": "1.0.0",
+  "private": true,
+  "bin": {
+    "open-chat": "./bin/open-chat.mjs"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist/cli.cjs --banner:js=\"#!/usr/bin/env node\" --sourcemap",
+    "dev": "tsx src/cli.ts",
+    "start": "node bin/open-chat.mjs"
+  },
+  "dependencies": {
+    "express": "catalog:",
+    "server": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/express": "catalog:",
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "tsx": "^4.21.0",
+    "typescript": "catalog:"
+  }
+}

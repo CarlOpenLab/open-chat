@@ -24,6 +24,8 @@ import { aiService } from "../../services/ai";
 interface Props {
   modelValue: string;
   loading: boolean;
+  /** ACP 会话运行状态（running / requires_action / …），来自服务端 activeRuns；非 ACP 或空闲时为 null。 */
+  runState?: string | null;
   currentModel: string;
   currentModelLabel?: string;
   /** 按供应商分组的模型目录 */
@@ -66,6 +68,7 @@ const props = withDefaults(defineProps<Props>(), {
   agentMode: false,
   agentAvailable: true,
   agentConfiguring: false,
+  runState: null,
   mode: "build",
   permission: "supervised",
   permissionLocked: false,
@@ -270,6 +273,20 @@ const pendingPermissionLabel = computed(() => {
   return labels[name] || name || "执行操作";
 });
 
+/** ACP 运行状态标签；idle 表示回合已结束（流即将关闭），无需提示。 */
+const runStateLabel = computed(() => {
+  switch (props.runState) {
+    case "running":
+      return "运行中…";
+    case "requires_action":
+      return "等待你的操作…";
+    case "idle":
+      return "";
+    default:
+      return props.runState ?? "";
+  }
+});
+
 const pendingPermissionDetails = computed(() => {
   const request = props.pendingPermission;
   if (!request) return [];
@@ -423,7 +440,7 @@ const chipClass = (active: boolean, disabled = false) => {
                   type="button"
                   :class="chipClass(true, permissionLocked)"
                   aria-label="权限策略"
-                  :title="permissionLocked ? 'Pi 供应商固定为完全访问' : '权限策略'"
+                  :title="permissionLocked ? '该供应商固定为完全访问' : '权限策略'"
                 >
                   <ShieldCheck class="!h-[12px] !w-[12px] flex-none text-brand-accent" />
                   <span>{{
@@ -507,6 +524,11 @@ const chipClass = (active: boolean, disabled = false) => {
                   </button>
                 </Tooltip>
               </div>
+              <span
+                v-if="runStateLabel"
+                class="ml-[6px] flex-none text-[11px] leading-[14px] text-brand-muted-strong"
+                >{{ runStateLabel }}</span
+              >
             </div>
 
             <!-- composer 右排：模型选择 + 发送 / 停止 -->

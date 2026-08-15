@@ -201,7 +201,8 @@ export class NativeCliManager {
       case "claude":
         return { supported: true, sessions: await discoverClaudeSessions(cwd) };
       case "pi":
-        return { supported: true, sessions: await discoverPiSessions(cwd) };
+      case "omp":
+        return { supported: true, sessions: await discoverPiSessions(cwd, agent.transport) };
       case "opencode": {
         if (!this.localChat) return { supported: false, sessions: [] };
         const sessions = await this.localChat.listProviderSessions(cwd);
@@ -410,6 +411,7 @@ export class NativeCliManager {
           providerSessionId,
         );
       case "pi":
+      case "omp":
         return PiRuntime.start(agent, executable, cwd, session.model, providerSessionId);
       default:
         throw GatewayError.invalidRequest(`不支持的原生 CLI 传输：${agent.transport}`);
@@ -458,7 +460,8 @@ export class NativeCliManager {
         case "claude":
           return readClaudeSessionHistory(sessionId);
         case "pi":
-          return readPiSessionHistory(sessionId, cwd);
+        case "omp":
+          return readPiSessionHistory(sessionId, cwd, agent.transport);
         case "opencode": {
           const loaded = await this.localChat?.loadProviderSession(sessionId, cwd);
           return loaded?.history ?? [];
@@ -1132,6 +1135,7 @@ class PiRuntime implements NativeRuntime {
   private active: ActiveNativeRun | null = null;
   private model: string;
   private providerSessionId = "";
+  private readonly agentId: string;
   private readonly rpc: PiRpcProcess;
   private readonly tools = new Map<string, { name: string; input: unknown }>();
 
@@ -1142,13 +1146,16 @@ class PiRuntime implements NativeRuntime {
     model: string,
     sessionPath?: string,
   ) {
+    this.agentId = agent.id;
     this.model = model;
     this.rpc = new PiRpcProcess(
       executable,
       [
         "--mode",
         "rpc",
-        "--approve",
+        // pi 用 --approve（信任项目本地文件）；omp 没有该参数，用 --auto-approve
+        // 自动批准工具调用（RPC 模式无权限事件，前端对 pi 系固定为 full 权限）。
+        ...(agent.transport === "omp" ? ["--auto-approve"] : ["--approve"]),
         ...(sessionPath ? ["--session", sessionPath] : []),
         ...agent.args,
       ],
@@ -1166,7 +1173,7 @@ class PiRuntime implements NativeRuntime {
     providerSessionId?: string,
   ) {
     const sessionPath = providerSessionId?.trim()
-      ? await findPiSessionPath(providerSessionId.trim(), cwd)
+      ? await findPiSessionPath(providerSessionId.trim(), cwd, agent.transport as NativeTransport)
       : undefined;
     const runtime = new PiRuntime(agent, executable, cwd, model, sessionPath ?? undefined);
     const state = await runtime.rpc.request({ type: "get_state" });
@@ -1237,10 +1244,12 @@ class PiRuntime implements NativeRuntime {
       const delta = stringValue(update?.delta);
       if (updateType === "text_delta" && delta) {
         active.sawText = true;
-        writeChunk(active.res, `pi/${this.model || "default"}`, { content: delta });
+        writeChunk(active.res, `${this.agentId}/${this.model || "default"}`, { content: delta });
       } else if (updateType === "thinking_delta" && delta) {
         active.sawReasoning = true;
-        writeChunk(active.res, `pi/${this.model || "default"}`, { reasoning_content: delta });
+        writeChunk(active.res, `${this.agentId}/${this.model || "default"}`, {
+          reasoning_content: delta,
+        });
       }
       return;
     }
@@ -1250,12 +1259,16 @@ class PiRuntime implements NativeRuntime {
         if (!block) continue;
         if (block.type === "text" && !active.sawText) {
           const text = stringValue(block.text);
-          if (text) writeChunk(active.res, `pi/${this.model || "default"}`, { content: text });
+          if (text) {
+            writeChunk(active.res, `${this.agentId}/${this.model || "default"}`, { content: text });
+          }
         }
         if (block.type === "thinking" && !active.sawReasoning) {
           const text = stringValue(block.thinking);
           if (text) {
-            writeChunk(active.res, `pi/${this.model || "default"}`, { reasoning_content: text });
+            writeChunk(active.res, `${this.agentId}/${this.model || "default"}`, {
+              reasoning_content: text,
+            });
           }
         }
       }
@@ -1278,7 +1291,9 @@ class PiRuntime implements NativeRuntime {
       if (complete) this.tools.delete(id);
       return;
     }
-    if (type === "agent_settled") {
+    // 回合结束：pi 发 agent_settled（在 turn_end 之后），omp 只发 turn_end。
+    // 两者都以 turn_end 为完成标志，agent_settled 仅作兼容兜底。
+    if (type === "turn_end" || type === "agent_settled") {
       this.active = null;
       active.resolve();
     }
@@ -1304,7 +1319,8 @@ async function discoverNativeModels(
     case "claude":
       return fallbackNativeModels("claude");
     case "pi":
-      return discoverPiModels(executable, cwd, agent.args);
+    case "omp":
+      return discoverPiModels(executable, cwd, agent.args, agent.transport);
     case "opencode":
       return localChat ? (await localChat.listModels()).map(localModelView) : [];
     default:
@@ -1444,8 +1460,16 @@ async function discoverClaudeSessions(cwd: string): Promise<NativeProviderSessio
   );
 }
 
-async function discoverPiSessions(cwd: string): Promise<NativeProviderSessionView[]> {
-  const root = join(homedir(), ".pi", "agent", "sessions");
+/** pi / omp 的会话存储根目录：pi 在 ~/.pi/agent/sessions，omp 在 ~/.omp/agent/sessions。 */
+function piSessionRoot(transport: NativeTransport): string {
+  return join(homedir(), transport === "omp" ? ".omp" : ".pi", "agent", "sessions");
+}
+
+async function discoverPiSessions(
+  cwd: string,
+  transport: NativeTransport,
+): Promise<NativeProviderSessionView[]> {
+  const root = piSessionRoot(transport);
   const dirs = await readdir(root, { withFileTypes: true }).catch(() => []);
   const sessions: NativeProviderSessionView[] = [];
   for (const dir of dirs) {
@@ -1457,10 +1481,12 @@ async function discoverPiSessions(cwd: string): Promise<NativeProviderSessionVie
       const lines = await readJsonLines(fullPath, 200);
       const header = lines.find((line) => line.type === "session");
       const sessionId = stringValue(header?.id) || basename(file.name, ".jsonl");
+      // pi / omp 的历史标题：session_info.name（pi 旧格式）与 title.title（omp 格式），
+      // 取最后一条非空值，回退到首条用户消息。
       const title =
         lines
-          .filter((line) => line.type === "session_info")
-          .map((line) => stringValue(line.name))
+          .filter((line) => line.type === "session_info" || line.type === "title")
+          .map((line) => stringValue(line.name) || stringValue(line.title))
           .filter(Boolean)
           .at(-1) || firstMessageText(lines, "user");
       const fileStat = await stat(fullPath).catch(() => undefined);
@@ -1477,9 +1503,13 @@ async function discoverPiSessions(cwd: string): Promise<NativeProviderSessionVie
   );
 }
 
-async function findPiSessionPath(sessionId: string, cwd: string): Promise<string | null> {
-  const root = join(homedir(), ".pi", "agent", "sessions");
-  const preferred = join(root, encodePiProjectPath(cwd));
+async function findPiSessionPath(
+  sessionId: string,
+  cwd: string,
+  transport: NativeTransport,
+): Promise<string | null> {
+  const root = piSessionRoot(transport);
+  const preferred = join(root, encodePiProjectPath(cwd, transport));
   const dirs = await readdir(root, { withFileTypes: true }).catch(() => []);
   const ordered = [
     ...(dirs.find((dir) => dir.isDirectory() && dir.name === basename(preferred))
@@ -1518,8 +1548,9 @@ async function readClaudeSessionHistory(sessionId: string): Promise<NativeSessio
 async function readPiSessionHistory(
   sessionId: string,
   cwd: string,
+  transport: NativeTransport,
 ): Promise<NativeSessionHistoryMessage[]> {
-  const file = await findPiSessionPath(sessionId, cwd);
+  const file = await findPiSessionPath(sessionId, cwd, transport);
   if (!file) return [];
   return convertPiHistory(await readJsonLines(file));
 }
@@ -1631,7 +1662,14 @@ function encodeProjectPath(value: string): string {
   return value.replaceAll("/", "-");
 }
 
-function encodePiProjectPath(value: string): string {
+function encodePiProjectPath(value: string, transport: NativeTransport): string {
+  if (transport === "omp") {
+    // omp 的会话目录名：`-` + 相对 $HOME 的路径（`/` 转 `-`），例如
+    // /Users/me/Desktop/proj → -Desktop-proj。不在 $HOME 下时回退到全路径编码。
+    const home = homedir();
+    const relative = value.startsWith(`${home}/`) ? value.slice(home.length + 1) : value;
+    return `-${relative.replace(/^\/+/, "").replaceAll("/", "-")}`;
+  }
   return `--${value.replace(/^\/+/, "").replaceAll("/", "-")}--`;
 }
 
@@ -1729,6 +1767,7 @@ async function discoverPiModels(
   executable: string,
   cwd: string,
   extraArgs: string[],
+  transport: NativeTransport,
 ): Promise<NativeModel[]> {
   let exited: Error | null = null;
   const rpc = new PiRpcProcess(
@@ -1738,8 +1777,8 @@ async function discoverPiModels(
       "rpc",
       "--no-session",
       "--no-skills",
-      "--no-prompt-templates",
-      "--no-context-files",
+      // pi 专有参数；omp 不识别，会直接报错退出。
+      ...(transport === "pi" ? ["--no-prompt-templates", "--no-context-files"] : []),
       ...extraArgs,
     ],
     cwd,
@@ -1822,6 +1861,8 @@ function nativeProtocol(transport: NativeTransport): string {
       return "Claude stream-json";
     case "pi":
       return "Pi RPC";
+    case "omp":
+      return "Oh My Pi RPC";
     case "opencode":
       return "OpenCode HTTP + SSE";
   }
@@ -1835,6 +1876,8 @@ function nativeLaunchCommand(agent: AcpAgentConfig): string {
       return `${agent.command} -p --input-format stream-json --output-format stream-json`;
     case "pi":
       return `${agent.command} --mode rpc --approve`;
+    case "omp":
+      return `${agent.command} --mode rpc --auto-approve`;
     case "opencode":
       return `${agent.command} serve`;
     default:
@@ -1870,7 +1913,7 @@ function nativeToolEvent(item: Record<string, unknown>, complete: boolean) {
 function splitModel(model: string): [string, string] {
   const index = model.indexOf("/");
   if (index <= 0 || index === model.length - 1) {
-    throw GatewayError.invalidRequest(`Pi 模型必须是 provider/model：${model}`);
+    throw GatewayError.invalidRequest(`Pi 系（pi/omp）模型必须是 provider/model：${model}`);
   }
   return [model.slice(0, index), model.slice(index + 1)];
 }

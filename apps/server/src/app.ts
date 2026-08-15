@@ -1,0 +1,676 @@
+/**
+ * Open Chat 网关应用（可编程入口）。
+ *
+ * `createGatewayApp` 构建 Express 应用（不监听端口）；`startGateway`
+ * 负责加载配置、构建运行时、监听端口并返回优雅停止句柄。
+ * 独立入口（src/index.ts）与 CLI（tools/open-chat）都基于这两个函数。
+ */
+import express from "express";
+import type { Express, NextFunction, Request, Response } from "express";
+import cors from "cors";
+import { createServer } from "node:http";
+import type { Server } from "node:http";
+import { existsSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import { defaultAppConfig, type AppConfig, type LocalConfig } from "./config";
+import { GatewayError } from "./error";
+import {
+  forwardChatRequest,
+  parseRequestProvider,
+  pipeUpstream,
+  type ChatCompletionRequest,
+  type ProviderEndpoint,
+} from "./provider";
+import { createSearchProvider, type SearchProvider } from "./search";
+import { runSearchAgentLoop } from "./search-agent";
+import {
+  LocalChatManager,
+  attachAbortOnClose,
+  extractTextFromMessage,
+  hashKey,
+  type LocalModelInfo,
+} from "./localProvider";
+import { AgentManager } from "./agentManager";
+import { resolveExecutable } from "./commandEnv";
+import { pickProjectDirectory } from "./projectPicker";
+
+/** 网关运行时：配置 + 由配置构建的各管理器。 */
+export interface GatewayRuntime {
+  config: AppConfig;
+  searchProvider: SearchProvider | null;
+  localChat: LocalChatManager | null;
+  agentManager: AgentManager;
+}
+
+export interface GatewayStartOptions {
+  /** 覆盖默认监听地址（127.0.0.1）。 */
+  host?: string;
+  /** 覆盖默认端口（8082）；0 表示自动分配（以实际监听端口为准）。 */
+  port?: number;
+  /** 提供时以静态站点（SPA）形式托管 Web UI，与 API 同源。 */
+  staticDir?: string;
+  /** 监听成功回调（URL 已确定，可用于自动打开浏览器）。 */
+  onListen?: (info: { url: string; host: string; port: number }) => void;
+}
+
+export interface GatewayHandle {
+  server: Server;
+  url: string;
+  host: string;
+  port: number;
+  /** 停止本地 agent / opencode 会话并关闭 HTTP 服务。 */
+  stop(): Promise<void>;
+}
+
+/** 构建内置默认运行时（无配置文件，自动发现本机 CLI）。 */
+export function loadGatewayRuntime(): GatewayRuntime {
+  const config = defaultAppConfig();
+  const searchProvider = createSearchProvider(config.search);
+  const localChat = createLocalChatManager(config);
+  const agentManager = new AgentManager(config.acp, localChat);
+  return { config, searchProvider, localChat, agentManager };
+}
+
+/** 构建网关 Express 应用；`staticDir` 非空时在同一端口托管 Web UI。 */
+export function createGatewayApp(runtime: GatewayRuntime, staticDir?: string): Express {
+  const { config, searchProvider, localChat, agentManager } = runtime;
+  const app = express();
+  app.disable("x-powered-by");
+  app.use(cors(buildCorsOptions(config.corsAllowedOrigins)));
+  app.use(express.json());
+
+  if (config.gatewayApiKey) {
+    app.use(gatewayAuthMiddleware(config.gatewayApiKey));
+  }
+
+  app.get("/health", (_req: Request, res: Response) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // 模型发现：服务端搜索能力 + 本地 opencode（AI 取本地的）模型/供应商。
+  // 手动配置的服务商数据仍在客户端本地（IndexedDB），前端会合并展示。
+  app.get("/api/models", async (_req: Request, res: Response) => {
+    let local: {
+      enabled: boolean;
+      provider: string;
+      models: LocalModelInfo[];
+      error?: string;
+    } = { enabled: false, provider: "", models: [] };
+    if (localChat && config.local.enabled) {
+      try {
+        const models = await localChat.listModels();
+        local = { enabled: true, provider: models[0]?.provider ?? "opencode", models };
+      } catch (err) {
+        console.error("Local opencode model discovery failed:", err);
+        local = {
+          enabled: false,
+          provider: "",
+          models: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+    res.json({
+      search: { enabled: !!searchProvider, provider: searchProvider?.name ?? "" },
+      local,
+    });
+  });
+
+  app.post("/api/project-path/pick", async (req: Request, res: Response) => {
+    try {
+      if (!isLoopbackRequest(req)) {
+        throw GatewayError.unauthorized();
+      }
+      const path = await pickProjectDirectory();
+      res.json({ canceled: !path, ...(path ? { path } : {}) });
+    } catch (err) {
+      if (err instanceof GatewayError) return sendGatewayError(res, err);
+      console.error("Project directory picker failed:", err);
+      return sendGatewayError(
+        res,
+        GatewayError.upstream(err instanceof Error ? err.message : "系统目录选择器不可用"),
+      );
+    }
+  });
+
+  app.get("/api/acp/agents", (_req: Request, res: Response) => {
+    res.json({ agents: agentManager.listAgents() });
+  });
+
+  app.get("/api/acp/sessions", (req: Request, res: Response) => {
+    const agentId = typeof req.query.agentId === "string" ? req.query.agentId : undefined;
+    res.json({ sessions: agentManager.listSessions(agentId) });
+  });
+
+  app.get("/api/acp/provider-sessions", async (req: Request, res: Response) => {
+    try {
+      const agentId = requiredQuery(req, "agentId");
+      res.json(await agentManager.listProviderSessions(agentId));
+    } catch (err) {
+      return sendRouteError(res, err, "供应商会话列表加载失败");
+    }
+  });
+
+  app.get("/api/acp/session", async (req: Request, res: Response) => {
+    try {
+      const agentId = requiredQuery(req, "agentId");
+      const conversationId = requiredQuery(req, "conversationId");
+      res.json(
+        await agentManager.getSessionState(
+          agentId,
+          conversationId,
+          parseProjectPath(req.query.projectPath),
+          optionalString(req.query.providerSessionId),
+        ),
+      );
+    } catch (err) {
+      return sendRouteError(res, err, "ACP 会话配置加载失败");
+    }
+  });
+
+  app.post("/api/acp/session/config", async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, unknown>;
+      const agentId = requiredBodyString(body, "agentId");
+      const conversationId = requiredBodyString(body, "conversationId");
+      const configId = requiredBodyString(body, "configId");
+      if (typeof body.value !== "string" && typeof body.value !== "boolean") {
+        throw GatewayError.invalidRequest("value 必须是字符串或布尔值");
+      }
+      res.json(
+        await agentManager.setSessionConfigOption(
+          agentId,
+          conversationId,
+          configId,
+          body.value,
+          parseProjectPath(body.projectPath),
+          optionalString(body.providerSessionId),
+        ),
+      );
+    } catch (err) {
+      return sendRouteError(res, err, "ACP 会话配置更新失败");
+    }
+  });
+
+  // 会话实时输出：SSE 订阅（多标签 / 刷新恢复后继续观看运行中的回合）
+  app.get("/api/acp/session/stream", (req: Request, res: Response) => {
+    try {
+      const agentId = requiredQuery(req, "agentId");
+      const conversationId = requiredQuery(req, "conversationId");
+      if (!agentManager.subscribeSessionStream(agentId, conversationId, res)) {
+        res.status(404).json({ error: "会话不存在，请先创建或恢复会话" });
+        return;
+      }
+      // SSE 心跳：长时间无输出时防止代理/浏览器超时断连
+      const heartbeat = setInterval(() => {
+        if (!res.writableEnded && !res.destroyed) res.write(": ping\n\n");
+      }, 15_000);
+      res.on("close", () => clearInterval(heartbeat));
+    } catch (err) {
+      return sendRouteError(res, err, "ACP 会话流订阅失败");
+    }
+  });
+
+  // 取消运行中的回合（多标签 / 刷新后停止孤儿回合）
+  app.post("/api/acp/session/cancel", async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, unknown>;
+      const agentId = requiredBodyString(body, "agentId");
+      const conversationId = requiredBodyString(body, "conversationId");
+      res.json({ cancelled: await agentManager.cancelTurn(agentId, conversationId) });
+    } catch (err) {
+      return sendRouteError(res, err, "ACP 回合取消失败");
+    }
+  });
+
+  // ============ 聊天：无状态代理转发 + 可选 websearch ============
+
+  app.post("/api/chat/completions", async (req: Request, res: Response) => {
+    try {
+      const body = req.body as ChatCompletionRequest;
+      if (!body || !Array.isArray(body.messages) || body.messages.length === 0) {
+        throw GatewayError.invalidRequest("messages array is required");
+      }
+
+      const acpAgentId =
+        typeof body.acpAgentId === "string" ? body.acpAgentId.trim().toLowerCase() : "";
+      if (acpAgentId) {
+        return handleAgentChat(req, res, body, acpAgentId, agentManager);
+      }
+
+      // 本地模型（形如 `opencode/...`）：转发到本地 opencode（AI 取本地的）。
+      if (
+        localChat &&
+        typeof body.model === "string" &&
+        (await localChat.isLocalModel(body.model))
+      ) {
+        return handleLocalChat(req, res, body, localChat);
+      }
+
+      // 转发目标由客户端在请求体携带；解析后从 body 剔除，避免上游报未知字段。
+      const endpoint = parseRequestProvider(body);
+      delete body.provider;
+      delete body.mode;
+      delete body.permission;
+      delete body.projectPath;
+
+      const stream = body.stream === true;
+
+      // 客户端声明 `web_search` 工具时走 agent 循环：拦截工具调用并执行
+      // 搜索提供方（Tavily），把结果回喂给模型。其余请求原样透传。
+      const canSearch =
+        stream && endpoint.api === "chat/completions" && hasWebSearchTool(body.tools);
+
+      if (canSearch && searchProvider) {
+        await runSearchAgentLoop(req, res, buildStreamRequest(endpoint), body, searchProvider);
+      } else {
+        // 无搜索后端：剥掉工具，避免模型调用无人执行的功能。
+        if (canSearch) stripWebSearchTool(body);
+        const upstream = await forwardChatRequest(endpoint, body);
+        await pipeUpstream(req, res, upstream);
+      }
+    } catch (err) {
+      if (res.headersSent) {
+        console.error("Chat API error after headers sent:", err);
+        try {
+          res.end();
+        } catch {
+          // response already ended
+        }
+        return;
+      }
+      if (err instanceof GatewayError) {
+        return sendGatewayError(res, err);
+      }
+      console.error("Chat API error:", err);
+      return sendGatewayError(
+        res,
+        GatewayError.upstream(err instanceof Error ? err.message : "Internal server error"),
+      );
+    }
+  });
+
+  // 前端回复 opencode 的权限询问（允许一次 / 始终允许 / 拒绝）。本地模型回合
+  // 触发 `chat_permission` 事件后，opencode 会话会暂停等待；前端据此回复。
+  app.post("/api/chat/permission", async (req: Request, res: Response) => {
+    try {
+      const body = req.body as {
+        conversationId?: unknown;
+        permissionId?: unknown;
+        response?: unknown;
+        version?: unknown;
+        agentId?: unknown;
+      };
+      const conversationId =
+        typeof body.conversationId === "string" ? body.conversationId.trim() : "";
+      const permissionId = typeof body.permissionId === "string" ? body.permissionId.trim() : "";
+      const response = body.response;
+      const version = body.version === "v2" ? "v2" : "v1";
+      if (!permissionId) throw GatewayError.invalidRequest("permissionId 是必填项");
+      if (response !== "once" && response !== "always" && response !== "reject") {
+        throw GatewayError.invalidRequest("response 必须是 once / always / reject");
+      }
+      if (body.version === "acp") {
+        const agentId = typeof body.agentId === "string" ? body.agentId.trim() : "";
+        if (!agentId) throw GatewayError.invalidRequest("agentId 是必填项");
+        await agentManager.replyPermission(agentId, permissionId, response);
+        res.json({ ok: true });
+        return;
+      }
+      if (!conversationId) {
+        throw GatewayError.invalidRequest("conversationId 是必填项");
+      }
+      if (!localChat) throw GatewayError.invalidRequest("本地 OpenCode AI 未启用");
+      await localChat.replyPermission(conversationId, permissionId, response, version);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err instanceof GatewayError) return sendGatewayError(res, err);
+      console.error("Permission reply error:", err);
+      return sendGatewayError(
+        res,
+        GatewayError.upstream(err instanceof Error ? err.message : "权限回复失败"),
+      );
+    }
+  });
+
+  // 未匹配的 API 路由：JSON 404（避免被 SPA fallback 吞掉）。
+  app.use("/api", (_req: Request, res: Response) => {
+    res.status(404).json({
+      error: { message: "Not found", type: "invalid_request_error", code: "not_found" },
+    });
+  });
+
+  if (staticDir) {
+    app.use(express.static(staticDir, { index: "index.html" }));
+    // SPA fallback：非 API 的 GET/HEAD 全部回 index.html（支持 /chat/... 深链接）。
+    const indexFile = join(staticDir, "index.html");
+    if (existsSync(indexFile)) {
+      app.use((req: Request, res: Response, next: NextFunction) => {
+        if (req.method !== "GET" && req.method !== "HEAD") return next();
+        res.sendFile(indexFile);
+      });
+    }
+  }
+
+  return app;
+}
+
+/**
+ * 加载配置并启动网关。监听成功后返回句柄（含 URL 与优雅停止方法）。
+ * 配置/端口错误会以异常形式抛出，由调用方决定如何提示。
+ */
+export async function startGateway(options: GatewayStartOptions): Promise<GatewayHandle> {
+  const runtime = loadGatewayRuntime();
+  const app = createGatewayApp(runtime, options.staticDir);
+
+  const host = options.host ?? "127.0.0.1";
+  const port = options.port ?? 8082;
+
+  const server = createServer(app);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => resolve());
+  });
+
+  const address = server.address();
+  const actualPort = typeof address === "object" && address ? address.port : port;
+  const displayHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  const url = `http://${displayHost}:${actualPort}/`;
+
+  console.log(`Server running at http://${host}:${actualPort}`);
+  console.log(`Config:      built-in defaults（无配置文件，自动发现本机 CLI）`);
+  console.log(`Health:      http://${host}:${actualPort}/health`);
+  console.log(`Models:      http://${host}:${actualPort}/api/models`);
+  console.log(`Chat:        http://${host}:${actualPort}/api/chat/completions`);
+  console.log(`Gateway auth: ${runtime.config.gatewayApiKey ? "enabled" : "disabled"}`);
+  console.log(`Web search:  ${runtime.searchProvider ? runtime.searchProvider.name : "disabled"}`);
+  console.log(`Local AI:    ${runtime.localChat ? "enabled (opencode)" : "disabled"}`);
+  console.log(
+    `CLI agents:  ${runtime.agentManager.listAgents().filter((agent) => agent.available).length} available`,
+  );
+
+  options.onListen?.({ url, host: displayHost, port: actualPort });
+
+  let stopped = false;
+  const stop = async (): Promise<void> => {
+    if (stopped) return;
+    stopped = true;
+    runtime.localChat?.stop();
+    runtime.agentManager.stop();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      // SSE / keep-alive 连接会阻塞 close 完成，主动断开。
+      server.closeAllConnections();
+    });
+  };
+
+  return { server, url, host: displayHost, port: actualPort, stop };
+}
+
+function createLocalChatManager(config: AppConfig): LocalChatManager | null {
+  if (config.local.enabled) return new LocalChatManager(config.local);
+
+  const openCode = config.acp.agents.find(
+    (agent) => agent.transport === "opencode" && agent.enabled,
+  );
+  if (!config.acp.enabled || !openCode) return null;
+  const executable = resolveExecutable(openCode.command);
+  if (!executable) return null;
+  const localConfig: LocalConfig = {
+    ...config.local,
+    enabled: true,
+    binary: executable,
+    cwd: openCode.cwd || config.acp.cwd || process.cwd(),
+  };
+  return new LocalChatManager(localConfig);
+}
+
+async function handleAgentChat(
+  _req: Request,
+  res: Response,
+  body: ChatCompletionRequest,
+  agentId: string,
+  agentManager: AgentManager,
+): Promise<void> {
+  const messages = body.messages as Array<{ role?: unknown; content?: unknown }>;
+  const lastUser = [...messages].reverse().find((message) => message.role === "user");
+  const text = lastUser ? extractTextFromMessage(lastUser) : "";
+  if (!text.trim()) throw GatewayError.invalidRequest("本地 Agent 需要至少一条 user 消息");
+  const conversationId =
+    typeof body.conversationId === "string" && body.conversationId.trim()
+      ? body.conversationId.trim()
+      : hashKey(messages.map((message) => extractTextFromMessage(message)));
+  const projectPath = parseProjectPath(body.projectPath);
+  const providerSessionId = optionalString(body.providerSessionId);
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const abort = attachAbortOnClose(res);
+  try {
+    await agentManager.runTurn(
+      agentId,
+      conversationId,
+      text,
+      projectPath,
+      providerSessionId,
+      res,
+      abort.signal,
+    );
+  } catch (err) {
+    if (abort.signal.aborted) return;
+    console.error(`Agent ${agentId} error:`, err);
+    if (!res.headersSent) {
+      if (err instanceof GatewayError) return sendGatewayError(res, err);
+      return sendGatewayError(
+        res,
+        GatewayError.upstream(err instanceof Error ? err.message : String(err)),
+      );
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    res.write(`event: chat_error\ndata: ${JSON.stringify({ message })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }
+}
+
+/**
+ * 本地聊天：把 OpenAI 格式请求转给本地 opencode（AI 取本地的）。
+ *
+ * - 会话按 `conversationId` 复用 opencode 长会话（历史积累在本地），
+ *   只发最后一条用户消息；无 conversationId 时按消息内容生成兜底 key。
+ * - 输出 OpenAI SSE 流（content / reasoning_content），前端 SDK 无需改动。
+ */
+async function handleLocalChat(
+  req: Request,
+  res: Response,
+  body: ChatCompletionRequest,
+  localChat: LocalChatManager,
+): Promise<void> {
+  const model = body.model as string;
+  const messages = body.messages;
+  // system prompt 经前端 transformParams 合并进了 messages[0]（role: system），
+  // body.systemPrompt 字段不存在；这里从 messages 里提取。
+  const systemPrompt = messages
+    .filter((m) => (m as { role?: unknown }).role === "system")
+    .map((m) => extractTextFromMessage(m))
+    .filter((text) => text.trim().length > 0)
+    .join("\n");
+  const lastUser = [...messages].reverse().find((m) => {
+    const role = (m as { role?: unknown }).role;
+    return role === "user";
+  });
+  const text = lastUser ? extractTextFromMessage(lastUser) : "";
+  if (!text.trim()) {
+    throw GatewayError.invalidRequest("本地模型需要至少一条 user 消息");
+  }
+  const conversationId = (body as Record<string, unknown>).conversationId;
+  const key =
+    typeof conversationId === "string" && conversationId.trim()
+      ? conversationId.trim()
+      : hashKey([systemPrompt, ...messages.map((m) => extractTextFromMessage(m))]);
+  const projectPath = parseProjectPath((body as Record<string, unknown>).projectPath);
+
+  const session = await localChat.getOrCreateSession(key, model, projectPath);
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  const abort = attachAbortOnClose(res);
+  try {
+    await localChat.runTurn(session, text, model, systemPrompt, res, abort.signal);
+  } catch (err) {
+    if (abort.signal.aborted) {
+      // 客户端断开：静默结束（runTurn 已中断本地回合）。
+      return;
+    }
+    console.error("Local chat error:", err);
+    if (!res.headersSent) {
+      if (err instanceof GatewayError) return sendGatewayError(res, err);
+      return sendGatewayError(
+        res,
+        GatewayError.upstream(err instanceof Error ? err.message : String(err)),
+      );
+    }
+    try {
+      const message = err instanceof Error ? err.message : String(err);
+      res.write(
+        `event: chat_error\n` +
+          `data: ${JSON.stringify({ message, type: "upstream_error", code: "provider_error" })}\n\n`,
+      );
+      res.write("data: [DONE]\n\n");
+      res.end();
+    } catch {
+      // response already ended
+    }
+  }
+}
+
+function buildCorsOptions(origins: string[]): cors.CorsOptions {
+  const hasWildcard = origins.some((origin) => origin.trim() === "*");
+  return {
+    origin: hasWildcard ? "*" : origins.length > 0 ? origins : false,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Authorization", "Content-Type"],
+  };
+}
+
+function gatewayAuthMiddleware(apiKey: string) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const header = req.header("authorization");
+    if (!header || !header.startsWith("Bearer ")) {
+      return sendGatewayError(res, GatewayError.unauthorized());
+    }
+    const token = header.slice("Bearer ".length).trim();
+    if (token !== apiKey) {
+      return sendGatewayError(res, GatewayError.unauthorized());
+    }
+    next();
+  };
+}
+
+function isLoopbackRequest(req: Request): boolean {
+  const address = req.socket.remoteAddress || "";
+  return address === "::1" || address === "127.0.0.1" || address.startsWith("::ffff:127.");
+}
+
+function sendGatewayError(res: Response, err: GatewayError): void {
+  res.status(err.status).json(err.toResponse());
+}
+
+function sendRouteError(res: Response, err: unknown, fallback: string): void {
+  if (err instanceof GatewayError) return sendGatewayError(res, err);
+  console.error(`${fallback}:`, err);
+  return sendGatewayError(
+    res,
+    GatewayError.upstream(err instanceof Error ? err.message : fallback),
+  );
+}
+
+function requiredQuery(req: Request, name: string): string {
+  const value = req.query[name];
+  if (typeof value !== "string" || !value.trim()) {
+    throw GatewayError.invalidRequest(`${name} 是必填项`);
+  }
+  return value.trim();
+}
+
+function requiredBodyString(body: Record<string, unknown>, name: string): string {
+  const value = body[name];
+  if (typeof value !== "string" || !value.trim()) {
+    throw GatewayError.invalidRequest(`${name} 是必填项`);
+  }
+  return value.trim();
+}
+
+/**
+ * 构造 agent 循环用的上游流请求：调用代理的 `forwardChatRequest`，
+ * 非 2xx 转成 GatewayError（保持与透传一致的错误行为），返回 SSE body。
+ */
+function buildStreamRequest(endpoint: ProviderEndpoint) {
+  return async (requestBody: ChatCompletionRequest): Promise<ReadableStream<Uint8Array>> => {
+    const upstream = await forwardChatRequest(endpoint, requestBody);
+    if (!upstream.ok) {
+      const text = await upstream.text().catch(() => "");
+      throw GatewayError.upstream(
+        `upstream ${endpoint.api} request failed with status ${upstream.status}: ${text}`,
+      );
+    }
+    if (!upstream.body) {
+      throw GatewayError.upstream(`No response body from upstream ${endpoint.api} stream`);
+    }
+    return upstream.body;
+  };
+}
+
+/** True when the request `tools` array declares a `web_search` function tool. */
+function isWebSearchTool(tool: unknown): boolean {
+  if (typeof tool !== "object" || tool === null) return false;
+  const fn = (tool as { function?: unknown }).function;
+  return typeof fn === "object" && fn !== null && (fn as { name?: unknown }).name === "web_search";
+}
+
+function hasWebSearchTool(tools: unknown): boolean {
+  return Array.isArray(tools) && tools.some(isWebSearchTool);
+}
+
+/** Remove the `web_search` tool from the request (used when no search backend). */
+function stripWebSearchTool(body: ChatCompletionRequest): void {
+  const tools = body.tools;
+  if (!Array.isArray(tools)) return;
+  const filtered = tools.filter((tool) => !isWebSearchTool(tool));
+  if (filtered.length === 0) {
+    delete body.tools;
+  } else {
+    body.tools = filtered;
+  }
+}
+
+function parseProjectPath(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") throw GatewayError.invalidRequest("projectPath 必须是字符串");
+  const projectPath = value.trim();
+  if (!projectPath) return undefined;
+  if (!isAbsolute(projectPath)) {
+    throw GatewayError.invalidRequest("projectPath 必须是绝对路径");
+  }
+  try {
+    if (!statSync(projectPath).isDirectory()) {
+      throw new Error("不是目录");
+    }
+  } catch {
+    throw GatewayError.invalidRequest(`项目目录不存在或不可访问：${projectPath}`);
+  }
+  return projectPath;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}

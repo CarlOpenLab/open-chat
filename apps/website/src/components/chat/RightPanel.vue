@@ -115,7 +115,7 @@ const usagePercent = 34;
             <Progress
               :percent="usagePercent"
               :show-info="false"
-              :stroke-color="'#3B82F6'"
+              :stroke-color="'var(--brand-gauge)'"
               :trail-color="'var(--brand-surface-subtle)'"
               :size="4"
             />

@@ -3,23 +3,25 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./app": "./src/app.ts"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js"
+    "build": "esbuild src/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist/index.cjs",
+    "start": "node dist/index.cjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
-    "@antdv-next/x-sdk": "catalog:",
     "cors": "catalog:",
-    "express": "catalog:",
-    "smol-toml": "catalog:",
-    "vue": "catalog:"
+    "express": "catalog:"
   },
   "devDependencies": {
     "@types/cors": "catalog:",
     "@types/express": "catalog:",
     "@types/node": "catalog:",
+    "esbuild": "catalog:",
     "tsx": "^4.21.0",
     "typescript": "catalog:"
   }

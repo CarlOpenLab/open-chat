@@ -127,6 +127,20 @@ export class AgentManager {
     return this.managerFor(agentId).replyPermission(permissionId, response);
   }
 
+  /** 订阅 ACP 会话实时输出（SSE）；返回是否找到会话。原生 agent 不支持。 */
+  subscribeSessionStream(agentId: string, conversationId: string, res: ServerResponse): boolean {
+    if (this.acp.hasAgent(agentId)) {
+      return this.acp.subscribeSessionStream(agentId, conversationId, res);
+    }
+    return false;
+  }
+
+  /** 取消运行中的 ACP 回合；原生 agent 返回 false（无服务端回合可取消）。 */
+  async cancelTurn(agentId: string, conversationId: string): Promise<boolean> {
+    if (this.acp.hasAgent(agentId)) return this.acp.cancelTurn(agentId, conversationId);
+    return false;
+  }
+
   stop(): void {
     this.native.stop();
     this.acp.stop();

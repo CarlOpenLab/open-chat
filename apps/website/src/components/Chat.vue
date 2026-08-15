@@ -9,6 +9,7 @@ import { API_BASE_URL, GATEWAY_API_KEY, type WebSearchSourceItem } from "../serv
 import {
   OpenChatProvider,
   WEB_SEARCHING_MARKER,
+  type AcpRunStateNotice,
   type OpenChatParams,
   type PermissionRequest,
 } from "../services/OpenChatProvider";
@@ -29,11 +30,14 @@ import { FILE_WORKSPACE_SYSTEM_PROMPT } from "../prompts/fileWorkspace";
 import { loadChatState } from "../services/chatStorage";
 import {
   API_AGENT,
+  cancelAcpTurn,
   flattenAcpSelectOptions,
   loadAcpAgents,
   loadAcpProviderSessions,
   loadAcpSession,
   setAcpSessionConfig,
+  subscribeAcpSessionStream,
+  type AcpSessionHistoryMessage,
   type AcpSessionState,
   type AgentView,
 } from "../services/acp";
@@ -186,6 +190,11 @@ const agents = ref<AgentView[]>([API_AGENT]);
 const activeAgentId = ref("api");
 const acpSession = ref<AcpSessionState | null>(null);
 const acpSessionLoading = ref(false);
+/** ACP 会话运行状态（running / idle / requires_action），由服务端 activeRuns 推导经 /api/acp/session 返回。 */
+const acpRunState = ref<AcpRunStateNotice | null>(null);
+/** 会话实时输出订阅（多标签 / 刷新恢复后观看运行中的回合）。 */
+const acpStreamController = ref<AbortController | null>(null);
+let acpStreamMessageSeq = 0;
 const draftConversationKey = ref("");
 
 // 面板尺寸（sidebar 180–420，right panel 280–1000）
@@ -257,10 +266,12 @@ const activeAgent = computed(
 );
 const isAcpAgent = computed(() => activeAgent.value.kind === "acp");
 const usesAcpProtocol = computed(() => activeAgent.value.protocol === "ACP");
-const isPiAgent = computed(
-  () =>
-    activeAgent.value.id.toLowerCase() === "pi" || activeAgent.value.name.toLowerCase() === "pi",
-);
+// pi / omp（Oh My Pi）走原生 RPC，无权限事件，权限固定为完全访问。
+const isPiAgent = computed(() => {
+  const id = activeAgent.value.id.toLowerCase();
+  const name = activeAgent.value.name.toLowerCase();
+  return id === "pi" || id === "omp" || name === "pi" || name === "oh my pi";
+});
 const effectivePermissionMode = computed(() => (isPiAgent.value ? "full" : permissionMode.value));
 
 // ============ 模型加载 ============
@@ -366,6 +377,8 @@ const refreshAcpSession = async () => {
     );
     if (sequence !== acpSessionLoadSequence) return;
     acpSession.value = session;
+    // 以服务端 activeRuns 为准；若回合恰在本次加载后结束，轮询（pollAcpRunState）兜底纠正。
+    acpRunState.value = session.running ? { state: "running" } : null;
     if (conversation && conversation.agentId === activeAgentId.value) {
       if (
         isAcpAgent.value &&
@@ -628,6 +641,9 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
   requestPlaceholder: () => ({ content: "", role: "assistant" }),
 });
 
+/** 输入区忙碌态：本地请求进行中，或 ACP 会话在跑（多标签 / 刷新恢复，可停止）。 */
+const inputBusy = computed(() => isRequesting.value || acpRunState.value?.state === "running");
+
 // ============ 会话持久化 ============
 
 const {
@@ -793,6 +809,7 @@ const attachPendingSearchSources = () => {
 watch(isRequesting, (requesting) => {
   if (requesting) {
     requestStartedAt.value = Date.now();
+    acpRunState.value = isAcpAgent.value ? { state: "running" } : null;
     return;
   }
   attachPendingSearchSources();
@@ -800,6 +817,126 @@ watch(isRequesting, (requesting) => {
   pendingA2UISurfaceId.value = "";
   pendingPermission.value = null;
   requestStartedAt.value = 0;
+  // 请求结束：会话必然回到空闲，清掉过期的 ACP 运行状态
+  acpRunState.value = null;
+});
+
+/** ACP 运行态轮询：会话在跑但不是本标签页发起的请求（刷新恢复 / 多标签页）时，
+ * 定期查询服务端，回合结束后同步最终 history 并清除运行态。 */
+let acpRunPollTimer: ReturnType<typeof setInterval> | null = null;
+const pollAcpRunState = async () => {
+  if (!isAcpAgent.value || !activeAgent.value.available) return;
+  const conversationId = currentConversationKey.value || ensureDraftConversationKey();
+  const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
+  const sessionProjectPath = conversation?.projectPath ?? projectPath.value;
+  try {
+    const session = await loadAcpSession(
+      activeAgentId.value,
+      conversationId,
+      sessionProjectPath,
+      isAcpAgent.value ? conversation?.providerSessionId : "",
+    );
+    if (session.running) return;
+    acpRunState.value = null;
+    void refreshAcpSession();
+  } catch (error) {
+    // 轮询失败静默处理，下一轮或手动刷新兜底
+    console.error("Failed to poll ACP run state:", error);
+  }
+};
+watch([acpRunState, isRequesting], ([state, requesting]) => {
+  const shouldPoll = state?.state === "running" && !requesting;
+  if (shouldPoll && acpRunPollTimer === null) {
+    acpRunPollTimer = setInterval(() => void pollAcpRunState(), 2000);
+  } else if (!shouldPoll && acpRunPollTimer !== null) {
+    clearInterval(acpRunPollTimer);
+    acpRunPollTimer = null;
+  }
+});
+
+// ============ ACP 会话实时输出（多标签 / 刷新恢复后观看运行中的回合） ============
+
+const stopAcpLiveStream = () => {
+  if (acpStreamController.value) {
+    acpStreamController.value.abort();
+    acpStreamController.value = null;
+  }
+};
+
+/** 复用 OpenChatProvider.transformMessage 累积当前回合输出，与常规请求同一渲染管线。 */
+const handleAcpStreamEvent = (event: string | null, data: string) => {
+  if (data === "[DONE]") return;
+  if (event === "snapshot") {
+    try {
+      const parsed = JSON.parse(data) as { messages?: AcpSessionHistoryMessage[] };
+      if (Array.isArray(parsed.messages)) {
+        setMessages(
+          parsed.messages.map((item) => ({
+            id: item.id,
+            status: "success",
+            message: {
+              role: item.role,
+              content: item.content,
+              ...(item.reasoningContent ? { reasoningContent: item.reasoningContent } : {}),
+              ...(item.toolCalls ? { toolCalls: item.toolCalls } : {}),
+              ...(item.agentPlan ? { agentPlan: item.agentPlan } : {}),
+            },
+          })),
+        );
+        showWelcome.value = false;
+      }
+    } catch (err) {
+      console.error("Failed to parse ACP stream snapshot:", err);
+    }
+    return;
+  }
+  const msgs = messages.value;
+  const last = msgs[msgs.length - 1];
+  const accumulating = !!last && last.message.role === "assistant";
+  const origin: XModelMessage = accumulating ? last.message : { role: "assistant", content: "" };
+  const next = provider.transformMessage({
+    originMessage: origin,
+    chunk: { event: event ?? undefined, data } as unknown as XModelResponse,
+    chunks: [],
+    status: "updating",
+    responseHeaders: new Headers(),
+  });
+  if (accumulating) {
+    setMessages([...msgs.slice(0, -1), { ...last, message: next }]);
+  } else {
+    setMessages([
+      ...msgs,
+      { id: `acp-stream-${++acpStreamMessageSeq}`, status: "updating", message: next },
+    ]);
+  }
+};
+
+/** 订阅当前会话的实时输出（仅 ACP 会话在跑且本页无本地请求时）。 */
+const startAcpLiveStream = () => {
+  stopAcpLiveStream();
+  if (!isAcpAgent.value || !activeAgent.value.available) return;
+  if (acpRunState.value?.state !== "running" || isRequesting.value) return;
+  const conversationId = currentConversationKey.value || ensureDraftConversationKey();
+  const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
+  if (!conversation) return;
+  const controller = subscribeAcpSessionStream(
+    activeAgentId.value,
+    conversationId,
+    conversation.projectPath ?? projectPath.value,
+    handleAcpStreamEvent,
+    () => {
+      if (acpStreamController.value !== controller) return;
+      acpStreamController.value = null;
+      // 回合结束：服务端历史已完整（含用户消息与工具调用），以最终状态收尾
+      void refreshAcpSession();
+    },
+  );
+  acpStreamController.value = controller;
+};
+
+watch([acpRunState, isRequesting, currentConversationKey, activeAgentId], () => {
+  if (acpRunState.value?.state === "running" && !isRequesting.value) startAcpLiveStream();
+  else stopAcpLiveStream();
 });
 
 watch([activeAgentId, currentConversationKey, isHydrating], () => {
@@ -901,6 +1038,11 @@ onBeforeUnmount(() => {
   window.removeEventListener("popstate", handleRoutePopState);
   window.removeEventListener("mousemove", handleResizeMove);
   window.removeEventListener("mouseup", handleResizeEnd);
+  if (acpRunPollTimer !== null) {
+    clearInterval(acpRunPollTimer);
+    acpRunPollTimer = null;
+  }
+  stopAcpLiveStream();
 });
 
 // ============ 面板拖拽调整宽度 ============
@@ -989,6 +1131,11 @@ const handlePromptClick = (info: { data: { key?: string; description?: string } 
 };
 
 const handleCancel = () => {
+  // ACP：断连不再自动取消回合，停止必须先调服务端取消接口
+  if (isAcpAgent.value) {
+    const conversationId = activeRequestConversationKey.value || currentConversationKey.value;
+    if (conversationId) void cancelAcpTurn(activeAgentId.value, conversationId);
+  }
   abort();
 };
 
@@ -1471,7 +1618,8 @@ const handleCommandPaletteSelectConversation = (key: string) => {
 
       <ChatInput
         v-model="content"
-        :loading="isRequesting"
+        :loading="inputBusy"
+        :run-state="acpRunState?.state ?? null"
         :current-model="inputCurrentModel"
         :current-model-label="inputCurrentModelLabel"
         :model-catalog="inputModelCatalog"

@@ -55,6 +55,8 @@ export interface AcpSessionState {
   modes?: unknown;
   history?: AcpSessionHistoryMessage[];
   loadSupported?: boolean;
+  /** 该 ACP 会话当前是否正在运行（服务端 activeRuns，回合进行中为 true）。 */
+  running?: boolean;
 }
 
 export interface AcpSessionHistoryMessage {
@@ -144,6 +146,76 @@ export function flattenAcpSelectOptions(
   options: AcpConfigSelectOption[] | AcpConfigSelectGroup[],
 ): AcpConfigSelectOption[] {
   return options.flatMap((option) => ("options" in option ? option.options : [option]));
+}
+
+/** 订阅 ACP 会话实时输出（SSE）。协议：先收到 `snapshot`（已完成历史 + 当前回合用户消息），
+ * 随后是当前回合输出（data / tool_call / acp_plan / chat_permission …），回合结束收到 [DONE] 并关闭。
+ * 返回 AbortController；`onEnd` 在流关闭（正常或出错）时回调一次。 */
+export function subscribeAcpSessionStream(
+  agentId: string,
+  conversationId: string,
+  projectPath: string,
+  onEvent: (event: string | null, data: string) => void,
+  onEnd: () => void,
+): AbortController {
+  const controller = new AbortController();
+  const query = new URLSearchParams({ agentId, conversationId });
+  if (projectPath.trim()) query.set("projectPath", projectPath.trim());
+  void (async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/acp/session/stream?${query}`, {
+        headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let separator: number;
+        while ((separator = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, separator);
+          buffer = buffer.slice(separator + 2);
+          if (!frame.trim() || frame.startsWith(":")) continue;
+          let event: string | null = null;
+          const dataLines: string[] = [];
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice("event:".length).trim();
+            else if (line.startsWith("data:")) {
+              dataLines.push(line.slice("data:".length).trimStart());
+            }
+          }
+          if (dataLines.length > 0) onEvent(event, dataLines.join("\n"));
+        }
+      }
+    } catch (error) {
+      if ((error as Error)?.name !== "AbortError") {
+        console.error("ACP session stream error:", error);
+      }
+    } finally {
+      onEnd();
+    }
+  })();
+  return controller;
+}
+
+/** 取消运行中的 ACP 回合（多标签 / 刷新恢复场景下停止孤儿回合）。 */
+export async function cancelAcpTurn(agentId: string, conversationId: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/acp/session/cancel`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : {}),
+      },
+      body: JSON.stringify({ agentId, conversationId }),
+    });
+  } catch (error) {
+    console.error("Failed to cancel ACP turn:", error);
+  }
 }
 
 async function requestAcpSession(url: string, init: RequestInit = {}): Promise<AcpSessionState> {

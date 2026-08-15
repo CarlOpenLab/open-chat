@@ -28,6 +28,3 @@ dist-ssr
 .qwen
 .env
 .env.*
-
-# Local provider config (contains the optional Tavily search key)
-apps/server/config/providers.toml

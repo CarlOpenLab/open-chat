@@ -41,6 +41,8 @@ export interface AcpSessionStateView {
   modes: NewSessionResponse["modes"];
   history: AcpSessionHistoryMessage[];
   loadSupported: boolean;
+  /** 该 ACP 会话当前是否正在运行（服务端 activeRuns，回合进行中为 true）。 */
+  running: boolean;
 }
 
 export interface AcpSessionHistoryMessage {
@@ -106,7 +108,18 @@ interface AcpHistoryCollector {
   activeRole: "user" | "assistant" | null;
 }
 
+/** 会话事件流缓冲条目（SSE 帧的序列化形态）。 */
+interface AcpBusEvent {
+  /** SSE 事件名；null 表示普通 `data:` 帧。 */
+  event: string | null;
+  data: string;
+}
+
 const PROCESS_START_TIMEOUT_MS = 15_000;
+/** 每个会话保留的最近事件数（重放上限）。 */
+const BUS_BUFFER_LIMIT = 2000;
+/** 会话历史消息数上限（防长会话内存膨胀）。 */
+const HISTORY_MESSAGE_LIMIT = 2000;
 
 export class AcpManager {
   private readonly runtimes = new Map<string, AcpRuntime>();
@@ -114,6 +127,10 @@ export class AcpManager {
   private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private readonly historyCollectors = new Map<string, AcpHistoryCollector>();
+  private readonly busBuffers = new Map<string, AcpBusEvent[]>();
+  private readonly busSubscribers = new Map<string, Set<ServerResponse>>();
+  /** 各会话当前回合开始时历史消息数（快照重放的分界点）。 */
+  private readonly turnHistoryStart = new Map<string, number>();
 
   constructor(private readonly config: AcpConfig) {
     for (const agent of config.agents) {
@@ -157,10 +174,18 @@ export class AcpManager {
     sessionId: string;
     createdAt: number;
     lastUsed: number;
+    running: boolean;
   }> {
     return [...this.sessions.values()]
       .filter((entry) => !agentId || entry.agentId === agentId)
-      .map(({ response: _response, history: _history, ...entry }) => entry)
+      .map((entry) => ({
+        agentId: entry.agentId,
+        conversationId: entry.conversationId,
+        sessionId: entry.sessionId,
+        createdAt: entry.createdAt,
+        lastUsed: entry.lastUsed,
+        running: this.activeRuns.has(entry.sessionId),
+      }))
       .sort((left, right) => right.lastUsed - left.lastUsed);
   }
 
@@ -202,7 +227,11 @@ export class AcpManager {
       projectPath,
       providerSessionId,
     );
-    return sessionStateView(session, this.supportsSessionLoad(runtime));
+    return sessionStateView(
+      session,
+      this.supportsSessionLoad(runtime),
+      this.activeRuns.has(session.sessionId),
+    );
   }
 
   async setSessionConfigOption(
@@ -236,7 +265,11 @@ export class AcpManager {
     );
     session.response = { ...session.response, configOptions: response.configOptions };
     session.lastUsed = Date.now();
-    return sessionStateView(session, this.supportsSessionLoad(runtime));
+    return sessionStateView(
+      session,
+      this.supportsSessionLoad(runtime),
+      this.activeRuns.has(session.sessionId),
+    );
   }
 
   async runTurn(
@@ -246,7 +279,7 @@ export class AcpManager {
     projectPath: string | undefined,
     providerSessionId: string | undefined,
     res: ServerResponse,
-    signal: AbortSignal,
+    _signal: AbortSignal,
   ): Promise<void> {
     const runtime = this.getAvailableRuntime(agentId);
 
@@ -270,30 +303,49 @@ export class AcpManager {
     this.activeRuns.set(session.sessionId, run);
     session.lastUsed = Date.now();
 
-    const cancel = () => {
-      void connection.cancel({ sessionId: session.sessionId }).catch(() => {});
-      this.cancelPermissionsForSession(session.sessionId);
-    };
-    signal.addEventListener("abort", cancel, { once: true });
+    // 回合边界：清空事件缓冲（重放只覆盖当前回合），并把用户消息写入历史
+    // （快照按 turnHistoryStart 截断，新订阅者以此重建会话视图）。
+    this.busBuffers.delete(session.sessionId);
+    const collector = this.historyCollectors.get(session.sessionId);
+    if (collector) {
+      collector.messages.push({
+        id: `acp-history-${collector.nextId++}`,
+        role: "user",
+        content: text,
+      });
+      collector.activeRole = "user";
+      if (collector.messages.length > HISTORY_MESSAGE_LIMIT) {
+        collector.messages.splice(0, collector.messages.length - HISTORY_MESSAGE_LIMIT);
+      }
+      this.turnHistoryStart.set(session.sessionId, collector.messages.length);
+    }
 
     try {
       const response = await connection.prompt({
         sessionId: session.sessionId,
         prompt: [{ type: "text", text }],
       });
-      writeCustomEvent(res, "acp_turn", {
+      this.emitCustom(session.sessionId, res, "acp_turn", {
         agentId,
         sessionId: session.sessionId,
         stopReason: response.stopReason,
         usage: response.usage,
       });
-      writeChunk(res, run.model, {}, "stop");
-      res.write("data: [DONE]\n\n");
-      res.end();
+      this.emitChunk(session.sessionId, res, run.model, {}, "stop");
+      if (!res.writableEnded && !res.destroyed) {
+        res.write("data: [DONE]\n\n");
+        res.end();
+      }
+    } catch (err) {
+      this.publishToBus(session.sessionId, "chat_error", {
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     } finally {
-      signal.removeEventListener("abort", cancel);
       this.activeRuns.delete(session.sessionId);
+      this.turnHistoryStart.delete(session.sessionId);
       this.cancelPermissionsForSession(session.sessionId);
+      this.endSessionStream(session.sessionId);
     }
   }
 
@@ -327,6 +379,9 @@ export class AcpManager {
     this.historyCollectors.clear();
     this.activeRuns.clear();
     this.sessions.clear();
+    this.busBuffers.clear();
+    this.busSubscribers.clear();
+    this.turnHistoryStart.clear();
     for (const runtime of this.runtimes.values()) {
       runtime.child?.kill("SIGTERM");
       runtime.connection = null;
@@ -367,37 +422,37 @@ export class AcpManager {
 
       const collector: AcpHistoryCollector = { messages: [], nextId: 0, activeRole: null };
       this.historyCollectors.set(normalizedProviderSessionId, collector);
-      try {
-        const response = await connection.loadSession({
-          sessionId: normalizedProviderSessionId,
-          cwd,
-          mcpServers: [],
-        });
-        const entry: AcpSessionEntry = {
-          agentId: runtime.config.id,
-          conversationId,
-          sessionId: normalizedProviderSessionId,
-          response,
-          history: collector.messages,
-          createdAt: Date.now(),
-          lastUsed: Date.now(),
-        };
-        this.sessions.set(key, entry);
-        return entry;
-      } finally {
-        this.historyCollectors.delete(normalizedProviderSessionId);
-      }
+      const response = await connection.loadSession({
+        sessionId: normalizedProviderSessionId,
+        cwd,
+        mcpServers: [],
+      });
+      const entry: AcpSessionEntry = {
+        agentId: runtime.config.id,
+        conversationId,
+        sessionId: normalizedProviderSessionId,
+        response,
+        history: collector.messages,
+        createdAt: Date.now(),
+        lastUsed: Date.now(),
+      };
+      this.sessions.set(key, entry);
+      return entry;
     }
     const response = await connection.newSession({
       cwd,
       mcpServers: [],
     });
+    // 常驻 collector：新会话也在生命周期内持续收集消息（含后续回合），
+    // 供状态查询与订阅快照重建完整会话视图。
+    const collector: AcpHistoryCollector = { messages: [], nextId: 0, activeRole: null };
+    this.historyCollectors.set(response.sessionId, collector);
     const entry: AcpSessionEntry = {
       agentId: runtime.config.id,
       conversationId,
       sessionId: response.sessionId,
       response,
-      history: [],
+      history: collector.messages,
       createdAt: Date.now(),
       lastUsed: Date.now(),
     };
@@ -514,33 +569,38 @@ export class AcpManager {
       }
     }
     const run = this.activeRuns.get(notification.sessionId);
-    if (!run || run.response.writableEnded) return;
+    const res = run?.response;
+    const model = run?.model;
     const update = notification.update;
     switch (update.sessionUpdate) {
       case "agent_message_chunk": {
         const text = contentText(update.content);
-        if (text) writeChunk(run.response, run.model, { content: text });
+        if (text) this.emitChunk(notification.sessionId, res, model ?? "acp", { content: text });
         break;
       }
       case "agent_thought_chunk": {
         const text = contentText(update.content);
-        if (text) writeChunk(run.response, run.model, { reasoning_content: text });
+        if (text) {
+          this.emitChunk(notification.sessionId, res, model ?? "acp", {
+            reasoning_content: text,
+          });
+        }
         break;
       }
       case "tool_call":
       case "tool_call_update":
-        writeCustomEvent(run.response, "tool_call", normalizeToolCall(update));
+        this.emitCustom(notification.sessionId, res, "tool_call", normalizeToolCall(update));
         break;
       case "plan":
       case "plan_update":
-        writeCustomEvent(run.response, "acp_plan", update);
+        this.emitCustom(notification.sessionId, res, "acp_plan", update);
         break;
       case "available_commands_update":
       case "current_mode_update":
       case "config_option_update":
       case "session_info_update":
       case "usage_update":
-        writeCustomEvent(run.response, "acp_session", update);
+        this.emitCustom(notification.sessionId, res, "acp_session", update);
         break;
       default:
         break;
@@ -555,7 +615,7 @@ export class AcpManager {
     if (!run) return Promise.resolve({ outcome: { outcome: "cancelled" } });
     const id = randomUUID();
     const patterns = params.toolCall.locations?.map((location) => location.path) ?? [];
-    writeCustomEvent(run.response, "chat_permission", {
+    this.emitCustom(params.sessionId, run.response, "chat_permission", {
       id,
       version: "acp",
       agentId,
@@ -593,9 +653,130 @@ export class AcpManager {
       pending.resolve({ outcome: { outcome: "cancelled" } });
     }
   }
+
+  /** 订阅会话事件流：先发历史快照（含当前回合的用户消息），再重放当前回合输出，随后实时推送。找不到会话返回 false。 */
+  subscribeSessionStream(agentId: string, conversationId: string, res: ServerResponse): boolean {
+    const session = [...this.sessions.values()].find(
+      (entry) => entry.agentId === agentId && entry.conversationId === conversationId,
+    );
+    if (!session) return false;
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    // 1) 快照：当前回合之前的历史（含注入的用户消息），新订阅者据此重建会话视图
+    const snapshotEnd = this.turnHistoryStart.get(session.sessionId) ?? session.history.length;
+    const snapshotMessages = session.history.slice(0, snapshotEnd);
+    res.write(`event: snapshot\ndata: ${JSON.stringify({ messages: snapshotMessages })}\n\n`);
+    // 2) 重放当前回合已产生的输出
+    const buffer = this.busBuffers.get(session.sessionId);
+    if (buffer) {
+      for (const entry of buffer) AcpManager.writeBusFrame(res, entry);
+    }
+    // 3) 实时推送
+    const subscribers = this.busSubscribers.get(session.sessionId) ?? new Set<ServerResponse>();
+    subscribers.add(res);
+    this.busSubscribers.set(session.sessionId, subscribers);
+    res.on("close", () => {
+      subscribers.delete(res);
+      if (subscribers.size === 0) this.busSubscribers.delete(session.sessionId);
+    });
+    return true;
+  }
+
+  /** 取消正在运行的回合（多标签 / 刷新恢复后停止孤儿回合）；无运行回合返回 false。 */
+  async cancelTurn(agentId: string, conversationId: string): Promise<boolean> {
+    const session = [...this.sessions.values()].find(
+      (entry) => entry.agentId === agentId && entry.conversationId === conversationId,
+    );
+    if (!session) return false;
+    const run = this.activeRuns.get(session.sessionId);
+    if (!run) return false;
+    const runtime = this.getAvailableRuntime(agentId);
+    const connection = await this.connectionFor(runtime);
+    void connection.cancel({ sessionId: session.sessionId }).catch(() => {});
+    this.cancelPermissionsForSession(session.sessionId);
+    return true;
+  }
+
+  /** 发布事件到会话总线：写入缓冲 + 推送所有订阅者（与发起者 SSE 写盘解耦）。 */
+  private publishToBus(sessionId: string, event: string | null, data: unknown): void {
+    const payload = typeof data === "string" ? data : JSON.stringify(data);
+    const entry: AcpBusEvent = { event, data: payload };
+    const buffer = this.busBuffers.get(sessionId) ?? [];
+    buffer.push(entry);
+    if (buffer.length > BUS_BUFFER_LIMIT) {
+      buffer.splice(0, buffer.length - BUS_BUFFER_LIMIT);
+    }
+    this.busBuffers.set(sessionId, buffer);
+    const subscribers = this.busSubscribers.get(sessionId);
+    if (subscribers) {
+      for (const res of subscribers) AcpManager.writeBusFrame(res, entry);
+    }
+  }
+
+  private static writeBusFrame(res: ServerResponse, entry: AcpBusEvent): void {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(
+      entry.event ? `event: ${entry.event}\ndata: ${entry.data}\n\n` : `data: ${entry.data}\n\n`,
+    );
+  }
+
+  /** 回合结束：向所有订阅者广播 [DONE] 并关闭连接（缓冲保留供后续重放）。 */
+  private endSessionStream(sessionId: string): void {
+    const subscribers = this.busSubscribers.get(sessionId);
+    if (!subscribers) return;
+    for (const res of subscribers) {
+      if (res.writableEnded || res.destroyed) continue;
+      res.write("data: [DONE]\n\n");
+      res.end();
+    }
+    this.busSubscribers.delete(sessionId);
+  }
+
+  /** 向发起者 SSE 与会话总线同时写 OpenAI 兼容 chunk。 */
+  private emitChunk(
+    sessionId: string,
+    res: ServerResponse | undefined,
+    model: string,
+    delta: Record<string, unknown>,
+    finishReason: string | null = null,
+  ): void {
+    const payload = {
+      id: `chatcmpl-${Date.now()}`,
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+    };
+    this.publishToBus(sessionId, null, payload);
+    if (res && !res.writableEnded && !res.destroyed) {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    }
+  }
+
+  /** 向发起者 SSE 与会话总线同时写自定义事件。 */
+  private emitCustom(
+    sessionId: string,
+    res: ServerResponse | undefined,
+    event: string,
+    data: unknown,
+  ): void {
+    this.publishToBus(sessionId, event, data);
+    if (res && !res.writableEnded && !res.destroyed) {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+  }
 }
 
-function sessionStateView(session: AcpSessionEntry, loadSupported: boolean): AcpSessionStateView {
+function sessionStateView(
+  session: AcpSessionEntry,
+  loadSupported: boolean,
+  running: boolean,
+): AcpSessionStateView {
   return {
     agentId: session.agentId,
     conversationId: session.conversationId,
@@ -604,6 +785,7 @@ function sessionStateView(session: AcpSessionEntry, loadSupported: boolean): Acp
     modes: session.response.modes ?? null,
     history: session.history,
     loadSupported,
+    running,
   };
 }
 
@@ -720,24 +902,4 @@ function stringifyToolOutput(value: unknown): string | undefined {
   } catch {
     return "[无法序列化的工具输出]";
   }
-}
-
-function writeChunk(
-  res: ServerResponse,
-  model: string,
-  delta: Record<string, unknown>,
-  finishReason: string | null = null,
-): void {
-  const payload = {
-    id: `chatcmpl-${Date.now()}`,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [{ index: 0, delta, finish_reason: finishReason }],
-  };
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
-}
-
-function writeCustomEvent(res: ServerResponse, event: string, data: unknown): void {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }

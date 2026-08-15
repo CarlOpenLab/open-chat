@@ -50,6 +50,7 @@ The gateway keeps provider-specific details at the edge. The website can therefo
 | Codex                 | `codex`          | app-server JSON-RPC               |
 | Claude Code           | `claude`         | native `stream-json` stdin/stdout |
 | Pi                    | `pi`             | RPC stdin/stdout                  |
+| Oh My Pi              | `omp`            | RPC stdin/stdout (Pi-compatible)  |
 | OpenCode              | `opencode`       | local HTTP + SSE                  |
 | Custom ACP agent      | your executable  | Agent Client Protocol             |
 | OpenAI-compatible API | provider URL     | HTTP streaming                    |
@@ -64,27 +65,48 @@ Open Chat requires Node.js `>=22.12.0` and uses Vite+ for the toolchain.
 vp install
 ```
 
-Create `apps/server/config/providers.toml` from the example file:
+Start the workspace with a single command:
 
 ```bash
-cp apps/server/config/providers.example.toml apps/server/config/providers.toml
+pnpm open-chat
 ```
 
-For a minimal local setup, enable ACP in `providers.toml`:
+`open-chat` starts the local gateway, serves the pre-built UI from the same
+port, opens your browser at `http://127.0.0.1:8082`, and stops cleanly on
+`Ctrl+C`. It is a purely local tool — nothing is deployed to a server.
 
-```toml
-bind_addr = "127.0.0.1:8082"
-cors_allowed_origins = ["http://localhost:3000"]
+First run notes:
 
-[local]
-enabled = false
+- **No configuration file — nothing to set up.** The gateway runs on built-in
+  defaults and auto-discovers the CLI agents installed on your machine: codex /
+  claude / pi / opencode / omp (Oh My Pi). Commands are found on `PATH`,
+  `~/.local/bin`, mise shims, Homebrew, and other common locations; anything
+  not installed simply shows up as unavailable in the UI.
+- If the UI has not been built yet, run `pnpm open-chat --build` (builds the
+  website and the CLI bundle) and start again.
 
-[acp]
-enabled = true
-permission_timeout_ms = 300000
+CLI reference:
+
+```text
+pnpm open-chat                  # build-free start (tsx fallback) or bundled CLI
+pnpm open-chat --build          # build website + CLI bundle, then exit
+pnpm open-chat --dev            # dev mode: Vite dev server on :3000 + gateway
+pnpm open-chat --no-open        # do not auto-open the browser
+pnpm open-chat --port 0         # auto-assign an available port
+pnpm open-chat --host 0.0.0.0   # listen on all interfaces
 ```
 
-Start the website and gateway together:
+To expose `open-chat` as a global command (macOS/Linux):
+
+```bash
+pnpm build
+cd tools/open-chat && pnpm link
+open-chat
+```
+
+### Development mode
+
+For development with hot reload, run the website and gateway separately:
 
 ```bash
 vp run dev
@@ -101,8 +123,10 @@ The website development server proxies `/api` requests to the gateway.
 The gateway exposes provider-neutral endpoints for the workspace UI:
 
 - `GET /api/acp/agents` lists configured agents and their `installed` / `available` status.
-- `GET /api/acp/sessions?agentId=codex` lists active in-memory session mappings.
-- `GET /api/acp/session?agentId=codex&conversationId=...` creates or reuses a native or ACP session and returns its modes and configuration options.
+- `GET /api/acp/sessions?agentId=codex` lists active in-memory session mappings, each with a `running` flag reflecting whether a turn is in progress.
+- `GET /api/acp/session?agentId=codex&conversationId=...` creates or reuses a native or ACP session and returns its modes, configuration options, history, and `running` state.
+- `GET /api/acp/session/stream?agentId=codex&conversationId=...` subscribes to a running ACP session's live output over SSE (snapshot + replay + live frames), so other tabs or a refreshed page can keep watching the turn.
+- `POST /api/acp/session/cancel` stops a running ACP turn (e.g. an orphaned turn after the requesting tab disconnected).
 - `POST /api/acp/session/config` updates a session option, such as the selected model.
 - `POST /api/chat/completions` starts an OpenAI-compatible or local-agent request and can stream normalized events over SSE.
 - `POST /api/chat/permission` resolves permission requests from legacy OpenCode, native CLI, and ACP sessions.
@@ -136,19 +160,25 @@ Copy the address (or use the **link icon** in the header) and open it later, on 
 ## Development commands
 
 ```bash
-vp run dev              # website + gateway
+vp run dev              # website + gateway (hot reload)
+pnpm open-chat --dev    # CLI-managed dev mode (Vite on :3000 + gateway)
+pnpm open-chat          # production mode: gateway serves the built UI
+pnpm open-chat --build  # build website + CLI bundle
 vp run website#dev      # website only
 vp run server#dev       # gateway only
 vp check                # format, lint, and type checks
 vp run server#build
 vp run website#build
+vp run @open-chat/cli#build
 ```
 
 ## Repository layout
 
 ```text
-apps/website    Vue 3 + Antdv Next X workspace UI
-apps/server     Express gateway, native CLI adapters, ACP manager, and API proxy
+apps/website       Vue 3 + Antdv Next X workspace UI (built to dist/)
+apps/server        Express gateway, native CLI adapters, ACP manager, API proxy
+apps/server/src/app.ts      reusable gateway entry (createGatewayApp / startGateway)
+tools/open-chat    open-chat CLI: starts gateway + serves UI + opens browser
 ```
 
 ## Project direction

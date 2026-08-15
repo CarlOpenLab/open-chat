@@ -47,6 +47,12 @@ interface ProviderSessionNotice {
   sessionId: string;
 }
 
+/** ACP 会话运行状态（running / idle / requires_action）。当前由服务端 activeRuns 推导，经 /api/acp/session 返回给前端。 */
+export interface AcpRunStateNotice {
+  state: string;
+  stopReason?: string;
+}
+
 /** OpenAI function-tool definition for web search. Declared in the request
  * `tools` array so the model autonomously decides whether to call it; the
  * gateway intercepts the call and runs the configured search provider. */
