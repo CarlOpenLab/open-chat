@@ -9,7 +9,7 @@ const COMMON_EXECUTABLE_DIRECTORIES = [
   ".volta/bin",
 ];
 
-export function executableSearchPaths(): string[] {
+function executableSearchPaths(): string[] {
   const paths = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
   const userHome = process.env.HOME;
   if (userHome) paths.push(...COMMON_EXECUTABLE_DIRECTORIES.map((path) => join(userHome, path)));

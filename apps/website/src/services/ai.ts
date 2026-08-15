@@ -1,15 +1,3 @@
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-export interface ChatOptions {
-  model?: string;
-  stream?: boolean;
-  temperature?: number;
-  maxTokens?: number;
-}
-
 export interface ModelInfo {
   id: string;
   name?: string;

@@ -2,17 +2,10 @@
  * 会话日期分组：按时间把会话归入「今天 / 昨天 / 本周 / 本月 / 今年 / 更早」。
  */
 
-export type SessionDateGroup = "今天" | "昨天" | "本周" | "本月" | "今年" | "更早";
+type SessionDateGroup = "今天" | "昨天" | "本周" | "本月" | "今年" | "更早";
 
 /** 分组展示顺序（置顶在前，由调用方单独处理） */
-export const DATE_GROUP_ORDER: SessionDateGroup[] = [
-  "今天",
-  "昨天",
-  "本周",
-  "本月",
-  "今年",
-  "更早",
-];
+const DATE_GROUP_ORDER: SessionDateGroup[] = ["今天", "昨天", "本周", "本月", "今年", "更早"];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -42,7 +35,7 @@ const startOfYear = (date: Date) => {
   return d;
 };
 
-export function sessionDateGroupForDate(date: Date, today: Date = new Date()): SessionDateGroup {
+function sessionDateGroupForDate(date: Date, today: Date = new Date()): SessionDateGroup {
   const target = startOfDay(date);
   const todayStart = startOfDay(today);
 
@@ -52,12 +45,6 @@ export function sessionDateGroupForDate(date: Date, today: Date = new Date()): S
   if (target.getTime() >= startOfMonth(todayStart).getTime()) return "本月";
   if (target.getTime() >= startOfYear(todayStart).getTime()) return "今年";
   return "更早";
-}
-
-/** 分组权重，用于排序：置顶 = -1，越近越小 */
-export function dateGroupWeight(group: SessionDateGroup | "置顶"): number {
-  if (group === "置顶") return -1;
-  return DATE_GROUP_ORDER.indexOf(group);
 }
 
 /**

@@ -6,23 +6,17 @@ const A2UI_SUBMISSION_PREFIX = "[表单提交] ";
 export const A2UI_SUBMISSION_MESSAGE_KIND = "a2ui-submission";
 const FENCE = /^[\t ]{0,3}(`{3,}|~{3,})/;
 
-export interface ParsedA2UIContent {
+interface ParsedA2UIContent {
   markdown: string;
   commands: XCardCommand[];
   errors: string[];
   hasPendingBlock: boolean;
 }
 
-export interface A2UIConversationItem {
+interface A2UIConversationItem {
   content: unknown;
   role?: string;
   status?: string;
-}
-
-export interface A2UIConversationState {
-  commands: XCardCommand[];
-  errors: string[];
-  pending: boolean;
 }
 
 export interface A2UIActionPayload {
@@ -294,7 +288,7 @@ function parseCommandBlock(raw: string, blockNumber: number) {
   return { commands, errors };
 }
 
-export function collectCreatedA2UISurfaceIds(items: readonly A2UIConversationItem[]): string[] {
+function collectCreatedA2UISurfaceIds(items: readonly A2UIConversationItem[]): string[] {
   const surfaceIds = new Set<string>();
 
   items.forEach((item) => {
@@ -333,42 +327,6 @@ export function appendA2UISurfaceIdContext(
 - These runtime rules override any earlier fixed surfaceId instruction or example.`;
 
   return [baseSystemPrompt.trim(), runtimeContext].filter(Boolean).join("\n\n");
-}
-
-export function collectA2UIConversationState(
-  items: readonly A2UIConversationItem[],
-): A2UIConversationState {
-  const commands: XCardCommand[] = [];
-  const errors: string[] = [];
-  const activeSurfaceIds = new Set<string>();
-  let pending = false;
-
-  items.forEach((item) => {
-    if (item.role !== "assistant" || typeof item.content !== "string") return;
-    const parsed = parseA2UIContent(item.content);
-    errors.push(...parsed.errors);
-    pending ||= item.status === "loading" && parsed.hasPendingBlock;
-
-    parsed.commands.forEach((command) => {
-      const surfaceId = getA2UISurfaceId(command);
-
-      if ("createSurface" in command) {
-        if (activeSurfaceIds.has(surfaceId)) {
-          errors.push(`A2UI Surface ${surfaceId} 被重复创建`);
-          return;
-        }
-        activeSurfaceIds.add(surfaceId);
-      } else if (!activeSurfaceIds.has(surfaceId)) {
-        errors.push(`A2UI Surface ${surfaceId} 尚未创建`);
-        return;
-      }
-
-      commands.push(command);
-      if ("deleteSurface" in command) activeSurfaceIds.delete(surfaceId);
-    });
-  });
-
-  return { commands, errors, pending };
 }
 
 export function parseA2UIContent(content: string): ParsedA2UIContent {

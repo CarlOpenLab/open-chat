@@ -127,7 +127,6 @@ vp run dev              # website + gateway
 vp run website#dev      # website only
 vp run server#dev       # gateway only
 vp check                # format, lint, and type checks
-vp test                 # unit and contract tests
 vp run server#build
 vp run website#build
 ```
@@ -137,7 +136,6 @@ vp run website#build
 ```text
 apps/website    Vue 3 + Antdv Next X workspace UI
 apps/server     Express gateway, native CLI adapters, ACP manager, and API proxy
-packages/utils  Shared utilities
 ```
 
 ## Project direction

@@ -36,7 +36,7 @@ export interface NativeSessionStateView {
   history?: NativeSessionHistoryMessage[];
 }
 
-export interface NativeSessionHistoryMessage {
+interface NativeSessionHistoryMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
@@ -45,7 +45,7 @@ export interface NativeSessionHistoryMessage {
   agentPlan?: Record<string, unknown>;
 }
 
-export interface NativeProviderSessionView {
+interface NativeProviderSessionView {
   sessionId: string;
   cwd: string;
   title?: string;

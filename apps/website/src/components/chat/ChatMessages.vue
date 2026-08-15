@@ -14,7 +14,6 @@ import type { WebSearchSourceItem } from "../../services/ai";
 import { parseFileWorkspaceContent } from "../../utils/fileWorkspace";
 import AssistantMessageContent from "./AssistantMessageContent.vue";
 import EmptyState from "./EmptyState.vue";
-import StarterPrompts from "./StarterPrompts.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 
 interface Props {
@@ -439,9 +438,7 @@ onBeforeUnmount(() => {
     tabindex="-1"
   >
     <section v-if="showWelcome" class="empty-state m-auto w-[min(100%,760px)] p-0 text-center">
-      <EmptyState>
-        <StarterPrompts @prompt-click="emit('promptClick', $event)" />
-      </EmptyState>
+      <EmptyState />
     </section>
 
     <!-- 转录无头像列，消息贴左/右缘渲染 -->

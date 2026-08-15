@@ -1,6 +1,6 @@
-export type WorkspaceFileStatus = "streaming" | "complete";
+type WorkspaceFileStatus = "streaming" | "complete";
 
-export interface WorkspaceFile {
+interface WorkspaceFile {
   path: string;
   content: string;
   language: string;
@@ -21,7 +21,7 @@ export interface EditableWorkspaceFile extends WorkspaceFile {
   hasIncomingChange: boolean;
 }
 
-export interface WorkspaceDiffStats {
+interface WorkspaceDiffStats {
   added: number;
   removed: number;
 }
@@ -69,7 +69,7 @@ export function isValidWorkspaceFileDraft(value: unknown): value is WorkspaceFil
   );
 }
 
-export interface ParsedFileWorkspaceContent {
+interface ParsedFileWorkspaceContent {
   markdown: string;
   files: WorkspaceFile[];
   errors: string[];
@@ -77,13 +77,13 @@ export interface ParsedFileWorkspaceContent {
   hasPendingBlock: boolean;
 }
 
-export interface FileWorkspaceConversationItem {
+interface FileWorkspaceConversationItem {
   id?: string | number;
   role: string;
   content: unknown;
 }
 
-export interface FileWorkspaceState {
+interface FileWorkspaceState {
   files: WorkspaceFile[];
   errors: string[];
   hasWorkspace: boolean;
@@ -183,7 +183,7 @@ function normalizePath(rawPath: string): string | null {
   return normalized;
 }
 
-export function inferWorkspaceLanguage(path: string): string {
+function inferWorkspaceLanguage(path: string): string {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   return (LANGUAGE_BY_EXTENSION[extension] ?? extension) || "text";
 }

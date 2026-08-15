@@ -2,7 +2,7 @@
  * Gateway errors mirror the OpenAI-style error response shape used by the
  * rust-chat gateway so clients behave consistently across both implementations.
  */
-export interface GatewayErrorInit {
+interface GatewayErrorInit {
   status: number;
   message: string;
   type: string;

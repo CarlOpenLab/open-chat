@@ -52,14 +52,14 @@ export interface AcpSessionHistoryMessage {
   agentPlan?: Record<string, unknown>;
 }
 
-export interface AcpProviderSessionView {
+interface AcpProviderSessionView {
   sessionId: string;
   cwd: string;
   title?: string;
   updatedAt?: string;
 }
 
-export interface AcpProviderSessionsView {
+interface AcpProviderSessionsView {
   supported: boolean;
   sessions: AcpProviderSessionView[];
 }

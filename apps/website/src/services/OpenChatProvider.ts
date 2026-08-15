@@ -42,7 +42,7 @@ export interface PermissionRequest {
   tool?: { messageID?: string; callID?: string };
 }
 
-export interface ProviderSessionNotice {
+interface ProviderSessionNotice {
   agentId?: string;
   sessionId: string;
 }
@@ -50,7 +50,7 @@ export interface ProviderSessionNotice {
 /** OpenAI function-tool definition for web search. Declared in the request
  * `tools` array so the model autonomously decides whether to call it; the
  * gateway intercepts the call and runs the configured search provider. */
-export const WEB_SEARCH_TOOL = {
+const WEB_SEARCH_TOOL = {
   type: "function" as const,
   function: {
     name: "web_search",

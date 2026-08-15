@@ -17,13 +17,13 @@ export interface AgentView extends AcpAgentView {
   kind: "api" | "acp";
 }
 
-export interface AcpConfigSelectOption {
+interface AcpConfigSelectOption {
   value: string;
   name: string;
   description?: string | null;
 }
 
-export interface AcpConfigSelectGroup {
+interface AcpConfigSelectGroup {
   group: string;
   name: string;
   options: AcpConfigSelectOption[];
@@ -36,7 +36,7 @@ interface AcpConfigOptionBase {
   category?: string | null;
 }
 
-export type AcpConfigOption =
+type AcpConfigOption =
   | (AcpConfigOptionBase & {
       type: "select";
       currentValue: string;
@@ -66,14 +66,14 @@ export interface AcpSessionHistoryMessage {
   agentPlan?: Record<string, unknown>;
 }
 
-export interface AcpProviderSession {
+interface AcpProviderSession {
   sessionId: string;
   cwd: string;
   title?: string;
   updatedAt?: string;
 }
 
-export interface AcpProviderSessions {
+interface AcpProviderSessions {
   supported: boolean;
   sessions: AcpProviderSession[];
 }

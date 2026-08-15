@@ -3,7 +3,6 @@ import { CloudUpload, Database, Info, Monitor, Moon, Settings2, Sun, Trash2, X }
 import { Button, Modal, Segmented, Upload } from "antdv-next";
 import { computed, h, ref, watch } from "vue";
 import { APP_VERSION } from "../../version";
-import OpenChatLogo from "../OpenChatLogo.vue";
 
 type ThemeMode = "system" | "light" | "dark";
 type SettingsTab = "general" | "data" | "about";
@@ -68,12 +67,8 @@ const navItems = [
     <div class="settings-dialog">
       <header class="settings-dialog-header">
         <div class="flex min-w-0 items-center gap-3">
-          <span class="settings-dialog-logo">
-            <OpenChatLogo :size="23" title="Open Chat" />
-          </span>
           <div class="min-w-0">
             <h2 class="m-0 truncate text-[15px] font-720">设置</h2>
-            <p class="m-0 mt-0.5 truncate text-[10px] text-brand-muted">调整外观与数据</p>
           </div>
         </div>
         <button

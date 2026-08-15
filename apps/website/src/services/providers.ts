@@ -1,14 +1,14 @@
 import { deleteLocalValue, readLocalValue, writeLocalValue } from "./localDatabase";
 
-export type ProviderApi = "chat/completions" | "responses";
+type ProviderApi = "chat/completions" | "responses";
 
-export interface ProviderModelInfo {
+interface ProviderModelInfo {
   id: string;
   name?: string;
   contextLength?: number;
 }
 
-export interface ProviderView {
+interface ProviderView {
   id: string;
   name: string;
   baseUrl: string;
@@ -20,7 +20,7 @@ export interface ProviderView {
   updatedAt: number;
 }
 
-export interface ProviderInput {
+interface ProviderInput {
   name: string;
   baseUrl: string;
   /** 密钥明文；更新时留空表示保留原有密钥。 */

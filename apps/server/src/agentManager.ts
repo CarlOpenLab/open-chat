@@ -11,7 +11,7 @@ import {
 import { GatewayError } from "./error";
 
 export type AgentView = AcpAgentView | NativeAgentView;
-export type AgentSessionStateView = AcpSessionStateView | NativeSessionStateView;
+type AgentSessionStateView = AcpSessionStateView | NativeSessionStateView;
 
 export class AgentManager {
   private readonly acp: AcpManager;

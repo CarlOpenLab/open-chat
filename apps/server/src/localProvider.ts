@@ -64,7 +64,7 @@ interface OpenCodeSessionEntry {
   server: OpenCodeServer;
 }
 
-export interface LocalProviderSession {
+interface LocalProviderSession {
   sessionId: string;
   cwd: string;
   title?: string;

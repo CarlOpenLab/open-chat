@@ -138,7 +138,7 @@ export function loadConfigFile(path: string): AppConfig {
   return parseConfig(tomlStr);
 }
 
-export function parseConfig(tomlStr: string): AppConfig {
+function parseConfig(tomlStr: string): AppConfig {
   let raw: RawGatewayConfig;
   try {
     raw = parse(tomlStr) as RawGatewayConfig;
@@ -312,7 +312,7 @@ function parseAgentTransport(raw: unknown, id: string, command: string): AgentTr
   return "acp";
 }
 
-export function parseLocal(raw: unknown): LocalConfig {
+function parseLocal(raw: unknown): LocalConfig {
   if (raw === undefined || raw === null) return { ...DEFAULT_LOCAL };
   if (typeof raw !== "object" || Array.isArray(raw)) {
     throw GatewayError.invalidRequest("[local] must be a table");

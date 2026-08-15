@@ -24,7 +24,7 @@ export interface ProviderEndpoint {
   api: ProviderApi;
 }
 
-export function upstreamUrl(endpoint: ProviderEndpoint): string {
+function upstreamUrl(endpoint: ProviderEndpoint): string {
   return `${endpoint.baseUrl.replace(/\/+$/, "")}/${endpoint.api}`;
 }
 
