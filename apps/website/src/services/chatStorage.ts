@@ -13,6 +13,8 @@ export interface PersistedConversation extends Omit<ConversationItemType, "messa
   a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
   systemPrompt?: string;
+  projectPath?: string;
+  providerSessionId?: string;
 }
 
 export interface PersistedChatState {
@@ -53,7 +55,13 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
     currentConversationKey: String(value.currentConversationKey),
     currentModel: value.currentModel,
     conversationList: value.conversationList.map((conversation) => {
-      const { assistant: _assistant, systemPrompt, ...persistedConversation } = conversation;
+      const {
+        assistant: _assistant,
+        systemPrompt,
+        projectPath,
+        providerSessionId,
+        ...persistedConversation
+      } = conversation;
       return {
         ...persistedConversation,
         ...(typeof conversation.modelId === "string" && conversation.modelId
@@ -66,6 +74,12 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
           ? { workspaceDrafts: conversation.workspaceDrafts.filter(isValidWorkspaceFileDraft) }
           : {}),
         ...(typeof systemPrompt === "string" ? { systemPrompt } : {}),
+        ...(typeof projectPath === "string" && projectPath.trim()
+          ? { projectPath: projectPath.trim() }
+          : {}),
+        ...(typeof providerSessionId === "string" && providerSessionId.trim()
+          ? { providerSessionId: providerSessionId.trim() }
+          : {}),
       };
     }),
   };

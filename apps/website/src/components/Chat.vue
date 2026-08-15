@@ -31,6 +31,7 @@ import {
   API_AGENT,
   flattenAcpSelectOptions,
   loadAcpAgents,
+  loadAcpProviderSessions,
   loadAcpSession,
   setAcpSessionConfig,
   type AcpSessionState,
@@ -76,6 +77,7 @@ const thinkingEnabled = ref(true);
 const workMode = ref<"build" | "plan">("build");
 const permissionMode = ref<"supervised" | "auto" | "full">("supervised");
 const fileModeEnabled = ref(false);
+const projectPath = ref("");
 const selectedWorkspacePath = ref<string[]>([]);
 const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const pendingA2UISurfaceId = ref("");
@@ -129,6 +131,7 @@ const activeAgent = computed(
   () => agents.value.find((agent) => agent.id === activeAgentId.value) ?? API_AGENT,
 );
 const isAcpAgent = computed(() => activeAgent.value.kind === "acp");
+const usesAcpProtocol = computed(() => activeAgent.value.protocol === "ACP");
 const isPiAgent = computed(
   () =>
     activeAgent.value.id.toLowerCase() === "pi" || activeAgent.value.name.toLowerCase() === "pi",
@@ -143,6 +146,7 @@ const {
   currentModelLabel,
   reconcileCurrentModel,
   getForwardProvider,
+  isLocalModel,
   loadModels,
 } = useChatModels();
 
@@ -189,6 +193,7 @@ const inputCurrentModelLabel = computed(() => {
   );
   return selected?.name || option.currentValue;
 });
+const projectPathEnabled = computed(() => isAcpAgent.value || isLocalModel(currentModel.value));
 
 const selectedHistoryModel = computed(() =>
   isAcpAgent.value
@@ -224,10 +229,41 @@ const refreshAcpSession = async () => {
     return;
   }
   const conversationId = currentConversationKey.value || ensureDraftConversationKey();
+  const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
+  const sessionProjectPath = conversation?.projectPath ?? projectPath.value;
   acpSessionLoading.value = true;
   try {
-    const session = await loadAcpSession(activeAgentId.value, conversationId);
-    if (sequence === acpSessionLoadSequence) acpSession.value = session;
+    const session = await loadAcpSession(
+      activeAgentId.value,
+      conversationId,
+      sessionProjectPath,
+      isAcpAgent.value ? conversation?.providerSessionId : "",
+    );
+    if (sequence !== acpSessionLoadSequence) return;
+    acpSession.value = session;
+    if (conversation && conversation.agentId === activeAgentId.value) {
+      if (
+        isAcpAgent.value &&
+        (usesAcpProtocol.value || session.sessionId !== session.conversationId)
+      ) {
+        conversation.providerSessionId = session.sessionId;
+      }
+      if (Array.isArray(session.history) && session.history.length > 0) {
+        conversation.messages = session.history.map((item) => ({
+          id: item.id,
+          status: "success",
+          message: {
+            role: item.role,
+            content: item.content,
+            ...(item.reasoningContent ? { reasoningContent: item.reasoningContent } : {}),
+            ...(item.toolCalls ? { toolCalls: item.toolCalls } : {}),
+            ...(item.agentPlan ? { agentPlan: item.agentPlan } : {}),
+          },
+        }));
+        showWelcome.value = false;
+      }
+      schedulePersistState();
+    }
   } catch (error) {
     if (sequence !== acpSessionLoadSequence) return;
     acpSession.value = null;
@@ -335,6 +371,7 @@ const handleNewConversation = () => {
   }
 
   currentConversationKey.value = "";
+  projectPath.value = "";
   window.history.replaceState({}, "", "/chat");
   showWelcome.value = true;
   historyBack.value = [];
@@ -400,6 +437,7 @@ const handleAgentChange = (agentId: string) => {
   activeAgentId.value = next.id;
   localStorage.setItem("open-chat-agent", next.id);
   currentConversationKey.value = "";
+  projectPath.value = "";
   setMessages([]);
   showWelcome.value = true;
   historyBack.value = [];
@@ -407,6 +445,7 @@ const handleAgentChange = (agentId: string) => {
   if (!next.available) {
     message.warning(next.adapterHint || `${next.name} 当前不可用，请检查本地 CLI 安装与登录状态`);
   }
+  if (next.kind === "acp" && next.available) void syncProviderConversations(next.id);
 };
 
 const closeSidebar = () => {
@@ -431,6 +470,12 @@ const provider = createProvider();
 const pendingPermission = ref<PermissionRequest | null>(null);
 provider.onPermissionRequest = (request) => {
   pendingPermission.value = request;
+};
+provider.onProviderSession = ({ agentId, sessionId }) => {
+  const conversation = getCurrentConversation();
+  if (!conversation || (agentId && agentId !== activeAgentId.value)) return;
+  conversation.providerSessionId = sessionId;
+  schedulePersistState();
 };
 provider.onWebSearchSources = (sources) => {
   // A single request may run several search rounds; accumulate every round's
@@ -498,6 +543,62 @@ const {
   reconcileCurrentModel,
 });
 
+/**
+ * Provider session listing is authoritative for provider-owned metadata. IndexedDB
+ * keeps the stable UI key and cached transcript so selecting a provider session
+ * can immediately render its last local snapshot while the provider is loaded.
+ */
+const syncProviderConversations = async (agentId: string): Promise<void> => {
+  const agent = agents.value.find((item) => item.id === agentId);
+  if (!agent || agent.kind !== "acp" || !agent.available) return;
+  try {
+    const result = await loadAcpProviderSessions(agentId);
+    if (!result.supported) return;
+    const providerSessionIds = new Set(result.sessions.map((session) => session.sessionId));
+    conversationList.value = conversationList.value.filter(
+      (item) =>
+        item.agentId !== agentId ||
+        !item.providerSessionId ||
+        providerSessionIds.has(item.providerSessionId),
+    );
+    for (const providerSession of result.sessions) {
+      const existing = conversationList.value.find(
+        (item) => item.agentId === agentId && item.providerSessionId === providerSession.sessionId,
+      );
+      const updatedAt = providerSession.updatedAt
+        ? Date.parse(providerSession.updatedAt)
+        : Number.NaN;
+      if (existing) {
+        if (
+          providerSession.title?.trim() &&
+          (!String(existing.label ?? "").trim() || existing.label === "新对话")
+        ) {
+          existing.label = providerSession.title.trim();
+        }
+        existing.projectPath = providerSession.cwd;
+        if (Number.isFinite(updatedAt)) existing.updatedAt = updatedAt;
+        continue;
+      }
+      conversationList.value.push({
+        key: `acp:${agentId}:${providerSession.sessionId}`,
+        label: providerSession.title?.trim() || "新对话",
+        group: "今天",
+        updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+        messages: [],
+        a2uiSubmissions: [],
+        workspaceDrafts: [],
+        systemPrompt: "",
+        agentId,
+        providerSessionId: providerSession.sessionId,
+        projectPath: providerSession.cwd,
+      });
+    }
+    schedulePersistState();
+  } catch (error) {
+    console.error(`Failed to load ${agentId} provider sessions:`, error);
+  }
+};
+
 /** Attach sources received mid-stream to the assistant message that produced them. */
 const attachPendingSearchSources = () => {
   const sources = pendingSearchSources.value;
@@ -528,6 +629,11 @@ watch(isRequesting, (requesting) => {
 
 watch([activeAgentId, currentConversationKey, isHydrating], () => {
   void refreshAcpSession();
+});
+
+watch(currentConversationKey, (key) => {
+  projectPath.value = getCurrentConversation()?.projectPath ?? "";
+  if (!key) projectPath.value = "";
 });
 
 // 监听消息变化，同步到对话列表
@@ -605,6 +711,7 @@ onMounted(async () => {
   }
 
   isHydrating.value = false;
+  await syncProviderConversations(activeAgentId.value);
 });
 
 onBeforeUnmount(() => {
@@ -763,6 +870,14 @@ const handleSubmit = (
       isAcpAgent.value ? ensureDraftConversationKey() : "",
       selectedHistoryModel.value,
     );
+    newConversation.projectPath = projectPath.value.trim();
+    if (
+      isAcpAgent.value &&
+      acpSession.value?.conversationId === String(newConversation.key) &&
+      (usesAcpProtocol.value || acpSession.value.sessionId !== acpSession.value.conversationId)
+    ) {
+      newConversation.providerSessionId = acpSession.value.sessionId;
+    }
     conversationList.value.unshift(newConversation);
     currentConversationKey.value = String(newConversation.key);
     draftConversationKey.value = "";
@@ -790,6 +905,10 @@ const handleSubmit = (
       // 本地 opencode（服务端 AI）：按会话复用长会话，无需转发目标。
       conversationId: String(conversation.key),
       ...(isAcpAgent.value ? { acpAgentId: activeAgentId.value } : {}),
+      ...(isAcpAgent.value && conversation.providerSessionId
+        ? { providerSessionId: conversation.providerSessionId }
+        : {}),
+      ...(projectPath.value.trim() ? { projectPath: projectPath.value.trim() } : {}),
       // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
       ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
     },
@@ -799,6 +918,20 @@ const handleSubmit = (
   setTimeout(() => {
     content.value = "";
   }, 0);
+};
+
+const handleProjectPathChange = (value: string) => {
+  if (isRequesting.value) {
+    message.warning("请先停止当前任务再切换项目目录");
+    return;
+  }
+  projectPath.value = value.trim();
+  const conversation = getCurrentConversation();
+  if (conversation) {
+    conversation.projectPath = projectPath.value;
+    schedulePersistState();
+  }
+  void refreshAcpSession();
 };
 
 const handleA2UIAction = (payload: A2UIActionPayload) => {
@@ -862,6 +995,8 @@ const handleModelChange = async (key: string) => {
       session.conversationId,
       option.id,
       key,
+      projectPath.value,
+      isAcpAgent.value ? getCurrentConversation()?.providerSessionId : "",
     );
     currentConversationKey.value = "";
     setMessages([]);
@@ -954,6 +1089,10 @@ const handleReloadMessage = (messageId: string | number) => {
     // 本地 opencode：复用同一会话长会话
     conversationId: String(currentConversation?.key ?? ""),
     ...(isAcpAgent.value ? { acpAgentId: activeAgentId.value } : {}),
+    ...(isAcpAgent.value && currentConversation?.providerSessionId
+      ? { providerSessionId: currentConversation.providerSessionId }
+      : {}),
+    ...(projectPath.value.trim() ? { projectPath: projectPath.value.trim() } : {}),
     // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
     ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
   });
@@ -1140,6 +1279,8 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :permission-locked="isPiAgent"
         :pending-permission="pendingPermission"
         :file-mode-enabled="fileModeEnabled"
+        :project-path="projectPath"
+        :project-path-enabled="projectPathEnabled"
         :agent-mode="isAcpAgent"
         :agent-available="activeAgent.available"
         :agent-configuring="acpSessionLoading"
@@ -1152,6 +1293,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         @permission-change="handlePermissionChange"
         @permission-response="handlePermissionResponse"
         @file-mode-change="handleFileModeChange"
+        @project-path-change="handleProjectPathChange"
       />
     </div>
 

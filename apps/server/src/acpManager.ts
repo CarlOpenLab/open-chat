@@ -2,6 +2,8 @@ import {
   ClientSideConnection,
   PROTOCOL_VERSION,
   ndJsonStream,
+  type InitializeResponse,
+  type LoadSessionResponse,
   type NewSessionResponse,
   type PermissionOption,
   type RequestPermissionRequest,
@@ -37,6 +39,29 @@ export interface AcpSessionStateView {
   sessionId: string;
   configOptions: SessionConfigOption[];
   modes: NewSessionResponse["modes"];
+  history: AcpSessionHistoryMessage[];
+  loadSupported: boolean;
+}
+
+export interface AcpSessionHistoryMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  reasoningContent?: string;
+  toolCalls?: Array<Record<string, unknown>>;
+  agentPlan?: Record<string, unknown>;
+}
+
+export interface AcpProviderSessionView {
+  sessionId: string;
+  cwd: string;
+  title?: string;
+  updatedAt?: string;
+}
+
+export interface AcpProviderSessionsView {
+  supported: boolean;
+  sessions: AcpProviderSessionView[];
 }
 
 interface AcpRuntime {
@@ -44,13 +69,17 @@ interface AcpRuntime {
   child: ChildProcessWithoutNullStreams | null;
   connection: ClientSideConnection | null;
   startPromise: Promise<ClientSideConnection> | null;
+  initialized: InitializeResponse | null;
 }
+
+type AcpSessionResponse = Pick<NewSessionResponse, "configOptions" | "modes"> | LoadSessionResponse;
 
 interface AcpSessionEntry {
   agentId: string;
   conversationId: string;
   sessionId: string;
-  response: NewSessionResponse;
+  response: AcpSessionResponse;
+  history: AcpSessionHistoryMessage[];
   createdAt: number;
   lastUsed: number;
 }
@@ -71,6 +100,12 @@ interface PendingPermission {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface AcpHistoryCollector {
+  messages: AcpSessionHistoryMessage[];
+  nextId: number;
+  activeRole: "user" | "assistant" | null;
+}
+
 const PROCESS_START_TIMEOUT_MS = 15_000;
 
 export class AcpManager {
@@ -78,6 +113,7 @@ export class AcpManager {
   private readonly sessions = new Map<string, AcpSessionEntry>();
   private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
+  private readonly historyCollectors = new Map<string, AcpHistoryCollector>();
 
   constructor(private readonly config: AcpConfig) {
     for (const agent of config.agents) {
@@ -87,6 +123,7 @@ export class AcpManager {
         child: null,
         connection: null,
         startPromise: null,
+        initialized: null,
       });
     }
   }
@@ -123,14 +160,49 @@ export class AcpManager {
   }> {
     return [...this.sessions.values()]
       .filter((entry) => !agentId || entry.agentId === agentId)
-      .map(({ response: _response, ...entry }) => entry)
+      .map(({ response: _response, history: _history, ...entry }) => entry)
       .sort((left, right) => right.lastUsed - left.lastUsed);
   }
 
-  async getSessionState(agentId: string, conversationId: string): Promise<AcpSessionStateView> {
+  async listProviderSessions(agentId: string): Promise<AcpProviderSessionsView> {
     const runtime = this.getAvailableRuntime(agentId);
-    const session = await this.getOrCreateSession(runtime, conversationId);
-    return sessionStateView(session);
+    const connection = await this.connectionFor(runtime);
+    if (runtime.initialized?.agentCapabilities?.sessionCapabilities?.list == null) {
+      return { supported: false, sessions: [] };
+    }
+
+    const sessions: AcpProviderSessionView[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 100; page += 1) {
+      const response = await connection.listSessions(cursor ? { cursor } : {});
+      sessions.push(
+        ...response.sessions.map((session) => ({
+          sessionId: session.sessionId,
+          cwd: session.cwd,
+          ...(session.title ? { title: session.title } : {}),
+          ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
+        })),
+      );
+      cursor = response.nextCursor || undefined;
+      if (!cursor) break;
+    }
+    return { supported: true, sessions };
+  }
+
+  async getSessionState(
+    agentId: string,
+    conversationId: string,
+    projectPath?: string,
+    providerSessionId?: string,
+  ): Promise<AcpSessionStateView> {
+    const runtime = this.getAvailableRuntime(agentId);
+    const session = await this.getOrCreateSession(
+      runtime,
+      conversationId,
+      projectPath,
+      providerSessionId,
+    );
+    return sessionStateView(session, this.supportsSessionLoad(runtime));
   }
 
   async setSessionConfigOption(
@@ -138,9 +210,16 @@ export class AcpManager {
     conversationId: string,
     configId: string,
     value: string | boolean,
+    projectPath?: string,
+    providerSessionId?: string,
   ): Promise<AcpSessionStateView> {
     const runtime = this.getAvailableRuntime(agentId);
-    const session = await this.getOrCreateSession(runtime, conversationId);
+    const session = await this.getOrCreateSession(
+      runtime,
+      conversationId,
+      projectPath,
+      providerSessionId,
+    );
     if (this.activeRuns.has(session.sessionId)) {
       throw GatewayError.invalidRequest("该 ACP 会话仍在运行，暂时不能切换模型或配置");
     }
@@ -157,19 +236,26 @@ export class AcpManager {
     );
     session.response = { ...session.response, configOptions: response.configOptions };
     session.lastUsed = Date.now();
-    return sessionStateView(session);
+    return sessionStateView(session, this.supportsSessionLoad(runtime));
   }
 
   async runTurn(
     agentId: string,
     conversationId: string,
     text: string,
+    projectPath: string | undefined,
+    providerSessionId: string | undefined,
     res: ServerResponse,
     signal: AbortSignal,
   ): Promise<void> {
     const runtime = this.getAvailableRuntime(agentId);
 
-    const session = await this.getOrCreateSession(runtime, conversationId);
+    const session = await this.getOrCreateSession(
+      runtime,
+      conversationId,
+      projectPath,
+      providerSessionId,
+    );
     if (this.activeRuns.has(session.sessionId)) {
       throw GatewayError.invalidRequest("该 ACP 会话仍在运行，请先停止当前任务");
     }
@@ -238,6 +324,7 @@ export class AcpManager {
       pending.resolve({ outcome: { outcome: "cancelled" } });
     }
     this.pendingPermissions.clear();
+    this.historyCollectors.clear();
     this.activeRuns.clear();
     this.sessions.clear();
     for (const runtime of this.runtimes.values()) {
@@ -245,22 +332,64 @@ export class AcpManager {
       runtime.connection = null;
       runtime.child = null;
       runtime.startPromise = null;
+      runtime.initialized = null;
     }
   }
 
   private async getOrCreateSession(
     runtime: AcpRuntime,
     conversationId: string,
+    projectPath?: string,
+    providerSessionId?: string,
   ): Promise<AcpSessionEntry> {
-    const key = `${runtime.config.id}:${conversationId}`;
+    const key = `${runtime.config.id}:${conversationId}:${projectPath || ""}`;
     const existing = this.sessions.get(key);
     if (existing) {
       existing.lastUsed = Date.now();
       return existing;
     }
     const connection = await this.connectionFor(runtime);
+    const cwd = projectPath || runtime.config.cwd || this.config.cwd || process.cwd();
+    const normalizedProviderSessionId = providerSessionId?.trim();
+    if (normalizedProviderSessionId) {
+      const loaded = [...this.sessions.values()].find(
+        (entry) =>
+          entry.agentId === runtime.config.id && entry.sessionId === normalizedProviderSessionId,
+      );
+      if (loaded) {
+        loaded.lastUsed = Date.now();
+        this.sessions.set(key, loaded);
+        return loaded;
+      }
+      if (!this.supportsSessionLoad(runtime)) {
+        throw GatewayError.invalidRequest(`${runtime.config.name} 不支持恢复历史 ACP 会话`);
+      }
+
+      const collector: AcpHistoryCollector = { messages: [], nextId: 0, activeRole: null };
+      this.historyCollectors.set(normalizedProviderSessionId, collector);
+      try {
+        const response = await connection.loadSession({
+          sessionId: normalizedProviderSessionId,
+          cwd,
+          mcpServers: [],
+        });
+        const entry: AcpSessionEntry = {
+          agentId: runtime.config.id,
+          conversationId,
+          sessionId: normalizedProviderSessionId,
+          response,
+          history: collector.messages,
+          createdAt: Date.now(),
+          lastUsed: Date.now(),
+        };
+        this.sessions.set(key, entry);
+        return entry;
+      } finally {
+        this.historyCollectors.delete(normalizedProviderSessionId);
+      }
+    }
     const response = await connection.newSession({
-      cwd: runtime.config.cwd || this.config.cwd || process.cwd(),
+      cwd,
       mcpServers: [],
     });
     const entry: AcpSessionEntry = {
@@ -268,11 +397,16 @@ export class AcpManager {
       conversationId,
       sessionId: response.sessionId,
       response,
+      history: [],
       createdAt: Date.now(),
       lastUsed: Date.now(),
     };
     this.sessions.set(key, entry);
     return entry;
+  }
+
+  private supportsSessionLoad(runtime: AcpRuntime): boolean {
+    return runtime.initialized?.agentCapabilities?.loadSession === true;
   }
 
   private getAvailableRuntime(agentId: string): AcpRuntime {
@@ -336,7 +470,7 @@ export class AcpManager {
       clientCapabilities: { session: { configOptions: { boolean: {} } } },
       clientInfo: { name: "Open Chat", version: "0.1.0" },
     });
-    await Promise.race([
+    const initializeResponse = await Promise.race([
       initialized,
       new Promise<never>((_resolve, reject) => {
         const timer = setTimeout(
@@ -354,16 +488,20 @@ export class AcpManager {
       }),
     ]);
 
+    runtime.initialized = initializeResponse;
     runtime.connection = connection;
     void connection.closed.finally(() => {
       if (runtime.connection === connection) runtime.connection = null;
       if (runtime.child === child) runtime.child = null;
       runtime.startPromise = null;
+      runtime.initialized = null;
     });
     return connection;
   }
 
   private handleSessionUpdate(notification: SessionNotification): void {
+    const collector = this.historyCollectors.get(notification.sessionId);
+    if (collector) collectHistoryUpdate(collector, notification.update);
     if (notification.update.sessionUpdate === "config_option_update") {
       const session = [...this.sessions.values()].find(
         (entry) => entry.sessionId === notification.sessionId,
@@ -457,14 +595,74 @@ export class AcpManager {
   }
 }
 
-function sessionStateView(session: AcpSessionEntry): AcpSessionStateView {
+function sessionStateView(session: AcpSessionEntry, loadSupported: boolean): AcpSessionStateView {
   return {
     agentId: session.agentId,
     conversationId: session.conversationId,
     sessionId: session.sessionId,
     configOptions: session.response.configOptions ?? [],
     modes: session.response.modes ?? null,
+    history: session.history,
+    loadSupported,
   };
+}
+
+function collectHistoryUpdate(collector: AcpHistoryCollector, update: SessionUpdate): void {
+  switch (update.sessionUpdate) {
+    case "user_message_chunk": {
+      const text = contentText(update.content);
+      if (text) historyMessageFor(collector, "user").content += text;
+      break;
+    }
+    case "agent_message_chunk": {
+      const text = contentText(update.content);
+      if (text) historyMessageFor(collector, "assistant").content += text;
+      break;
+    }
+    case "agent_thought_chunk": {
+      const text = contentText(update.content);
+      if (!text) break;
+      const message = historyMessageFor(collector, "assistant");
+      message.reasoningContent = `${message.reasoningContent ?? ""}${text}`;
+      break;
+    }
+    case "tool_call":
+    case "tool_call_update": {
+      const message = historyMessageFor(collector, "assistant");
+      const tool = normalizeToolCall(update);
+      const tools = message.toolCalls ?? [];
+      const index = tools.findIndex((item) => item.id === tool.id);
+      if (index === -1) tools.push(tool);
+      else tools[index] = { ...tools[index], ...tool };
+      message.toolCalls = tools;
+      break;
+    }
+    case "plan":
+    case "plan_update":
+      historyMessageFor(collector, "assistant").agentPlan = update as unknown as Record<
+        string,
+        unknown
+      >;
+      break;
+    default:
+      break;
+  }
+}
+
+function historyMessageFor(
+  collector: AcpHistoryCollector,
+  role: "user" | "assistant",
+): AcpSessionHistoryMessage {
+  const last = collector.messages[collector.messages.length - 1];
+  if (last && collector.activeRole === role) return last;
+  const message: AcpSessionHistoryMessage = {
+    id: `acp-history-${collector.nextId++}`,
+    role,
+    content: "",
+  };
+  collector.messages.push(message);
+  collector.activeRole = role;
+  return message;
 }
 
 function validateConfigValue(option: SessionConfigOption, value: string | boolean): void {

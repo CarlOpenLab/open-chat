@@ -42,6 +42,11 @@ export interface PermissionRequest {
   tool?: { messageID?: string; callID?: string };
 }
 
+export interface ProviderSessionNotice {
+  agentId?: string;
+  sessionId: string;
+}
+
 /** OpenAI function-tool definition for web search. Declared in the request
  * `tools` array so the model autonomously decides whether to call it; the
  * gateway intercepts the call and runs the configured search provider. */
@@ -75,6 +80,10 @@ export interface OpenChatParams extends XModelParams {
   conversationId?: string;
   /** 本地 CLI Agent id。存在时服务端按该 Agent 的原生协议或 ACP 运行。 */
   acpAgentId?: string;
+  /** 供应商返回的真实会话 id，用于 ACP session/load 跨进程恢复。 */
+  providerSessionId?: string;
+  /** Optional project working directory for local agents. Empty means server default. */
+  projectPath?: string;
   /** 无状态代理的转发目标：随每次请求携带（baseUrl / apiKey / api）。
    * 本地模型（opencode/...）不携带。 */
   provider?: {
@@ -103,6 +112,9 @@ export class OpenChatProvider extends DeepSeekChatProvider<
 
   /** Called when the gateway emits a `chat_permission` event（opencode 权限询问）。 */
   onPermissionRequest?: (request: PermissionRequest) => void;
+
+  /** Called when a native provider assigns its real persistent session id. */
+  onProviderSession?: (session: ProviderSessionNotice) => void;
 
   override transformMessage(info: TransformMessage<XModelMessage, XModelResponse>): XModelMessage {
     const chunk = info.chunk as { event?: string; data?: string } | undefined;
@@ -186,6 +198,16 @@ export class OpenChatProvider extends DeepSeekChatProvider<
         };
       } catch (err) {
         console.error("Failed to parse chat_permission event:", err);
+      }
+      return info.originMessage ?? { content: "", role: "assistant" };
+    }
+
+    if (chunk?.event === "provider_session" && chunk.data && chunk.data !== "[DONE]") {
+      try {
+        const session = JSON.parse(chunk.data) as ProviderSessionNotice;
+        if (session.sessionId) this.onProviderSession?.(session);
+      } catch (err) {
+        console.error("Failed to parse provider_session event:", err);
       }
       return info.originMessage ?? { content: "", role: "assistant" };
     }

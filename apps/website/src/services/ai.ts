@@ -74,4 +74,24 @@ export const aiService = {
     }
     return response.json();
   },
+
+  /** Ask a local gateway to open the host OS directory picker. */
+  async pickProjectPath(): Promise<{ path?: string; canceled: boolean }> {
+    const response = await fetch(`${API_BASE_URL}/api/project-path/pick`, {
+      method: "POST",
+      headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
+    });
+    const data = (await response.json().catch(() => ({}))) as {
+      path?: unknown;
+      canceled?: unknown;
+      error?: { message?: string };
+    };
+    if (!response.ok) {
+      throw new Error(data.error?.message || `目录选择失败（HTTP ${response.status}）`);
+    }
+    return {
+      path: typeof data.path === "string" ? data.path : undefined,
+      canceled: data.canceled === true,
+    };
+  },
 };

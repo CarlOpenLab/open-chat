@@ -59,3 +59,22 @@ test("preserves structured A2UI submissions in v2 chat state", () => {
     })?.conversationList[0]?.a2uiSubmissions,
   ).toEqual([submission]);
 });
+
+test("preserves and trims the provider session id used by ACP session/load", () => {
+  const state = normalizePersistedChatState({
+    version: 2,
+    currentConversationKey: "local-key",
+    currentModel: "test-model",
+    conversationList: [
+      {
+        key: "local-key",
+        label: "Provider session",
+        messages: [],
+        agentId: "codex",
+        providerSessionId: "  provider-session-42  ",
+      },
+    ],
+  });
+
+  expect(state?.conversationList[0]?.providerSessionId).toBe("provider-session-42");
+});

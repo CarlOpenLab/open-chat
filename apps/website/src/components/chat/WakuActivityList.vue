@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Component, ComputedRef } from "vue";
+import type { Component } from "vue";
 import { computed, inject, onBeforeUnmount, ref } from "vue";
 import {
   Check,
@@ -362,6 +362,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- 工具展开：inset 详情卡片（位于行下方） -->
+
         <div
           v-else-if="isItemExpanded(entry.id) && entry.sections?.length"
           class="waku-detail-card"
@@ -573,7 +574,7 @@ onBeforeUnmount(() => {
 .waku-detail-card {
   width: 100%;
   min-width: 0;
-  margin: 2px 4px 4px 21px;
+  margin: 2px 0 4px 0;
   padding: 8px;
   border: 1px solid var(--brand-border);
   border-radius: 7px;

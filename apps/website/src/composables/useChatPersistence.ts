@@ -21,6 +21,9 @@ export interface OpenChatConversation extends ConversationItemType {
   a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
   systemPrompt?: string;
+  projectPath?: string;
+  /** ACP 供应商返回的真实会话 id；key 仍是 Open Chat 的本地 UI key。 */
+  providerSessionId?: string;
 }
 
 export const getMessagePreview = (content: string, maxLength: number = 20): string => {
@@ -67,7 +70,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
     return list
       .filter((conversation) => {
         const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
-        return messages.length > 0;
+        return messages.length > 0 || Boolean(conversation.providerSessionId?.trim());
       })
       .map((conversation, index) => {
         const normalizedLabel =
@@ -107,6 +110,13 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
             : [],
           systemPrompt:
             typeof conversation.systemPrompt === "string" ? conversation.systemPrompt : "",
+          ...(typeof conversation.projectPath === "string" && conversation.projectPath.trim()
+            ? { projectPath: conversation.projectPath.trim() }
+            : {}),
+          ...(typeof conversation.providerSessionId === "string" &&
+          conversation.providerSessionId.trim()
+            ? { providerSessionId: conversation.providerSessionId.trim() }
+            : {}),
           agentId:
             typeof conversation.agentId === "string" && conversation.agentId
               ? conversation.agentId
@@ -152,6 +162,12 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
         agentId: typeof conv.agentId === "string" && conv.agentId ? conv.agentId : "api",
         modelId:
           typeof conv.modelId === "string" && conv.modelId ? conv.modelId : currentModel.value,
+        ...(typeof conv.projectPath === "string" && conv.projectPath.trim()
+          ? { projectPath: conv.projectPath.trim() }
+          : {}),
+        ...(typeof conv.providerSessionId === "string" && conv.providerSessionId.trim()
+          ? { providerSessionId: conv.providerSessionId.trim() }
+          : {}),
         label: typeof conv.label === "string" && conv.label.trim() ? conv.label : "新对话",
       };
     });

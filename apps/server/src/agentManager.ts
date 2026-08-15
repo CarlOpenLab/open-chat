@@ -5,6 +5,7 @@ import { AcpManager, type AcpAgentView, type AcpSessionStateView } from "./acpMa
 import {
   NativeCliManager,
   type NativeAgentView,
+  type NativeProviderSessionsView,
   type NativeSessionStateView,
 } from "./nativeCliManager";
 import { GatewayError } from "./error";
@@ -41,8 +42,22 @@ export class AgentManager {
     );
   }
 
-  getSessionState(agentId: string, conversationId: string): Promise<AgentSessionStateView> {
-    return this.managerFor(agentId).getSessionState(agentId, conversationId);
+  listProviderSessions(agentId: string) {
+    if (this.acp.hasAgent(agentId)) return this.acp.listProviderSessions(agentId);
+    if (this.native.hasAgent(agentId)) return this.native.listProviderSessions(agentId);
+    return Promise.resolve({ supported: false, sessions: [] } satisfies NativeProviderSessionsView);
+  }
+
+  getSessionState(
+    agentId: string,
+    conversationId: string,
+    projectPath?: string,
+    providerSessionId?: string,
+  ): Promise<AgentSessionStateView> {
+    if (this.acp.hasAgent(agentId)) {
+      return this.acp.getSessionState(agentId, conversationId, projectPath, providerSessionId);
+    }
+    return this.native.getSessionState(agentId, conversationId, projectPath, providerSessionId);
   }
 
   setSessionConfigOption(
@@ -50,12 +65,26 @@ export class AgentManager {
     conversationId: string,
     configId: string,
     value: string | boolean,
+    projectPath?: string,
+    providerSessionId?: string,
   ): Promise<AgentSessionStateView> {
-    return this.managerFor(agentId).setSessionConfigOption(
+    if (this.acp.hasAgent(agentId)) {
+      return this.acp.setSessionConfigOption(
+        agentId,
+        conversationId,
+        configId,
+        value,
+        projectPath,
+        providerSessionId,
+      );
+    }
+    return this.native.setSessionConfigOption(
       agentId,
       conversationId,
       configId,
       value,
+      projectPath,
+      providerSessionId,
     );
   }
 
@@ -63,10 +92,31 @@ export class AgentManager {
     agentId: string,
     conversationId: string,
     text: string,
+    projectPath: string | undefined,
+    providerSessionId: string | undefined,
     res: ServerResponse,
     signal: AbortSignal,
   ): Promise<void> {
-    return this.managerFor(agentId).runTurn(agentId, conversationId, text, res, signal);
+    if (this.acp.hasAgent(agentId)) {
+      return this.acp.runTurn(
+        agentId,
+        conversationId,
+        text,
+        projectPath,
+        providerSessionId,
+        res,
+        signal,
+      );
+    }
+    return this.native.runTurn(
+      agentId,
+      conversationId,
+      text,
+      projectPath,
+      res,
+      signal,
+      providerSessionId,
+    );
   }
 
   replyPermission(

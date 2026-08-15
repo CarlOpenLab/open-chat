@@ -10,7 +10,6 @@ import {
   Circle,
   Ellipsis,
   LoaderCircle,
-  MessageSquare,
   Moon,
   PanelLeftClose,
   Pencil,
@@ -178,8 +177,12 @@ const groupable = computed<ConversationsProps["groupable"]>(() => ({
   },
 }));
 
-/** 副行文案：回退到最后一条消息预览，避免副行只剩一个孤零零的时间。 */
-const lastMessagePreview = (conversation: OpenChatConversation): string => {
+/** Waku 的副行以项目为主；API/旧会话没有项目时回退到最后一条消息摘要。 */
+const conversationMeta = (conversation: OpenChatConversation): string => {
+  const projectPath = conversation.projectPath?.trim();
+  if (projectPath) {
+    return projectPath.split(/[\\/]/).filter(Boolean).pop() || projectPath;
+  }
   const messages = conversation.messages ?? [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const content = messages[index]?.message?.content;
@@ -189,18 +192,16 @@ const lastMessagePreview = (conversation: OpenChatConversation): string => {
 };
 
 /**
- * 条目 = 左侧图标 + 右侧两行文本：标题行 + 消息预览 + 时间。
+ * 条目 = Waku 两行结构：标题行 + 项目/消息摘要 + 时间，无会话类型图标。
  * 进行中的会话把时间换成「工作中 · 已运行时长」并附一个转圈图标。
  */
 const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
   const conversation = item as OpenChatConversation;
   const busy = Boolean(props.busyKey) && String(item.key) === props.busyKey;
   const title = String(conversation.label ?? "").trim() || "新对话";
-  const metaText = lastMessagePreview(conversation);
-  const iconNode = h(MessageSquare, { class: "conversation-entry-default-icon" });
+  const metaText = conversationMeta(conversation);
 
   return h("span", { class: "conversation-entry" }, [
-    h("span", { class: "conversation-entry-icon" }, [iconNode]),
     h("span", { class: "conversation-entry-body" }, [
       // 首行：标题占满，进行中时右端挂一个转圈图标
       h("span", { class: "conversation-entry-head" }, [
@@ -646,28 +647,11 @@ onBeforeUnmount(() => {
     color 160ms ease;
 }
 
-/* 条目 = 左侧图标 tile + 右侧两行文本（标题行 / 副行） */
+/* Waku 式两行条目（标题行 / 项目与时间副行），无左侧类型图标。 */
 .chat-sidebar :deep(.conversation-entry) {
   display: flex;
+  width: 100%;
   min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-/* 图标 tile：与右侧 ⋯ 按钮同尺寸（28px），带边框的微妙底色，普通会话是聊天气泡 */
-.chat-sidebar :deep(.conversation-entry-icon) {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  flex: none;
-  place-items: center;
-  border: 1px solid var(--brand-border);
-  border-radius: 7px;
-  background: var(--brand-surface-subtle);
-  color: var(--brand-muted-strong);
-}
-.chat-sidebar :deep(.conversation-entry-icon svg) {
-  width: 14px;
-  height: 14px;
 }
 .chat-sidebar :deep(.conversation-entry-body) {
   display: flex;

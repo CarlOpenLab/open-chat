@@ -2,6 +2,7 @@
 import { CloudUpload, Database, Info, Monitor, Moon, Settings2, Sun, Trash2, X } from "@lucide/vue";
 import { Button, Modal, Segmented, Upload } from "antdv-next";
 import { computed, h, ref, watch } from "vue";
+import { APP_VERSION } from "../../version";
 
 type ThemeMode = "system" | "light" | "dark";
 type SettingsTab = "general" | "data" | "about";
@@ -176,7 +177,7 @@ const navItems = [
             <div class="settings-card">
               <div class="settings-row">
                 <div class="settings-label">版本</div>
-                <span class="text-[11px] font-650 text-brand-muted-strong">v0.0.0</span>
+                <span class="text-[11px] font-650 text-brand-muted-strong">v{{ APP_VERSION }}</span>
               </div>
             </div>
           </section>

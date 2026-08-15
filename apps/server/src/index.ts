@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
+import { statSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import type { NextFunction, Request, Response } from "express";
 import { loadConfigFile, parseBindAddr, type AppConfig, type LocalConfig } from "./config";
 import { GatewayError } from "./error";
@@ -22,6 +24,7 @@ import {
 } from "./localProvider";
 import { AgentManager } from "./agentManager";
 import { resolveExecutable } from "./commandEnv";
+import { pickProjectDirectory } from "./projectPicker";
 
 const DEFAULT_CONFIG_PATH = "config/providers.toml";
 
@@ -109,6 +112,23 @@ function main(): void {
     });
   });
 
+  app.post("/api/project-path/pick", async (req: Request, res: Response) => {
+    try {
+      if (!isLoopbackRequest(req)) {
+        throw GatewayError.unauthorized();
+      }
+      const path = await pickProjectDirectory();
+      res.json({ canceled: !path, ...(path ? { path } : {}) });
+    } catch (err) {
+      if (err instanceof GatewayError) return sendGatewayError(res, err);
+      console.error("Project directory picker failed:", err);
+      return sendGatewayError(
+        res,
+        GatewayError.upstream(err instanceof Error ? err.message : "系统目录选择器不可用"),
+      );
+    }
+  });
+
   app.get("/api/acp/agents", (_req: Request, res: Response) => {
     res.json({ agents: agentManager.listAgents() });
   });
@@ -118,11 +138,27 @@ function main(): void {
     res.json({ sessions: agentManager.listSessions(agentId) });
   });
 
+  app.get("/api/acp/provider-sessions", async (req: Request, res: Response) => {
+    try {
+      const agentId = requiredQuery(req, "agentId");
+      res.json(await agentManager.listProviderSessions(agentId));
+    } catch (err) {
+      return sendRouteError(res, err, "供应商会话列表加载失败");
+    }
+  });
+
   app.get("/api/acp/session", async (req: Request, res: Response) => {
     try {
       const agentId = requiredQuery(req, "agentId");
       const conversationId = requiredQuery(req, "conversationId");
-      res.json(await agentManager.getSessionState(agentId, conversationId));
+      res.json(
+        await agentManager.getSessionState(
+          agentId,
+          conversationId,
+          parseProjectPath(req.query.projectPath),
+          optionalString(req.query.providerSessionId),
+        ),
+      );
     } catch (err) {
       return sendRouteError(res, err, "ACP 会话配置加载失败");
     }
@@ -138,7 +174,14 @@ function main(): void {
         throw GatewayError.invalidRequest("value 必须是字符串或布尔值");
       }
       res.json(
-        await agentManager.setSessionConfigOption(agentId, conversationId, configId, body.value),
+        await agentManager.setSessionConfigOption(
+          agentId,
+          conversationId,
+          configId,
+          body.value,
+          parseProjectPath(body.projectPath),
+          optionalString(body.providerSessionId),
+        ),
       );
     } catch (err) {
       return sendRouteError(res, err, "ACP 会话配置更新失败");
@@ -174,6 +217,7 @@ function main(): void {
       delete body.provider;
       delete body.mode;
       delete body.permission;
+      delete body.projectPath;
 
       const stream = body.stream === true;
 
@@ -295,6 +339,8 @@ async function handleAgentChat(
     typeof body.conversationId === "string" && body.conversationId.trim()
       ? body.conversationId.trim()
       : hashKey(messages.map((message) => extractTextFromMessage(message)));
+  const projectPath = parseProjectPath(body.projectPath);
+  const providerSessionId = optionalString(body.providerSessionId);
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -304,7 +350,15 @@ async function handleAgentChat(
   });
   const abort = attachAbortOnClose(res);
   try {
-    await agentManager.runTurn(agentId, conversationId, text, res, abort.signal);
+    await agentManager.runTurn(
+      agentId,
+      conversationId,
+      text,
+      projectPath,
+      providerSessionId,
+      res,
+      abort.signal,
+    );
   } catch (err) {
     if (abort.signal.aborted) return;
     console.error(`Agent ${agentId} error:`, err);
@@ -343,6 +397,11 @@ function gatewayAuthMiddleware(apiKey: string) {
     }
     next();
   };
+}
+
+function isLoopbackRequest(req: Request): boolean {
+  const address = req.socket.remoteAddress || "";
+  return address === "::1" || address === "127.0.0.1" || address.startsWith("::ffff:127.");
 }
 
 function sendGatewayError(res: Response, err: GatewayError): void {
@@ -452,8 +511,9 @@ async function handleLocalChat(
     typeof conversationId === "string" && conversationId.trim()
       ? conversationId.trim()
       : hashKey([systemPrompt, ...messages.map((m) => extractTextFromMessage(m))]);
+  const projectPath = parseProjectPath((body as Record<string, unknown>).projectPath);
 
-  const session = await localChat.getOrCreateSession(key, model);
+  const session = await localChat.getOrCreateSession(key, model, projectPath);
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -490,6 +550,28 @@ async function handleLocalChat(
       // response already ended
     }
   }
+}
+
+function parseProjectPath(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") throw GatewayError.invalidRequest("projectPath 必须是字符串");
+  const projectPath = value.trim();
+  if (!projectPath) return undefined;
+  if (!isAbsolute(projectPath)) {
+    throw GatewayError.invalidRequest("projectPath 必须是绝对路径");
+  }
+  try {
+    if (!statSync(projectPath).isDirectory()) {
+      throw new Error("不是目录");
+    }
+  } catch {
+    throw GatewayError.invalidRequest(`项目目录不存在或不可访问：${projectPath}`);
+  }
+  return projectPath;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 main();

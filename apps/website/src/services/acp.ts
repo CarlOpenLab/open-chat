@@ -53,6 +53,29 @@ export interface AcpSessionState {
   sessionId: string;
   configOptions: AcpConfigOption[];
   modes?: unknown;
+  history?: AcpSessionHistoryMessage[];
+  loadSupported?: boolean;
+}
+
+export interface AcpSessionHistoryMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  reasoningContent?: string;
+  toolCalls?: Array<Record<string, unknown>>;
+  agentPlan?: Record<string, unknown>;
+}
+
+export interface AcpProviderSession {
+  sessionId: string;
+  cwd: string;
+  title?: string;
+  updatedAt?: string;
+}
+
+export interface AcpProviderSessions {
+  supported: boolean;
+  sessions: AcpProviderSession[];
 }
 
 export const API_AGENT: AgentView = {
@@ -81,9 +104,18 @@ export async function loadAcpAgents(): Promise<AgentView[]> {
 export async function loadAcpSession(
   agentId: string,
   conversationId: string,
+  projectPath = "",
+  providerSessionId = "",
 ): Promise<AcpSessionState> {
   const query = new URLSearchParams({ agentId, conversationId });
+  if (projectPath.trim()) query.set("projectPath", projectPath.trim());
+  if (providerSessionId.trim()) query.set("providerSessionId", providerSessionId.trim());
   return requestAcpSession(`${API_BASE_URL}/api/acp/session?${query}`);
+}
+
+export async function loadAcpProviderSessions(agentId: string): Promise<AcpProviderSessions> {
+  const query = new URLSearchParams({ agentId });
+  return requestJson<AcpProviderSessions>(`${API_BASE_URL}/api/acp/provider-sessions?${query}`);
 }
 
 export async function setAcpSessionConfig(
@@ -91,11 +123,20 @@ export async function setAcpSessionConfig(
   conversationId: string,
   configId: string,
   value: string | boolean,
+  projectPath = "",
+  providerSessionId = "",
 ): Promise<AcpSessionState> {
   return requestAcpSession(`${API_BASE_URL}/api/acp/session/config`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentId, conversationId, configId, value }),
+    body: JSON.stringify({
+      agentId,
+      conversationId,
+      configId,
+      value,
+      projectPath,
+      providerSessionId,
+    }),
   });
 }
 
@@ -106,6 +147,10 @@ export function flattenAcpSelectOptions(
 }
 
 async function requestAcpSession(url: string, init: RequestInit = {}): Promise<AcpSessionState> {
+  return requestJson<AcpSessionState>(url, init);
+}
+
+async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (GATEWAY_API_KEY) headers.set("Authorization", `Bearer ${GATEWAY_API_KEY}`);
   const response = await fetch(url, {
@@ -116,5 +161,5 @@ async function requestAcpSession(url: string, init: RequestInit = {}): Promise<A
     const data = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
     throw new Error(data.error?.message || `Agent 会话请求失败（HTTP ${response.status}）`);
   }
-  return (await response.json()) as AcpSessionState;
+  return (await response.json()) as T;
 }

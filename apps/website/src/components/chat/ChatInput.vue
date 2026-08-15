@@ -12,12 +12,14 @@ import {
   ShieldCheck,
   ShieldQuestion,
   Square,
+  X,
 } from "@lucide/vue";
-import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
+import { Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, h, ref, watch, type Component } from "vue";
 import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import type { PermissionRequest } from "../../services/OpenChatProvider";
 import ModelIcon from "../Icons/ModelIcon.vue";
+import { aiService } from "../../services/ai";
 
 interface Props {
   modelValue: string;
@@ -28,6 +30,8 @@ interface Props {
   modelCatalog: ModelCatalogEntry[];
   thinkingEnabled: boolean;
   fileModeEnabled: boolean;
+  projectPath?: string;
+  projectPathEnabled?: boolean;
   agentMode?: boolean;
   agentAvailable?: boolean;
   agentConfiguring?: boolean;
@@ -49,6 +53,7 @@ interface Emits {
   (e: "modelChange", key: string): void;
   (e: "thinkingChange", value: boolean): void;
   (e: "fileModeChange", value: boolean): void;
+  (e: "projectPathChange", value: string): void;
   (e: "modeChange", value: "build" | "plan"): void;
   (e: "permissionChange", value: "supervised" | "auto" | "full"): void;
   (e: "permissionResponse", value: "once" | "always" | "reject"): void;
@@ -65,8 +70,38 @@ const props = withDefaults(defineProps<Props>(), {
   permission: "supervised",
   permissionLocked: false,
   pendingPermission: null,
+  projectPath: "",
+  projectPathEnabled: false,
 });
 const emit = defineEmits<Emits>();
+const projectPathPicking = ref(false);
+
+const projectPathName = computed(() => {
+  const normalized = String(props.projectPath || "")
+    .trim()
+    .replace(/[\\/]+$/, "");
+  const parts = normalized.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || "";
+});
+
+const clearProjectPath = () => {
+  emit("projectPathChange", "");
+};
+
+const pickProjectPath = async () => {
+  if (projectPathPicking.value) return;
+  projectPathPicking.value = true;
+  try {
+    const result = await aiService.pickProjectPath();
+    if (result.path) {
+      emit("projectPathChange", result.path);
+    }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "系统目录选择器不可用");
+  } finally {
+    projectPathPicking.value = false;
+  }
+};
 
 /** 让下拉菜单渲染在 .chat-app 内部，brand CSS 变量才能生效（antd 弹层默认挂到 body）。 */
 const popupIntoChat = (trigger: HTMLElement) => trigger.closest(".chat-app") ?? document.body;
@@ -397,7 +432,6 @@ const chipClass = (active: boolean, disabled = false) => {
                   <ChevronDown class="!h-3 !w-3 flex-none text-brand-muted-strong" />
                 </button>
               </Dropdown>
-              <span v-if="permissionLocked" class="permission-lock-hint">Pi 固定完全访问</span>
               <Dropdown
                 :menu="modeMenu"
                 :trigger="['click']"
@@ -431,6 +465,48 @@ const chipClass = (active: boolean, disabled = false) => {
                   <span>文件</span>
                 </button>
               </Tooltip>
+              <div
+                v-if="projectPathEnabled"
+                class="project-path-control"
+                :class="{ 'is-selected': Boolean(projectPath) }"
+              >
+                <button
+                  type="button"
+                  :class="[
+                    chipClass(Boolean(projectPath), loading || projectPathPicking),
+                    { 'project-path-trigger-selected': Boolean(projectPath) },
+                  ]"
+                  :aria-pressed="Boolean(projectPath)"
+                  aria-label="项目工作目录"
+                  :title="
+                    projectPathPicking ? '等待系统目录选择器' : projectPath || '选择项目工作目录'
+                  "
+                  :disabled="loading || projectPathPicking"
+                  @click="pickProjectPath"
+                >
+                  <FolderOpen
+                    class="!h-[12px] !w-[12px] flex-none"
+                    :class="projectPath ? 'text-brand-accent' : 'text-brand-muted-strong'"
+                  />
+                  <span
+                    class="project-path-chip-label"
+                    :title="projectPathName || '选择项目工作目录'"
+                  >
+                    {{ projectPathName || "目录" }}
+                  </span>
+                </button>
+                <Tooltip v-if="projectPath" title="清除项目目录">
+                  <button
+                    type="button"
+                    class="project-path-clear"
+                    aria-label="清除项目目录"
+                    :disabled="loading || projectPathPicking"
+                    @click="clearProjectPath"
+                  >
+                    <X class="!h-[11px] !w-[11px]" />
+                  </button>
+                </Tooltip>
+              </div>
             </div>
 
             <!-- composer 右排：模型选择 + 发送 / 停止 -->
@@ -509,6 +585,53 @@ const chipClass = (active: boolean, disabled = false) => {
   /* composer 卡片没有投影，只有 1px border */
   box-shadow: none;
   transition: border-color 160ms ease;
+}
+
+.project-path-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 1px;
+}
+.project-path-control.is-selected {
+  border-radius: 6px;
+  background: var(--brand-surface-subtle);
+}
+.project-path-trigger-selected {
+  border-radius: 6px 0 0 6px;
+  background: transparent;
+}
+.project-path-clear {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  background: transparent;
+  color: var(--brand-muted-strong);
+  cursor: pointer;
+}
+.project-path-control.is-selected .project-path-clear {
+  border-radius: 0 6px 6px 0;
+}
+.project-path-clear:hover:not(:disabled) {
+  background: var(--brand-surface-subtle);
+  color: var(--brand-foreground);
+}
+.project-path-clear:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.project-path-chip-label {
+  display: block;
+  min-width: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chat-footer :deep(.antd-sender-main:focus-within) {
   border-color: var(--brand-border-strong);

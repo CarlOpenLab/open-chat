@@ -60,6 +60,22 @@ interface OpenCodeSessionEntry {
   model: string;
   createdAt: number;
   lastUsed: number;
+  projectPath?: string;
+  server: OpenCodeServer;
+}
+
+export interface LocalProviderSession {
+  sessionId: string;
+  cwd: string;
+  title?: string;
+  updatedAt?: string;
+  history?: Array<{
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+    reasoningContent?: string;
+    toolCalls?: Array<Record<string, unknown>>;
+  }>;
 }
 
 const DEFAULT_SERVER_START_TIMEOUT_MS = 15_000;
@@ -206,6 +222,66 @@ class OpenCodeServer {
     return res.body;
   }
 
+  async listSessions(): Promise<LocalProviderSession[]> {
+    const response = await this.request<unknown>("GET", "/session");
+    const values = Array.isArray(response)
+      ? response
+      : Array.isArray((response as { data?: unknown[] } | undefined)?.data)
+        ? ((response as { data: unknown[] }).data ?? [])
+        : [];
+    return values.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const item = value as Record<string, unknown>;
+      const id = typeof item.id === "string" ? item.id : "";
+      if (!id) return [];
+      const updated = item.updatedAt ?? item.updated_at ?? item.time;
+      const updatedAt =
+        typeof updated === "number"
+          ? new Date(updated < 10_000_000_000 ? updated * 1000 : updated).toISOString()
+          : typeof updated === "string"
+            ? updated
+            : undefined;
+      return [
+        {
+          sessionId: id,
+          cwd: typeof item.directory === "string" ? item.directory : this.cwd,
+          title:
+            (typeof item.title === "string" && item.title) ||
+            (typeof item.name === "string" && item.name) ||
+            undefined,
+          ...(updatedAt ? { updatedAt } : {}),
+        },
+      ];
+    });
+  }
+
+  async loadSession(id: string): Promise<LocalProviderSession | null> {
+    const response = await this.request<unknown>("GET", `/session/${encodeURIComponent(id)}`).catch(
+      () => undefined,
+    );
+    const item =
+      response && typeof response === "object" ? (response as Record<string, unknown>) : {};
+    const messagesResponse = await this.request<unknown>(
+      "GET",
+      `/session/${encodeURIComponent(id)}/message`,
+    ).catch(() => []);
+    const messages = Array.isArray(messagesResponse)
+      ? messagesResponse
+      : Array.isArray((messagesResponse as { data?: unknown[] } | undefined)?.data)
+        ? ((messagesResponse as { data: unknown[] }).data ?? [])
+        : [];
+    if (!response && messages.length === 0) return null;
+    return {
+      sessionId: id,
+      cwd: typeof item.directory === "string" ? item.directory : this.cwd,
+      title:
+        (typeof item.title === "string" && item.title) ||
+        (typeof item.name === "string" && item.name) ||
+        undefined,
+      history: convertOpenCodeHistory(messages),
+    };
+  }
+
   stop(): void {
     if (this.child) {
       this.child.kill("SIGTERM");
@@ -219,8 +295,11 @@ class OpenCodeServer {
 export class LocalChatManager {
   private readonly server: OpenCodeServer;
   private readonly sessions = new Map<string, OpenCodeSessionEntry>();
+  private readonly latestSessions = new Map<string, OpenCodeSessionEntry>();
   private modelsCache: { models: LocalModelInfo[]; at: number } | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
+
+  private readonly servers = new Map<string, OpenCodeServer>();
 
   constructor(private readonly config: LocalConfig) {
     const binary = config.binary || "opencode";
@@ -228,6 +307,17 @@ export class LocalChatManager {
       resolveExecutable(binary) ?? binary,
       config.cwd || process.cwd(),
     );
+    this.servers.set(config.cwd || process.cwd(), this.server);
+  }
+
+  private serverFor(projectPath?: string): OpenCodeServer {
+    const cwd = projectPath || this.config.cwd || process.cwd();
+    const existing = this.servers.get(cwd);
+    if (existing) return existing;
+    const binary = this.config.binary || "opencode";
+    const server = new OpenCodeServer(resolveExecutable(binary) ?? binary, cwd);
+    this.servers.set(cwd, server);
+    return server;
   }
 
   /** 是否已配置并启用本地 opencode。 */
@@ -304,6 +394,41 @@ export class LocalChatManager {
     return models;
   }
 
+  async listProviderSessions(projectPath?: string): Promise<LocalProviderSession[]> {
+    const servers = projectPath ? [this.serverFor(projectPath)] : [...this.servers.values()];
+    const results = await Promise.all(
+      servers.map((server) =>
+        server.listSessions().then(
+          (sessions) => ({ sessions, failed: false }),
+          (error) => {
+            console.error("[opencode] session discovery failed:", error);
+            return { sessions: [] as LocalProviderSession[], failed: true };
+          },
+        ),
+      ),
+    );
+    if (results.length > 0 && results.every((result) => result.failed)) {
+      throw new Error("opencode session list unavailable");
+    }
+    const seen = new Set<string>();
+    return results
+      .flatMap((result) => result.sessions)
+      .filter((session) => !seen.has(session.sessionId) && seen.add(session.sessionId))
+      .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""));
+  }
+
+  async loadProviderSession(
+    sessionId: string,
+    projectPath?: string,
+  ): Promise<LocalProviderSession | null> {
+    const servers = projectPath ? [this.serverFor(projectPath)] : [...this.servers.values()];
+    for (const server of servers) {
+      const session = await server.loadSession(sessionId).catch(() => null);
+      if (session) return session;
+    }
+    return null;
+  }
+
   /** 判断模型是否属于本地 opencode（形如 `opencode/...`）。 */
   async isLocalModel(model: string): Promise<boolean> {
     if (!this.config.enabled || typeof model !== "string") return false;
@@ -313,19 +438,25 @@ export class LocalChatManager {
   }
 
   /** 取前端会话对应的 opencode session；不存在则创建。 */
-  async getOrCreateSession(key: string, model: string): Promise<OpenCodeSessionEntry> {
-    const existing = this.sessions.get(key);
+  async getOrCreateSession(
+    key: string,
+    model: string,
+    projectPath?: string,
+    providerSessionId?: string,
+  ): Promise<OpenCodeSessionEntry> {
+    const sessionKey = `${key}:${projectPath || ""}`;
+    const existing = this.sessions.get(sessionKey);
     if (existing) {
       existing.lastUsed = Date.now();
       existing.model = model;
       return existing;
     }
-    const response = await this.server.request<{ data?: { id?: string } }>(
-      "POST",
-      "/api/session",
-      {},
-    );
-    const opencodeId = response?.data?.id;
+    const server = this.serverFor(projectPath);
+    let opencodeId = providerSessionId?.trim();
+    if (!opencodeId) {
+      const response = await server.request<{ data?: { id?: string } }>("POST", "/api/session", {});
+      opencodeId = response?.data?.id;
+    }
     if (!opencodeId) {
       throw GatewayError.upstream("opencode 未返回会话 ID");
     }
@@ -333,10 +464,13 @@ export class LocalChatManager {
       opencodeId,
       key,
       model,
+      projectPath,
+      server,
       createdAt: Date.now(),
       lastUsed: Date.now(),
     };
-    this.sessions.set(key, entry);
+    this.sessions.set(sessionKey, entry);
+    this.latestSessions.set(key, entry);
     this.evictIfNeeded();
     return entry;
   }
@@ -360,9 +494,9 @@ export class LocalChatManager {
       model: { providerID, modelID },
     };
     if (systemPrompt.trim()) body.system = systemPrompt.trim();
-    await this.server.request("POST", `/session/${entry.opencodeId}/prompt_async`, body);
+    await entry.server.request("POST", `/session/${entry.opencodeId}/prompt_async`, body);
 
-    const stream = await this.server.openEventStream(signal);
+    const stream = await entry.server.openEventStream(signal);
     if (!stream) throw new Error("opencode 事件流不可用");
 
     const reader = stream.getReader();
@@ -656,14 +790,14 @@ export class LocalChatManager {
     response: "once" | "always" | "reject",
     version: "v1" | "v2",
   ): Promise<void> {
-    const entry = this.sessions.get(key);
+    const entry = this.latestSessions.get(key);
     if (!entry) {
       throw GatewayError.invalidRequest("会话不存在或已失效，请刷新页面重试");
     }
     if (version === "v2") {
-      await this.server.request("POST", `/permission/${permissionId}/reply`, { reply: response });
+      await entry.server.request("POST", `/permission/${permissionId}/reply`, { reply: response });
     } else {
-      await this.server.request(
+      await entry.server.request(
         "POST",
         `/session/${entry.opencodeId}/permissions/${permissionId}`,
         { response },
@@ -684,7 +818,11 @@ export class LocalChatManager {
         }
       }
       if (oldestKey === null) break;
+      const removed = this.sessions.get(oldestKey);
       this.sessions.delete(oldestKey);
+      if (removed && this.latestSessions.get(removed.key) === removed) {
+        this.latestSessions.delete(removed.key);
+      }
     }
     this.ensureIdleTimer();
   }
@@ -696,6 +834,7 @@ export class LocalChatManager {
       for (const [key, entry] of this.sessions) {
         if (now - entry.lastUsed > this.config.sessionIdleMs) {
           this.sessions.delete(key);
+          if (this.latestSessions.get(entry.key) === entry) this.latestSessions.delete(entry.key);
         }
       }
       if (this.sessions.size === 0 && this.idleTimer) {
@@ -712,7 +851,9 @@ export class LocalChatManager {
       this.idleTimer = null;
     }
     this.sessions.clear();
-    this.server.stop();
+    this.latestSessions.clear();
+    for (const server of this.servers.values()) server.stop();
+    this.servers.clear();
   }
 }
 
@@ -722,6 +863,47 @@ function splitModel(model: string): [string, string] {
     throw GatewayError.unsupportedModel(model);
   }
   return [model.slice(0, index), model.slice(index + 1)];
+}
+
+function convertOpenCodeHistory(values: unknown[]): NonNullable<LocalProviderSession["history"]> {
+  const history: NonNullable<LocalProviderSession["history"]> = [];
+  for (const value of values) {
+    if (!value || typeof value !== "object") continue;
+    const message = value as Record<string, unknown>;
+    const info = (message.info ?? message.message ?? message) as Record<string, unknown>;
+    const role = info.role === "user" || info.role === "assistant" ? info.role : undefined;
+    if (!role) continue;
+    const parts = Array.isArray(message.parts)
+      ? message.parts
+      : Array.isArray(info.parts)
+        ? info.parts
+        : [];
+    let content = "";
+    let reasoningContent = "";
+    const toolCalls: Array<Record<string, unknown>> = [];
+    for (const partValue of parts) {
+      if (!partValue || typeof partValue !== "object") continue;
+      const part = partValue as Record<string, unknown>;
+      if (part.type === "text" && typeof part.text === "string") content += part.text;
+      if (
+        (part.type === "reasoning" || part.type === "thinking") &&
+        typeof part.text === "string"
+      ) {
+        reasoningContent += part.text;
+      }
+      if (part.type === "tool") toolCalls.push(part);
+    }
+    if (!content && typeof info.content === "string") content = info.content;
+    if (!content && !reasoningContent && toolCalls.length === 0) continue;
+    history.push({
+      id: typeof info.id === "string" ? info.id : `opencode-${history.length}`,
+      role,
+      content,
+      ...(reasoningContent ? { reasoningContent } : {}),
+      ...(toolCalls.length ? { toolCalls } : {}),
+    });
+  }
+  return history;
 }
 
 /** OpenAI 兼容 SSE chunk。 */

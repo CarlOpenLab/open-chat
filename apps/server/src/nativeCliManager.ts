@@ -2,6 +2,10 @@ import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ServerResponse } from "node:http";
+import { createReadStream } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import type { AcpAgentConfig, AcpConfig, AgentTransport } from "./config";
 import { cliProcessEnv, resolveExecutable } from "./commandEnv";
@@ -29,6 +33,28 @@ export interface NativeSessionStateView {
   sessionId: string;
   configOptions: SessionConfigOption[];
   modes: null;
+  history?: NativeSessionHistoryMessage[];
+}
+
+export interface NativeSessionHistoryMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  reasoningContent?: string;
+  toolCalls?: Array<Record<string, unknown>>;
+  agentPlan?: Record<string, unknown>;
+}
+
+export interface NativeProviderSessionView {
+  sessionId: string;
+  cwd: string;
+  title?: string;
+  updatedAt?: string;
+}
+
+export interface NativeProviderSessionsView {
+  supported: boolean;
+  sessions: NativeProviderSessionView[];
 }
 
 interface NativeModel {
@@ -46,6 +72,7 @@ interface NativeSession {
   runtime: NativeRuntime | null;
   createdAt: number;
   lastUsed: number;
+  projectPath?: string;
 }
 
 interface NativeRuntime {
@@ -53,6 +80,7 @@ interface NativeRuntime {
   setModel(model: string): Promise<void>;
   cancel(): void;
   close(): void;
+  sessionId?(): string;
 }
 
 interface PendingPermission {
@@ -137,8 +165,59 @@ export class NativeCliManager {
       .sort((left, right) => right.lastUsed - left.lastUsed);
   }
 
-  async getSessionState(agentId: string, conversationId: string): Promise<NativeSessionStateView> {
-    return sessionView(await this.getOrCreateSession(agentId, conversationId));
+  async getSessionState(
+    agentId: string,
+    conversationId: string,
+    projectPath?: string,
+    providerSessionId?: string,
+  ): Promise<NativeSessionStateView> {
+    const session = await this.getOrCreateSession(
+      agentId,
+      conversationId,
+      projectPath,
+      providerSessionId,
+    );
+    const agent = this.requireAgent(agentId);
+    const history = await this.readProviderHistory(
+      agent,
+      session.sessionId,
+      projectPath || agent.cwd || this.config.cwd || process.cwd(),
+      session.sessionId !== conversationId || Boolean(providerSessionId),
+    );
+    return sessionView(session, history);
+  }
+
+  async listProviderSessions(agentId: string): Promise<NativeProviderSessionsView> {
+    const agent = this.requireAgent(agentId);
+    const executable = resolveExecutable(agent.command);
+    if (!executable && agent.transport !== "opencode") return { supported: false, sessions: [] };
+    const cwd = agent.cwd || this.config.cwd || process.cwd();
+    switch (agent.transport) {
+      case "codex":
+        return {
+          supported: true,
+          sessions: await discoverCodexSessions(executable!, cwd, agent.args),
+        };
+      case "claude":
+        return { supported: true, sessions: await discoverClaudeSessions(cwd) };
+      case "pi":
+        return { supported: true, sessions: await discoverPiSessions(cwd) };
+      case "opencode": {
+        if (!this.localChat) return { supported: false, sessions: [] };
+        const sessions = await this.localChat.listProviderSessions(cwd);
+        return {
+          supported: true,
+          sessions: sessions.map((session) => ({
+            sessionId: session.sessionId,
+            cwd: session.cwd || cwd,
+            ...(session.title ? { title: session.title } : {}),
+            ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
+          })),
+        };
+      }
+      default:
+        return { supported: false, sessions: [] };
+    }
   }
 
   async setSessionConfigOption(
@@ -146,11 +225,18 @@ export class NativeCliManager {
     conversationId: string,
     configId: string,
     value: string | boolean,
+    projectPath?: string,
+    providerSessionId?: string,
   ): Promise<NativeSessionStateView> {
     if (configId !== MODEL_CONFIG_ID || typeof value !== "string") {
       throw GatewayError.invalidRequest("该原生 CLI 目前只支持模型选择配置");
     }
-    const session = await this.getOrCreateSession(agentId, conversationId);
+    const session = await this.getOrCreateSession(
+      agentId,
+      conversationId,
+      projectPath,
+      providerSessionId,
+    );
     if (!session.models.some((model) => model.id === value)) {
       throw GatewayError.invalidRequest(`当前 CLI 不支持模型：${value}`);
     }
@@ -166,10 +252,17 @@ export class NativeCliManager {
     agentId: string,
     conversationId: string,
     text: string,
+    projectPath: string | undefined,
     res: ServerResponse,
     signal: AbortSignal,
+    providerSessionId?: string,
   ): Promise<void> {
-    const session = await this.getOrCreateSession(agentId, conversationId);
+    const session = await this.getOrCreateSession(
+      agentId,
+      conversationId,
+      projectPath,
+      providerSessionId,
+    );
     const agent = this.requireAgent(agentId);
     session.lastUsed = Date.now();
 
@@ -179,12 +272,26 @@ export class NativeCliManager {
       const entry = await this.localChat.getOrCreateSession(
         `${agentId}:${conversationId}`,
         session.model,
+        projectPath,
+        providerSessionId || (session.sessionId !== conversationId ? session.sessionId : undefined),
       );
+      session.sessionId = entry.opencodeId;
+      writeCustomEvent(res, "provider_session", { agentId, sessionId: session.sessionId });
       await this.localChat.runTurn(entry, text, session.model, "", res, signal);
       return;
     }
 
-    if (!session.runtime) session.runtime = await this.startRuntime(agent, session);
+    if (!session.runtime) {
+      session.runtime = await this.startRuntime(agent, session, providerSessionId);
+      const runtimeSessionId = session.runtime.sessionId?.();
+      if (runtimeSessionId) {
+        session.sessionId = runtimeSessionId;
+        writeCustomEvent(res, "provider_session", {
+          agentId,
+          sessionId: runtimeSessionId,
+        });
+      }
+    }
     try {
       await session.runtime.runTurn(text, res, signal);
       writeChunk(res, `${agent.transport}/${session.model || agent.id}`, {}, "stop");
@@ -233,9 +340,11 @@ export class NativeCliManager {
   private async getOrCreateSession(
     agentId: string,
     conversationId: string,
+    projectPath?: string,
+    providerSessionId?: string,
   ): Promise<NativeSession> {
     const agent = this.requireAgent(agentId);
-    const key = `${agentId}:${conversationId}`;
+    const key = `${agentId}:${conversationId}:${projectPath || ""}`;
     const existing = this.sessions.get(key);
     if (existing) {
       existing.lastUsed = Date.now();
@@ -246,12 +355,13 @@ export class NativeCliManager {
     const session: NativeSession = {
       agentId,
       conversationId,
-      sessionId: conversationId,
+      sessionId: providerSessionId?.trim() || conversationId,
       model: preferred?.id ?? "",
       models,
       runtime: null,
       createdAt: Date.now(),
       lastUsed: Date.now(),
+      projectPath,
     };
     this.sessions.set(key, session);
     return session;
@@ -273,19 +383,34 @@ export class NativeCliManager {
   private async startRuntime(
     agent: AcpAgentConfig,
     session: NativeSession,
+    providerSessionId?: string,
   ): Promise<NativeRuntime> {
     const executable = resolveExecutable(agent.command);
     if (!executable) throw GatewayError.invalidRequest(`${agent.name} CLI 不可用`);
-    const cwd = agent.cwd || this.config.cwd || process.cwd();
+    const cwd = session.projectPath || agent.cwd || this.config.cwd || process.cwd();
     const requestPermission: PermissionRequester = (agentId, res, request) =>
       this.requestPermission(agentId, res, request);
     switch (agent.transport) {
       case "codex":
-        return CodexRuntime.start(agent, executable, cwd, session.model, requestPermission);
+        return CodexRuntime.start(
+          agent,
+          executable,
+          cwd,
+          session.model,
+          requestPermission,
+          providerSessionId,
+        );
       case "claude":
-        return ClaudeRuntime.start(agent, executable, cwd, session.model, requestPermission);
+        return ClaudeRuntime.start(
+          agent,
+          executable,
+          cwd,
+          session.model,
+          requestPermission,
+          providerSessionId,
+        );
       case "pi":
-        return PiRuntime.start(agent, executable, cwd, session.model);
+        return PiRuntime.start(agent, executable, cwd, session.model, providerSessionId);
       default:
         throw GatewayError.invalidRequest(`不支持的原生 CLI 传输：${agent.transport}`);
     }
@@ -317,6 +442,34 @@ export class NativeCliManager {
       }, this.config.permissionTimeoutMs);
       this.pendingPermissions.set(id, { agentId, resolve, timer });
     });
+  }
+
+  private async readProviderHistory(
+    agent: AcpAgentConfig,
+    sessionId: string,
+    cwd: string,
+    enabled: boolean,
+  ): Promise<NativeSessionHistoryMessage[]> {
+    if (!enabled) return [];
+    try {
+      switch (agent.transport) {
+        case "codex":
+          return readCodexSessionHistory(agent, sessionId, cwd);
+        case "claude":
+          return readClaudeSessionHistory(sessionId);
+        case "pi":
+          return readPiSessionHistory(sessionId, cwd);
+        case "opencode": {
+          const loaded = await this.localChat?.loadProviderSession(sessionId, cwd);
+          return loaded?.history ?? [];
+        }
+        default:
+          return [];
+      }
+    } catch (error) {
+      console.error(`[${agent.id}] session history read failed:`, error);
+      return [];
+    }
   }
 }
 
@@ -439,6 +592,7 @@ class CodexRuntime implements NativeRuntime {
     cwd: string,
     model: string,
     requestPermission: PermissionRequester,
+    providerSessionId?: string,
   ): Promise<CodexRuntime> {
     let runtime: CodexRuntime;
     const rpc = new JsonRpcProcess(
@@ -465,10 +619,19 @@ class CodexRuntime implements NativeRuntime {
       serviceName: "open-chat",
       ...(model ? { model } : {}),
     };
-    const opened = await rpc.request("thread/start", params);
+    const opened = await rpc.request(
+      providerSessionId?.trim() ? "thread/resume" : "thread/start",
+      providerSessionId?.trim()
+        ? { threadId: providerSessionId.trim(), ...(model ? { model } : {}) }
+        : params,
+    );
     runtime.threadId = stringAt(opened, "result", "thread", "id");
     if (!runtime.threadId) throw new Error("Codex 未返回 thread id");
     return runtime;
+  }
+
+  sessionId(): string {
+    return this.threadId;
   }
 
   async runTurn(text: string, res: ServerResponse, signal: AbortSignal): Promise<void> {
@@ -623,6 +786,7 @@ class ClaudeRuntime implements NativeRuntime {
   private active: ActiveNativeRun | null = null;
   private requestId = 0;
   private model: string;
+  private readonly providerSessionId: string;
   private readonly tools = new Map<string, { name: string; input: unknown }>();
 
   private constructor(
@@ -631,9 +795,10 @@ class ClaudeRuntime implements NativeRuntime {
     cwd: string,
     model: string,
     private readonly requestPermission: PermissionRequester,
+    providerSessionId?: string,
   ) {
     this.model = model;
-    const sessionId = randomUUID();
+    this.providerSessionId = providerSessionId?.trim() || randomUUID();
     const args = [
       "-p",
       "--input-format",
@@ -649,8 +814,9 @@ class ClaudeRuntime implements NativeRuntime {
       "stdio",
       "--permission-mode",
       "manual",
-      "--session-id",
-      sessionId,
+      ...(providerSessionId?.trim()
+        ? ["--resume", providerSessionId.trim()]
+        : ["--session-id", this.providerSessionId]),
       ...(model ? ["--model", model] : []),
       ...agent.args,
     ];
@@ -676,8 +842,13 @@ class ClaudeRuntime implements NativeRuntime {
     cwd: string,
     model: string,
     requestPermission: PermissionRequester,
+    providerSessionId?: string,
   ) {
-    return new ClaudeRuntime(agent, executable, cwd, model, requestPermission);
+    return new ClaudeRuntime(agent, executable, cwd, model, requestPermission, providerSessionId);
+  }
+
+  sessionId(): string {
+    return this.providerSessionId;
   }
 
   async runTurn(text: string, res: ServerResponse, signal: AbortSignal): Promise<void> {
@@ -960,25 +1131,59 @@ class PiRpcProcess {
 class PiRuntime implements NativeRuntime {
   private active: ActiveNativeRun | null = null;
   private model: string;
+  private providerSessionId = "";
   private readonly rpc: PiRpcProcess;
   private readonly tools = new Map<string, { name: string; input: unknown }>();
 
-  private constructor(agent: AcpAgentConfig, executable: string, cwd: string, model: string) {
+  private constructor(
+    agent: AcpAgentConfig,
+    executable: string,
+    cwd: string,
+    model: string,
+    sessionPath?: string,
+  ) {
     this.model = model;
     this.rpc = new PiRpcProcess(
       executable,
-      ["--mode", "rpc", "--approve", ...agent.args],
+      [
+        "--mode",
+        "rpc",
+        "--approve",
+        ...(sessionPath ? ["--session", sessionPath] : []),
+        ...agent.args,
+      ],
       cwd,
       (value) => this.handleEvent(value),
       (error) => this.failActive(error),
     );
   }
 
-  static async start(agent: AcpAgentConfig, executable: string, cwd: string, model: string) {
-    const runtime = new PiRuntime(agent, executable, cwd, model);
-    await runtime.rpc.request({ type: "get_state" });
+  static async start(
+    agent: AcpAgentConfig,
+    executable: string,
+    cwd: string,
+    model: string,
+    providerSessionId?: string,
+  ) {
+    const sessionPath = providerSessionId?.trim()
+      ? await findPiSessionPath(providerSessionId.trim(), cwd)
+      : undefined;
+    const runtime = new PiRuntime(agent, executable, cwd, model, sessionPath ?? undefined);
+    const state = await runtime.rpc.request({ type: "get_state" });
+    const sessionFile =
+      stringAt(state, "data", "sessionFile") || stringAt(state, "data", "session_file");
+    runtime.providerSessionId =
+      stringAt(state, "data", "sessionId") ||
+      stringAt(state, "data", "session_id") ||
+      (sessionFile ? basename(sessionFile, ".jsonl") : "") ||
+      (sessionPath ? providerSessionId?.trim() : "") ||
+      "";
     if (model) await runtime.applyModel(model);
     return runtime;
+  }
+
+  sessionId(): string {
+    return this.providerSessionId;
   }
 
   async runTurn(text: string, res: ServerResponse, signal: AbortSignal): Promise<void> {
@@ -1153,6 +1358,373 @@ async function discoverCodexModels(
   }
 }
 
+async function discoverCodexSessions(
+  executable: string,
+  cwd: string,
+  extraArgs: string[],
+): Promise<NativeProviderSessionView[]> {
+  let exited: Error | null = null;
+  const rpc = new JsonRpcProcess(
+    executable,
+    ["app-server", "--stdio", ...extraArgs],
+    cwd,
+    () => {},
+    (error) => {
+      exited = error;
+    },
+  );
+  try {
+    await rpc.request("initialize", {
+      clientInfo: { name: "open-chat", title: "Open Chat", version: "0.1.0" },
+      capabilities: { experimentalApi: true },
+    });
+    rpc.notify("initialized", {});
+    const sessions: NativeProviderSessionView[] = [];
+    let cursor = "";
+    for (let page = 0; page < 100; page += 1) {
+      if (exited) throw exited;
+      const response = await rpc.request("thread/list", {
+        ...(cursor ? { cursor } : {}),
+        limit: 100,
+        sortKey: "recency_at",
+        sortDirection: "desc",
+        sourceKinds: ["appServer", "cli", "vscode"],
+      });
+      const result = asRecord(response.result) ?? {};
+      for (const threadValue of Array.isArray(result.data) ? result.data : []) {
+        const thread = asRecord(threadValue);
+        const id = stringValue(thread?.id);
+        if (!id) continue;
+        const updatedAt = numericValue(thread?.updatedAt);
+        sessions.push({
+          sessionId: id,
+          cwd: stringValue(thread?.cwd) || cwd,
+          ...(stringValue(thread?.name) || stringValue(thread?.preview)
+            ? { title: stringValue(thread?.name) || stringValue(thread?.preview) }
+            : {}),
+          ...(updatedAt !== undefined
+            ? { updatedAt: new Date(normalizeEpochMillis(updatedAt)).toISOString() }
+            : {}),
+        });
+      }
+      cursor = stringValue(result.nextCursor);
+      if (!cursor) break;
+    }
+    return sessions;
+  } finally {
+    rpc.close();
+  }
+}
+
+async function discoverClaudeSessions(cwd: string): Promise<NativeProviderSessionView[]> {
+  const root = join(homedir(), ".claude", "projects");
+  const projectDirs = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const sessions: NativeProviderSessionView[] = [];
+  for (const project of projectDirs) {
+    if (!project.isDirectory()) continue;
+    const projectPath = join(root, project.name);
+    const files = await readdir(projectPath, { withFileTypes: true }).catch(() => []);
+    for (const file of files) {
+      if (!file.isFile() || !file.name.endsWith(".jsonl")) continue;
+      const sessionId = basename(file.name, ".jsonl");
+      const fullPath = join(projectPath, file.name);
+      const lines = await readJsonLines(fullPath, 200);
+      const title = firstConversationText(lines, "user");
+      const fileStat = await stat(fullPath).catch(() => undefined);
+      sessions.push({
+        sessionId,
+        cwd: project.name === encodeProjectPath(cwd) ? cwd : decodeClaudeProjectPath(project.name),
+        ...(title ? { title: title.slice(0, 120) } : {}),
+        ...(fileStat ? { updatedAt: fileStat.mtime.toISOString() } : {}),
+      });
+    }
+  }
+  return sessions.sort((left, right) =>
+    (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""),
+  );
+}
+
+async function discoverPiSessions(cwd: string): Promise<NativeProviderSessionView[]> {
+  const root = join(homedir(), ".pi", "agent", "sessions");
+  const dirs = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const sessions: NativeProviderSessionView[] = [];
+  for (const dir of dirs) {
+    if (!dir.isDirectory()) continue;
+    const files = await readdir(join(root, dir.name), { withFileTypes: true }).catch(() => []);
+    for (const file of files) {
+      if (!file.isFile() || !file.name.endsWith(".jsonl")) continue;
+      const fullPath = join(root, dir.name, file.name);
+      const lines = await readJsonLines(fullPath, 200);
+      const header = lines.find((line) => line.type === "session");
+      const sessionId = stringValue(header?.id) || basename(file.name, ".jsonl");
+      const title =
+        lines
+          .filter((line) => line.type === "session_info")
+          .map((line) => stringValue(line.name))
+          .filter(Boolean)
+          .at(-1) || firstMessageText(lines, "user");
+      const fileStat = await stat(fullPath).catch(() => undefined);
+      sessions.push({
+        sessionId,
+        cwd: stringValue(header?.cwd) || cwd,
+        ...(title ? { title: title.slice(0, 120) } : {}),
+        ...(fileStat ? { updatedAt: fileStat.mtime.toISOString() } : {}),
+      });
+    }
+  }
+  return sessions.sort((left, right) =>
+    (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""),
+  );
+}
+
+async function findPiSessionPath(sessionId: string, cwd: string): Promise<string | null> {
+  const root = join(homedir(), ".pi", "agent", "sessions");
+  const preferred = join(root, encodePiProjectPath(cwd));
+  const dirs = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const ordered = [
+    ...(dirs.find((dir) => dir.isDirectory() && dir.name === basename(preferred))
+      ? [basename(preferred)]
+      : []),
+    ...dirs
+      .filter((dir) => dir.isDirectory() && dir.name !== basename(preferred))
+      .map((dir) => dir.name),
+  ];
+  for (const dir of ordered) {
+    const files = await readdir(join(root, dir), { withFileTypes: true }).catch(() => []);
+    for (const file of files) {
+      if (!file.isFile() || !file.name.endsWith(".jsonl")) continue;
+      const fullPath = join(root, dir, file.name);
+      const first = (await readJsonLines(fullPath, 10)).find((line) => line.type === "session");
+      if (stringValue(first?.id) === sessionId || basename(file.name, ".jsonl") === sessionId) {
+        return fullPath;
+      }
+    }
+  }
+  return null;
+}
+
+async function readClaudeSessionHistory(sessionId: string): Promise<NativeSessionHistoryMessage[]> {
+  const root = join(homedir(), ".claude", "projects");
+  const dirs = await readdir(root, { withFileTypes: true }).catch(() => []);
+  for (const dir of dirs) {
+    if (!dir.isDirectory()) continue;
+    const file = join(root, dir.name, `${sessionId}.jsonl`);
+    const lines = await readJsonLines(file);
+    if (lines.length > 0) return convertClaudeHistory(lines);
+  }
+  return [];
+}
+
+async function readPiSessionHistory(
+  sessionId: string,
+  cwd: string,
+): Promise<NativeSessionHistoryMessage[]> {
+  const file = await findPiSessionPath(sessionId, cwd);
+  if (!file) return [];
+  return convertPiHistory(await readJsonLines(file));
+}
+
+async function readJsonLines(
+  file: string,
+  limit = Number.POSITIVE_INFINITY,
+): Promise<Array<Record<string, unknown>>> {
+  const values: Array<Record<string, unknown>> = [];
+  const input = createReadStream(file, { encoding: "utf8" });
+  const lines = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY });
+  try {
+    for await (const line of lines) {
+      try {
+        const value = asRecord(JSON.parse(line) as unknown);
+        if (value) values.push(value);
+      } catch {
+        // Ignore an isolated malformed JSONL record and keep the usable history.
+      }
+      if (values.length >= limit) break;
+    }
+  } catch {
+    return [];
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+  return values;
+}
+
+function convertClaudeHistory(
+  lines: Array<Record<string, unknown>>,
+): NativeSessionHistoryMessage[] {
+  const history: NativeSessionHistoryMessage[] = [];
+  for (const line of lines) {
+    const message = asRecord(line.message);
+    const role = stringValue(message?.role);
+    if (role !== "user" && role !== "assistant") continue;
+    const content = message?.content;
+    const text = contentText(content) || (typeof content === "string" ? content : "");
+    const blocks = Array.isArray(content) ? content : [];
+    const reasoning = blocks
+      .map((block) => asRecord(block))
+      .filter((block) => stringValue(block?.type) === "thinking")
+      .map((block) => stringValue(block?.thinking))
+      .filter(Boolean)
+      .join("\n");
+    const toolCalls = blocks
+      .filter((blockValue) => stringValue(asRecord(blockValue)?.type) === "tool_use")
+      .map((blockValue) => asRecord(blockValue)!)
+      .map((block) => ({
+        id: stringValue(block.id) || randomUUID(),
+        name: block.name,
+        input: block.input,
+      }));
+    if (!text && !reasoning && !toolCalls.length) continue;
+    history.push({
+      id: stringValue(line.uuid) || randomUUID(),
+      role,
+      content: text,
+      ...(reasoning ? { reasoningContent: reasoning } : {}),
+      ...(toolCalls.length ? { toolCalls } : {}),
+    });
+  }
+  return history;
+}
+
+function convertPiHistory(lines: Array<Record<string, unknown>>): NativeSessionHistoryMessage[] {
+  const history: NativeSessionHistoryMessage[] = [];
+  for (const line of lines) {
+    const message = asRecord(line.message);
+    const role = stringValue(message?.role);
+    if (role !== "user" && role !== "assistant") continue;
+    const content = message?.content;
+    const text = contentText(content);
+    const blocks = Array.isArray(content) ? content : [];
+    const reasoning = blocks
+      .map((block) => asRecord(block))
+      .filter((block) => stringValue(block?.type) === "thinking")
+      .map((block) => stringValue(block?.thinking))
+      .filter(Boolean)
+      .join("\n");
+    if (!text && !reasoning) continue;
+    history.push({
+      id: stringValue(line.id) || randomUUID(),
+      role,
+      content: text,
+      ...(reasoning ? { reasoningContent: reasoning } : {}),
+    });
+  }
+  return history;
+}
+
+function firstConversationText(lines: Array<Record<string, unknown>>, role: string): string {
+  for (const line of lines) {
+    const message = asRecord(line.message);
+    if (stringValue(message?.role) !== role) continue;
+    const text = contentText(message?.content) || stringValue(message?.content);
+    if (text) return text;
+  }
+  return "";
+}
+
+function firstMessageText(lines: Array<Record<string, unknown>>, role: string): string {
+  return firstConversationText(lines, role);
+}
+
+function encodeProjectPath(value: string): string {
+  return value.replaceAll("/", "-");
+}
+
+function encodePiProjectPath(value: string): string {
+  return `--${value.replace(/^\/+/, "").replaceAll("/", "-")}--`;
+}
+
+function decodeClaudeProjectPath(value: string): string {
+  return value.startsWith("-") ? value.replaceAll("-", "/") : value;
+}
+
+async function readCodexSessionHistory(
+  agent: AcpAgentConfig,
+  threadId: string,
+  cwd: string,
+): Promise<NativeSessionHistoryMessage[]> {
+  const executable = resolveExecutable(agent.command);
+  if (!executable || !threadId) return [];
+  let exited: Error | null = null;
+  const rpc = new JsonRpcProcess(
+    executable,
+    ["app-server", "--stdio", ...agent.args],
+    cwd,
+    () => {},
+    (error) => {
+      exited = error;
+    },
+  );
+  try {
+    await rpc.request("initialize", {
+      clientInfo: { name: "open-chat", title: "Open Chat", version: "0.1.0" },
+      capabilities: { experimentalApi: true },
+    });
+    rpc.notify("initialized", {});
+    const response = await rpc.request("thread/read", { threadId, includeTurns: true });
+    if (exited) throw exited;
+    const thread = asRecord(response.result)?.thread;
+    const turns = Array.isArray(asRecord(thread)?.turns)
+      ? (asRecord(thread)?.turns as unknown[])
+      : [];
+    const history: NativeSessionHistoryMessage[] = [];
+    for (const turnValue of turns) {
+      const turn = asRecord(turnValue);
+      const items = Array.isArray(turn?.items) ? turn.items : [];
+      let assistant: NativeSessionHistoryMessage | undefined;
+      for (const itemValue of items) {
+        const item = asRecord(itemValue);
+        if (!item) continue;
+        const type = stringValue(item.type);
+        const id = stringValue(item.id) || randomUUID();
+        if (type === "userMessage") {
+          const content = contentText(item.content);
+          if (content) history.push({ id, role: "user", content });
+          continue;
+        }
+        if (type === "agentMessage") {
+          const content = stringValue(item.text);
+          assistant = { id, role: "assistant", content };
+          history.push(assistant);
+          continue;
+        }
+        if (type === "reasoning") {
+          const reasoning = contentText(item.summary) || contentText(item.content);
+          if (!reasoning) continue;
+          assistant = assistant || { id: `${id}:assistant`, role: "assistant", content: "" };
+          if (!history.includes(assistant)) history.push(assistant);
+          assistant.reasoningContent = [assistant.reasoningContent, reasoning]
+            .filter(Boolean)
+            .join("\n");
+          continue;
+        }
+        if (type === "plan") {
+          assistant = assistant || { id: `${id}:assistant`, role: "assistant", content: "" };
+          if (!history.includes(assistant)) history.push(assistant);
+          assistant.agentPlan = { text: stringValue(item.text) || contentText(item.content) };
+          continue;
+        }
+        if (
+          assistant &&
+          ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"].includes(type)
+        ) {
+          assistant.toolCalls = [
+            ...(assistant.toolCalls ?? []),
+            { id, name: stringValue(item.name) || type, ...item },
+          ];
+        }
+      }
+    }
+    return history;
+  } catch (error) {
+    console.error(`[${agent.id}] session history read failed:`, error);
+    return [];
+  } finally {
+    rpc.close();
+  }
+}
+
 async function discoverPiModels(
   executable: string,
   cwd: string,
@@ -1216,7 +1788,10 @@ function fallbackNativeModels(transport: NativeTransport): NativeModel[] {
   return [];
 }
 
-function sessionView(session: NativeSession): NativeSessionStateView {
+function sessionView(
+  session: NativeSession,
+  history: NativeSessionHistoryMessage[] = [],
+): NativeSessionStateView {
   const configOptions: SessionConfigOption[] = session.models.length
     ? [
         {
@@ -1235,6 +1810,7 @@ function sessionView(session: NativeSession): NativeSessionStateView {
     sessionId: session.sessionId,
     configOptions,
     modes: null,
+    ...(history.length > 0 ? { history } : {}),
   };
 }
 
@@ -1322,6 +1898,14 @@ function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function numericValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeEpochMillis(value: number): number {
+  return value < 10_000_000_000 ? value * 1000 : value;
+}
+
 function rpcId(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
 }
@@ -1349,6 +1933,19 @@ function stringifyValue(value: unknown): string | undefined {
   } catch {
     return "[无法序列化的输出]";
   }
+}
+
+function contentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value
+    .map((part) => {
+      if (typeof part === "string") return part;
+      const record = asRecord(part);
+      return stringValue(record?.text) || stringValue(record?.thinking);
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 function writeChunk(
