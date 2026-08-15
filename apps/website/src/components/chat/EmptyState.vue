@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Asterisk } from "@lucide/vue";
+import OpenChatLogo from "../OpenChatLogo.vue";
 
 interface Props {
   /** 标题中被下划线标注的工作区名 */
@@ -19,8 +19,8 @@ withDefaults(defineProps<Props>(), {
     class="flex flex-1 flex-col items-center justify-center px-8 pb-[52px] select-none"
     aria-label="空对话欢迎页"
   >
-    <span class="grid place-items-center" aria-hidden="true">
-      <Asterisk class="!h-5 !w-5 text-brand-accent" />
+    <span class="grid place-items-center text-brand-foreground" aria-hidden="true">
+      <OpenChatLogo :size="36" />
     </span>
     <h1 class="mt-[14px] mb-0 text-[20px] font-medium text-brand-foreground">
       想在

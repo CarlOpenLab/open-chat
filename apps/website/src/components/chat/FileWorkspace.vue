@@ -165,7 +165,6 @@ const downloadSelectedFile = () => {
                 :content="resolvePreviewFile(file)?.content ?? ''"
                 :components="markdownComponents"
                 :class-name="markdownClassName"
-                :escape-raw-html="true"
                 :open-links-in-new-tab="true"
               />
               <WorkspaceCodeEditor
@@ -247,7 +246,6 @@ const downloadSelectedFile = () => {
                 :content="resolvePreviewFile(file)?.content ?? ''"
                 :components="markdownComponents"
                 :class-name="markdownClassName"
-                :escape-raw-html="true"
                 :open-links-in-new-tab="true"
               />
               <WorkspaceCodeEditor

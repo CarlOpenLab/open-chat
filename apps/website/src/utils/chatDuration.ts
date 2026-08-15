@@ -1,4 +1,4 @@
-/** Waku 对齐的时间格式化工具（对齐 waku 的 format_worked_duration / format_working_elapsed）。 */
+/** Chat activity duration formatting helpers. */
 
 /** 完成态措辞："19 秒" / "1 分 5 秒" / "1 小时 2 分"。 */
 export const formatWorkedDuration = (ms: number): string => {

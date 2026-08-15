@@ -3,6 +3,7 @@ import { CloudUpload, Database, Info, Monitor, Moon, Settings2, Sun, Trash2, X }
 import { Button, Modal, Segmented, Upload } from "antdv-next";
 import { computed, h, ref, watch } from "vue";
 import { APP_VERSION } from "../../version";
+import OpenChatLogo from "../OpenChatLogo.vue";
 
 type ThemeMode = "system" | "light" | "dark";
 type SettingsTab = "general" | "data" | "about";
@@ -67,7 +68,9 @@ const navItems = [
     <div class="settings-dialog">
       <header class="settings-dialog-header">
         <div class="flex min-w-0 items-center gap-3">
-          <span class="settings-dialog-logo"><Settings2 class="!h-[17px] !w-[17px]" /></span>
+          <span class="settings-dialog-logo">
+            <OpenChatLogo :size="23" title="Open Chat" />
+          </span>
           <div class="min-w-0">
             <h2 class="m-0 truncate text-[15px] font-720">设置</h2>
             <p class="m-0 mt-0.5 truncate text-[10px] text-brand-muted">调整外观与数据</p>
@@ -172,7 +175,7 @@ const navItems = [
           <section v-else aria-label="关于">
             <h3 class="settings-section-title">Open Chat</h3>
             <p class="settings-section-desc">
-              基于 <code>@antdv-next/x</code> 与 <code>antdv-next</code> 构建的 AI 对话工作区。
+              通过开放协议连接本地 AI CLI 工具的工作区，基于 <code>@antdv-next/x</code> 构建。
             </p>
             <div class="settings-card">
               <div class="settings-row">

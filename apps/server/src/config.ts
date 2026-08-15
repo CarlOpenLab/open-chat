@@ -48,7 +48,7 @@ export interface AcpConfig {
 /**
  * 本地 AI（opencode serve）配置。
  *
- * 参考 waku 的做法：服务端驱动本地 `opencode serve`（HTTP + SSE），
+ * 服务端驱动本地 `opencode serve`（HTTP + SSE），
  * 模型与供应商从本地发现（`GET /api/model` 返回 `providerID/modelID`），
  * 聊天请求转发到本地 opencode，不再依赖客户端上传 baseUrl/apiKey。
  */

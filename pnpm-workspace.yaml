@@ -6,7 +6,7 @@ packages:
 catalog:
   "@agentclientprotocol/sdk": ^1.3.0
   "@antdv-next/icons": ^1.0.5
-  "@antdv-next/x": 1.1.3-beta.3
+  "@antdv-next/x": 1.2.2
   "@antdv-next/x-card": ^0.0.1
   "@antdv-next/x-markdown": ^0.1.2
   "@antdv-next/x-sdk": ^0.0.2

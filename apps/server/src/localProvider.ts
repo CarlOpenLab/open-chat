@@ -1,5 +1,5 @@
 /**
- * 本地 opencode provider（参考 waku 的 opencode driver）。
+ * 本地 opencode provider。
  *
  * 服务端驱动本地 `opencode serve`（HTTP + SSE），AI 取本地的：
  * - 模型与供应商：`GET /api/model` 返回 `providerID/modelID`（本地发现，
@@ -8,7 +8,7 @@
  * - 会话：`POST /api/session` 创建；前端会话（conversationId）与 opencode
  *   session 一一对应（长会话复用，历史自然积累）。
  * - 聊天：`POST /session/{id}/prompt_async`（model 与 system prompt 随每个
- *   prompt 下发，与 waku 一致），回复流经 `GET /event`（server-wide SSE，
+ *   prompt 下发），回复流经 `GET /event`（server-wide SSE，
  *   按 sessionID 过滤）。
  * - 事件转换：`message.part.delta`（field=text → content，
  *   field=reasoning → reasoning_content）转 OpenAI SSE chunk；
@@ -108,7 +108,7 @@ function reservePort(): Promise<number> {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 模型 slug → 展示名（与 waku 的 display_name_from_slug 对齐）。 */
+/** 模型 slug → 展示名。 */
 export function displayNameFromSlug(slug: string): string {
   const words = slug
     .split(/[-_]/)

@@ -30,7 +30,7 @@ include_answer = true
 # Legacy local-model catalog via opencode. Optional.
 #
 # When enabled, the server drives a local `opencode serve` (HTTP + SSE, the
-# same transport waku uses): models/providers are discovered from the local
+# same transport): models/providers are discovered from the local
 # opencode — `GET /api/model` lists the available models (free `opencode/*`,
 # ids look like `opencode/nemotron-3.5-lightning-free`) and
 # `GET /config/providers` supplies every configured provider, including the

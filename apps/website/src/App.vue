@@ -178,7 +178,7 @@ watch(
   currentPage,
   (page) => {
     const titles = {
-      chat: "工作区 · Open Chat",
+      chat: "Open Chat · AI CLI Workspace",
       "code-highlight-demo": "代码高亮 Demo · Open Chat",
     };
     document.title = titles[page];

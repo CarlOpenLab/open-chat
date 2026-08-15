@@ -7,12 +7,12 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
 import type { ToolCallItem } from "../../services/OpenChatProvider";
-import { formatWorkedDuration, formatWorkingElapsed } from "../../utils/wakuDuration";
+import { formatWorkedDuration, formatWorkingElapsed } from "../../utils/chatDuration";
 import type { A2UIActionPayload, A2UISubmission } from "../../utils/a2ui";
 import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
-import WakuActivityList from "./WakuActivityList.vue";
-import WakuTurnFold from "./WakuTurnFold.vue";
+import ActivityList from "./ActivityList.vue";
+import TurnFold from "./TurnFold.vue";
 
 interface Props {
   item: BubbleItemType;
@@ -107,7 +107,7 @@ const turnDurationLabel = computed(() =>
   props.turnDurationMs ? `用时 ${formatWorkedDuration(props.turnDurationMs)}` : "",
 );
 
-/** 底部“工作中 · Xs”跳动计时（对齐 waku working indicator）。 */
+/** 底部“工作中 · Xs”跳动计时。 */
 const nowMs = ref(Date.now());
 let tickTimer: ReturnType<typeof setInterval> | undefined;
 watch(
@@ -165,16 +165,16 @@ const onFaviconError = (url: string) => {
       </span>
     </div>
 
-    <!-- Waku 交互：流式中展示活动列表；回合结束折叠为“用时 Xs ▸”分割线（均在回答上方） -->
+    <!-- 流式中展示活动列表；回合结束折叠为“用时 Xs ▸”分割线（均在回答上方） -->
     <template v-if="hasActivities">
-      <WakuTurnFold
-        v-if="!streaming && !foldExpanded && turnDurationLabel"
+      <TurnFold
+        v-if="!streaming && turnDurationLabel"
         :label="turnDurationLabel"
-        :expanded="false"
-        @toggle="emit('update:foldExpanded', true)"
+        :expanded="foldExpanded"
+        @toggle="emit('update:foldExpanded', !foldExpanded)"
       />
-      <WakuActivityList
-        v-else
+      <ActivityList
+        v-if="streaming || foldExpanded"
         :reasoning="reasoningInfo"
         :tools="toolCalls"
         :plan="planInfo"
@@ -194,7 +194,6 @@ const onFaviconError = (url: string) => {
       :streaming="markdownStreaming"
       :class-name="markdownClassName"
       :config="{ breaks: true }"
-      escape-raw-html
       open-links-in-new-tab
     />
 
@@ -243,52 +242,31 @@ const onFaviconError = (url: string) => {
       </template>
     </Sources>
 
-    <!-- Waku 进行中指示：底部“工作中 · Xs”，随内容流式跳动 -->
-    <div v-if="streaming" class="waku-working-row" role="status" aria-live="polite">
-      <span class="waku-wave" aria-hidden="true"><i></i><i></i><i></i></span>
+    <!-- 进行中指示：底部“工作中 · Xs”，随内容流式跳动 -->
+    <div
+      v-if="streaming"
+      class="inline-flex min-h-[22px] items-center gap-2 text-[11.5px] leading-4 font-medium text-brand-muted-strong animate-[working-status-in_220ms_ease-out_both]"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="inline-flex items-center gap-[3.5px]" aria-hidden="true">
+        <i
+          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite]"
+        />
+        <i
+          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.09s]"
+        />
+        <i
+          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.18s]"
+        />
+      </span>
       <span>工作中{{ workingElapsed ? ` · ${workingElapsed}` : "" }}</span>
     </div>
   </div>
 </template>
 
-<style scoped>
-/* ---- 进行中指示行（waku working indicator） ---- */
-.waku-working-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 22px;
-  font-size: 11.5px;
-  line-height: 16px;
-  font-weight: 500;
-  color: var(--brand-muted-strong);
-  animation: status-in 220ms ease-out both;
-}
-
-.waku-wave {
-  display: inline-flex;
-  align-items: center;
-  gap: 3.5px;
-}
-
-.waku-wave i {
-  width: 4.5px;
-  height: 4.5px;
-  border-radius: 999px;
-  background: currentColor;
-  animation: waku-wave 1.4s linear infinite;
-}
-.waku-wave i:nth-child(1) {
-  animation-delay: 0s;
-}
-.waku-wave i:nth-child(2) {
-  animation-delay: 0.09s;
-}
-.waku-wave i:nth-child(3) {
-  animation-delay: 0.18s;
-}
-
-@keyframes waku-wave {
+<style>
+@keyframes working-wave {
   0%,
   100% {
     opacity: 0.25;
@@ -298,7 +276,7 @@ const onFaviconError = (url: string) => {
   }
 }
 
-@keyframes status-in {
+@keyframes working-status-in {
   from {
     opacity: 0;
     transform: translateY(3px);

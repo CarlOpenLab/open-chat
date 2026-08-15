@@ -1,0 +1,41 @@
+<script setup lang="ts">
+interface Props {
+  size?: number;
+  title?: string;
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  size: 24,
+  title: "",
+});
+</script>
+
+<template>
+  <svg
+    :width="props.size"
+    :height="props.size"
+    viewBox="0 0 512 512"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    :role="props.title ? 'img' : undefined"
+    :aria-label="props.title || undefined"
+    :aria-hidden="props.title ? undefined : 'true'"
+  >
+    <title v-if="props.title">{{ props.title }}</title>
+    <desc v-if="props.title">
+      An open speech bubble connected to three endpoints, representing multiple AI CLI tools
+      connected through an open protocol.
+    </desc>
+    <g stroke="currentColor" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+      <path
+        d="M350 166 C327 112 269 82 205 88 C129 95 75 146 69 214 C64 270 87 314 128 342 L116 405 L180 365 C219 374 267 371 305 351 C332 337 349 315 358 288"
+      />
+      <path d="M350 190 L394 190 L435 158" />
+      <path d="M350 256 L452 256" />
+      <path d="M350 322 L394 322 L435 354" />
+      <circle cx="452" cy="158" r="16" />
+      <circle cx="470" cy="256" r="16" />
+      <circle cx="452" cy="354" r="16" />
+    </g>
+  </svg>
+</template>

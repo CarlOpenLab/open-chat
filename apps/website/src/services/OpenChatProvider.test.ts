@@ -136,10 +136,10 @@ test("preserves newlines across chunk boundaries after reasoning (regression)", 
   let msg: XModelMessage = { content: "", role: "assistant" };
   // 先流式思考，再分多块输出正文（每块边界带 \n）
   msg = transform(msg, delta("", "先分析现有组件的交互方式。"));
-  msg = transform(msg, delta("", "再对照 Waku 的折叠模型。"));
+  msg = transform(msg, delta("", "再对照活动折叠模型。"));
   expect(msg.content).toBe("");
   expect((msg as { reasoningContent?: string }).reasoningContent).toBe(
-    "先分析现有组件的交互方式。再对照 Waku 的折叠模型。",
+    "先分析现有组件的交互方式。再对照活动折叠模型。",
   );
   expect((msg as { reasoningDone?: boolean }).reasoningDone).toBeUndefined();
 

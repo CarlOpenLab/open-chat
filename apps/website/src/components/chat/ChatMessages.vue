@@ -81,11 +81,11 @@ const scrollToBottom = () => {
 const markdownTheme = computed<MarkdownTheme>(() => (props.dark ? "dark" : "light"));
 const markdownClassName = computed(() => `chat-markdown x-markdown-${markdownTheme.value}`);
 provide(markdownThemeKey, markdownTheme);
-/** Waku 对齐：回合折叠（分割线）、活动摘要、条目展开、耗时统计。 */
+/** 回合折叠（分割线）、活动摘要、条目展开、耗时统计。 */
 const foldExpandedMap = ref<Record<string, boolean>>({});
 const summaryExpandedMap = ref<Record<string, boolean>>({});
 const itemExpandedMap = ref<Record<string, string[]>>({});
-/** 用户在流式中手动折叠过思考条目（对齐 waku：显式点击优先于自动展开）。 */
+/** 用户在流式中手动折叠过思考条目（显式点击优先于自动展开）。 */
 const reasoningCollapsedMap = ref<Record<string, boolean>>({});
 const messageStartMap = ref<Record<string, number>>({});
 const turnDurationMap = ref<Record<string, number>>({});
@@ -278,6 +278,11 @@ const submissionsForMessage = (messageId: string | number) =>
 const getThinkKey = (messageId: string | number) =>
   `${props.conversationKey || "__draft__"}::${String(messageId)}`;
 
+const persistedTurnDuration = (item: BubbleItemType): number | undefined => {
+  const value = (item.extraInfo as { turnDurationMs?: unknown } | undefined)?.turnDurationMs;
+  return typeof value === "number" && value > 0 ? value : undefined;
+};
+
 /** 历史消息（本次会话未观测到耗时）默认展开活动列表；本次会话中结束的回合默认折叠为分割线。 */
 const defaultFoldExpanded = (key: string): boolean => !turnDurationMap.value[key];
 
@@ -364,6 +369,10 @@ watch(
       const key = getThinkKey(item.key);
       const streaming = isStreamingStatus(item.status);
       const prevStreaming = lastStreamingMap.value[key] ?? false;
+      const storedDuration = persistedTurnDuration(item);
+      if (storedDuration && !turnDurationMap.value[key]) {
+        turnDurationMap.value[key] = storedDuration;
+      }
 
       // 回合计时：首次出现 / 重新生成时记录起点；结束时记录耗时。
       if (streaming) {
@@ -509,6 +518,13 @@ onBeforeUnmount(() => {
 }
 .messages-wrapper :deep(.antd-bubble) {
   animation: message-in 260ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+.messages-wrapper :deep(.assistant-bubble .antd-bubble-body),
+.messages-wrapper :deep(.assistant-bubble .antd-bubble-content),
+.messages-wrapper :deep(.assistant-bubble .antd-bubble-content-box) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 .messages-wrapper :deep(.antd-thought-chain) {
   animation: activity-in 220ms ease-out both;

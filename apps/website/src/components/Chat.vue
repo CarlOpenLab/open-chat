@@ -86,6 +86,100 @@ const isHydrating = ref(true);
 const activeRequestConversationKey = ref<string>("");
 /** 请求开始时间，供侧栏「工作中」条目计时 */
 const requestStartedAt = ref(0);
+const turnTimingStarts = new Map<string, number>();
+const turnTimingValues = new Map<string, { startedAtMs?: number; durationMs: number }>();
+
+interface MessageTimingExtraInfo {
+  turnStartedAtMs?: unknown;
+  turnDurationMs?: unknown;
+}
+
+const messageTimingKey = (conversationKey: string, messageId: string | number): string =>
+  `${conversationKey}::${String(messageId)}`;
+
+const timingExtraInfo = (extraInfo: Record<string, unknown> | undefined): MessageTimingExtraInfo =>
+  extraInfo ?? {};
+
+/**
+ * Keep turn timing on the exact assistant message that produced it. The
+ * conversation key scopes identical provider message ids across sessions.
+ */
+const persistMessageTimings = (
+  conversationKey: string,
+  source: DefaultMessageInfo<XModelMessage>[],
+): DefaultMessageInfo<XModelMessage>[] => {
+  if (!conversationKey) return source;
+  const now = Date.now();
+  let changed = false;
+  const next = source.map((item) => {
+    if (item.message.role !== "assistant") return item;
+
+    if (item.id === undefined || item.id === null || String(item.id) === "") return item;
+    const key = messageTimingKey(conversationKey, item.id);
+    const streaming = item.status === "loading" || item.status === "updating";
+    const extraInfo = item.extraInfo as Record<string, unknown> | undefined;
+    const timing = timingExtraInfo(extraInfo);
+
+    if (streaming) {
+      if (!turnTimingStarts.has(key)) turnTimingStarts.set(key, now);
+      turnTimingValues.delete(key);
+      if ("turnStartedAtMs" in timing || "turnDurationMs" in timing) {
+        const { turnStartedAtMs: _startedAt, turnDurationMs: _duration, ...rest } = timing;
+        changed = true;
+        return {
+          ...item,
+          extraInfo: Object.keys(rest).length ? rest : undefined,
+        };
+      }
+      return item;
+    }
+
+    const startedAtMs = turnTimingStarts.get(key);
+    const persistedDuration =
+      typeof timing.turnDurationMs === "number" && timing.turnDurationMs > 0
+        ? timing.turnDurationMs
+        : undefined;
+    if (persistedDuration) {
+      turnTimingValues.set(key, {
+        startedAtMs:
+          typeof timing.turnStartedAtMs === "number" ? timing.turnStartedAtMs : undefined,
+        durationMs: persistedDuration,
+      });
+      return item;
+    }
+
+    if (!startedAtMs) {
+      const cachedTiming = turnTimingValues.get(key);
+      if (!cachedTiming) return item;
+
+      changed = true;
+      return {
+        ...item,
+        extraInfo: {
+          ...extraInfo,
+          ...(cachedTiming.startedAtMs !== undefined
+            ? { turnStartedAtMs: cachedTiming.startedAtMs }
+            : {}),
+          turnDurationMs: cachedTiming.durationMs,
+        },
+      };
+    }
+
+    turnTimingStarts.delete(key);
+    const durationMs = Math.max(1, now - startedAtMs);
+    turnTimingValues.set(key, { startedAtMs, durationMs });
+    changed = true;
+    return {
+      ...item,
+      extraInfo: {
+        ...extraInfo,
+        turnStartedAtMs: startedAtMs,
+        turnDurationMs: durationMs,
+      },
+    };
+  });
+  return changed ? next : source;
+};
 const commandPaletteOpen = ref(false);
 const settingsOpen = ref(false);
 const agents = ref<AgentView[]>([API_AGENT]);
@@ -398,28 +492,6 @@ const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
   }
 };
 
-const handleNavigateBack = () => {
-  if (historyBack.value.length === 0) return;
-  historyLocked.value = true;
-  historyForward.value.push(currentConversationKey.value);
-  const prev = historyBack.value.pop() ?? "";
-  currentConversationKey.value = prev;
-  const conv = getCurrentConversation();
-  showWelcome.value = conv ? conv.messages.length === 0 : true;
-  historyLocked.value = false;
-};
-
-const handleNavigateForward = () => {
-  if (historyForward.value.length === 0) return;
-  historyLocked.value = true;
-  historyBack.value.push(currentConversationKey.value);
-  const next = historyForward.value.pop() ?? "";
-  currentConversationKey.value = next;
-  const conv = getCurrentConversation();
-  showWelcome.value = conv ? conv.messages.length === 0 : true;
-  historyLocked.value = false;
-};
-
 const handleSidebarToggle = () => {
   conversationsOpen.value = !conversationsOpen.value;
 };
@@ -641,7 +713,10 @@ watch(
   messages,
   (newMessages) => {
     const conversationWriteKey = activeRequestConversationKey.value || currentConversationKey.value;
-    updateConversationMessages(conversationWriteKey, newMessages);
+    updateConversationMessages(
+      conversationWriteKey,
+      persistMessageTimings(conversationWriteKey, newMessages),
+    );
     schedulePersistState();
   },
   { deep: true },
@@ -751,29 +826,48 @@ const bubbleItems = computed<BubbleItemType[]>(() => {
       ({ message: modelMessage, extraInfo }) =>
         !isA2UISubmissionContextMessage(modelMessage, extraInfo),
     )
-    .map(({ id, message: modelMessage, status }) => ({
-      key: id,
-      role: modelMessage.role,
-      status,
-      loading: status === "loading",
-      content: typeof modelMessage.content === "string" ? modelMessage.content : "",
-      // 工具调用 / 上游错误 / 重试提示：由 OpenChatProvider 累积在消息对象上。
-      extraInfo: {
-        reasoningContent:
-          typeof modelMessage.reasoningContent === "string"
-            ? modelMessage.reasoningContent
+    .map(({ id, message: modelMessage, status, extraInfo }) => {
+      const persistedTiming = extraInfo as
+        | { turnStartedAtMs?: unknown; turnDurationMs?: unknown }
+        | undefined;
+
+      return {
+        key: id,
+        role: modelMessage.role,
+        status,
+        loading: status === "loading",
+        content: typeof modelMessage.content === "string" ? modelMessage.content : "",
+        // 工具调用 / 上游错误 / 重试提示：由 OpenChatProvider 累积在消息对象上。
+        extraInfo: {
+          reasoningContent:
+            typeof modelMessage.reasoningContent === "string"
+              ? modelMessage.reasoningContent
+              : undefined,
+          reasoningDone:
+            typeof modelMessage.reasoningDone === "boolean"
+              ? modelMessage.reasoningDone
+              : undefined,
+          toolCalls: Array.isArray(modelMessage.toolCalls) ? modelMessage.toolCalls : undefined,
+          chatError:
+            typeof modelMessage.chatError === "string" ? modelMessage.chatError : undefined,
+          chatNotices: Array.isArray(modelMessage.chatNotices)
+            ? modelMessage.chatNotices
             : undefined,
-        reasoningDone:
-          typeof modelMessage.reasoningDone === "boolean" ? modelMessage.reasoningDone : undefined,
-        toolCalls: Array.isArray(modelMessage.toolCalls) ? modelMessage.toolCalls : undefined,
-        chatError: typeof modelMessage.chatError === "string" ? modelMessage.chatError : undefined,
-        chatNotices: Array.isArray(modelMessage.chatNotices) ? modelMessage.chatNotices : undefined,
-        agentPlan:
-          modelMessage.agentPlan && typeof modelMessage.agentPlan === "object"
-            ? modelMessage.agentPlan
-            : undefined,
-      },
-    }));
+          agentPlan:
+            modelMessage.agentPlan && typeof modelMessage.agentPlan === "object"
+              ? modelMessage.agentPlan
+              : undefined,
+          turnStartedAtMs:
+            typeof persistedTiming?.turnStartedAtMs === "number"
+              ? persistedTiming.turnStartedAtMs
+              : undefined,
+          turnDurationMs:
+            typeof persistedTiming?.turnDurationMs === "number"
+              ? persistedTiming.turnDurationMs
+              : undefined,
+        },
+      };
+    });
 });
 
 // ============ 事件处理 ============
@@ -1207,8 +1301,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
             @new-conversation="handleNewConversation"
             @open-search="commandPaletteOpen = true"
             @open-settings="settingsOpen = true"
-            @navigate-back="handleNavigateBack"
-            @navigate-forward="handleNavigateForward"
             @active-change="handleActiveChange"
             @rename="handleSidebarRename"
             @pin="handlePinConversation"
@@ -1242,8 +1334,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :diff-removed="workspaceDiffStats.removed"
         @toggle-sidebar="handleSidebarToggle"
         @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
-        @navigate-back="handleNavigateBack"
-        @navigate-forward="handleNavigateForward"
         @export="handleExportLocalHistory"
         @rename="handleRenameConversation"
         @pin="handlePinConversation"

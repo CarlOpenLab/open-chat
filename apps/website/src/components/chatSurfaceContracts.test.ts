@@ -62,14 +62,13 @@ describe("Chat product surface contracts", () => {
     expect(sidebar).not.toContain("conversation-entry-folder");
   });
 
-  test("sidebar entries get an icon tile and a filled meta row", () => {
-    // 左侧图标 tile：普通会话用聊天气泡
-    expect(sidebar).toContain("conversation-entry-icon");
+  test("sidebar entries keep a filled two-line meta row", () => {
     expect(sidebar).toContain("conversation-entry-body");
-    expect(sidebar).toContain("MessageSquare");
+    expect(sidebar).not.toContain("conversation-entry-icon");
+    expect(sidebar).not.toContain("MessageSquare");
     // 普通会话副行回退到最后一条消息预览，避免整行空白
-    expect(sidebar).toContain("lastMessagePreview");
     expect(sidebar).toContain("getMessagePreview");
+    expect(sidebar).toContain("conversation-entry-project");
     // 没有副行文案时时间也通过 margin-left:auto 贴右
     expect(sidebar).toContain("margin-left: auto");
   });
@@ -134,8 +133,8 @@ describe("Chat product surface contracts", () => {
     expect(chat).toContain("conversationsOpen ? sidebarWidth : 0");
   });
 
-  test("empty state uses the asterisk prompt", () => {
-    expect(emptyState).toContain("Asterisk");
+  test("empty state uses the Open Chat connection mark", () => {
+    expect(emptyState).toContain("OpenChatLogo");
     expect(emptyState).toContain("中构建什么？");
     // ProjectNameSelector 的 1px 虚线（dash 1 / gap 2）用背景渐变实现，
     // text-decoration: dotted 控制不了点距

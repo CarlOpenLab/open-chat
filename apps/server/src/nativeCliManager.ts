@@ -610,7 +610,7 @@ class CodexRuntime implements NativeRuntime {
     rpc.notify("initialized", {});
     const params: Record<string, unknown> = {
       cwd,
-      // Codex is used here as a local coding agent. Match Waku's native
+      // Codex is used here as a local coding agent. Match the native
       // agent behavior: commands run without an approval round-trip and have
       // full host access, so a command cannot remain stuck waiting on UI input.
       approvalPolicy: "never",

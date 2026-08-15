@@ -21,20 +21,7 @@ const emit = defineEmits<Emits>();
 
 // ============ 推荐提示词（空状态标题下方的胶囊建议） ============
 
-const defaultPromptItems: StarterPrompt[] = [
-  {
-    id: "placeholder-idea",
-    label: "梳理一个想法",
-    description: "快速整理目标、边界和下一步",
-    prompt: "帮我把这个想法整理成目标、范围和下一步行动。",
-  },
-  {
-    id: "placeholder-review",
-    label: "检查一段内容",
-    description: "发现问题并给出简洁建议",
-    prompt: "帮我检查一段内容，指出最需要改进的三个地方。",
-  },
-];
+const defaultPromptItems: StarterPrompt[] = [];
 
 const promptItems = computed<StarterPrompt[]>(() =>
   props.items?.length ? props.items : defaultPromptItems,

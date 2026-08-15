@@ -3,8 +3,6 @@ import type { ConversationItemType, ConversationsProps } from "@antdv-next/x";
 import { Conversations } from "@antdv-next/x";
 import {
   Archive,
-  ArrowLeft,
-  ArrowRight,
   Bot,
   ChevronDown,
   Circle,
@@ -93,16 +91,6 @@ const startTick = (periodMs: number) => {
   }, periodMs);
 };
 
-const DATE_GROUP_LABEL: Record<string, string> = {
-  置顶: "置顶",
-  今天: "今天",
-  昨天: "昨天",
-  本周: "本周",
-  本月: "本月",
-  今年: "今年",
-  更早: "更早",
-};
-
 const GROUP_WEIGHT: Record<string, number> = {
   置顶: 0,
   今天: 1,
@@ -177,7 +165,7 @@ const groupable = computed<ConversationsProps["groupable"]>(() => ({
   },
 }));
 
-/** Waku 的副行以项目为主；API/旧会话没有项目时回退到最后一条消息摘要。 */
+/** 副行以项目为主；API/旧会话没有项目时回退到最后一条消息摘要。 */
 const conversationMeta = (conversation: OpenChatConversation): string => {
   const projectPath = conversation.projectPath?.trim();
   if (projectPath) {
@@ -192,7 +180,7 @@ const conversationMeta = (conversation: OpenChatConversation): string => {
 };
 
 /**
- * 条目 = Waku 两行结构：标题行 + 项目/消息摘要 + 时间，无会话类型图标。
+ * 条目 = 两行结构：标题行 + 项目/消息摘要 + 时间，无会话类型图标。
  * 进行中的会话把时间换成「工作中 · 已运行时长」并附一个转圈图标。
  */
 const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
@@ -311,7 +299,7 @@ onBeforeUnmount(() => {
     :class="open ? 'border-r border-r-solid border-r-brand-border' : ''"
     aria-label="会话导航"
   >
-    <!-- 侧栏标题栏：48px，折叠按钮 + 历史导航 -->
+    <!-- 侧栏标题栏：品牌标志与历史导航 -->
     <div class="flex h-[48px] flex-none items-center gap-[2px] px-[10px]">
       <button
         type="button"
@@ -320,30 +308,6 @@ onBeforeUnmount(() => {
         @click="emit('toggleSidebar')"
       >
         <PanelLeftClose :class="open ? '' : 'rotate-180'" />
-      </button>
-      <button
-        type="button"
-        class="grid h-[26px] w-[26px] place-items-center rounded-[6px] border-0 bg-transparent p-0 text-brand-muted-strong"
-        :class="
-          canGoBack ? 'hover:bg-brand-surface-subtle hover:text-brand-foreground' : 'opacity-35'
-        "
-        :disabled="!canGoBack"
-        aria-label="返回上一个会话"
-        @click="emit('navigateBack')"
-      >
-        <ArrowLeft class="!h-[14px] !w-[14px]" />
-      </button>
-      <button
-        type="button"
-        class="grid h-[26px] w-[26px] place-items-center rounded-[6px] border-0 bg-transparent p-0 text-brand-muted-strong"
-        :class="
-          canGoForward ? 'hover:bg-brand-surface-subtle hover:text-brand-foreground' : 'opacity-35'
-        "
-        :disabled="!canGoForward"
-        aria-label="前进到下一个会话"
-        @click="emit('navigateForward')"
-      >
-        <ArrowRight class="!h-[14px] !w-[14px]" />
       </button>
     </div>
 
@@ -647,7 +611,7 @@ onBeforeUnmount(() => {
     color 160ms ease;
 }
 
-/* Waku 式两行条目（标题行 / 项目与时间副行），无左侧类型图标。 */
+/* 两行条目（标题行 / 项目与时间副行），无左侧类型图标。 */
 .chat-sidebar :deep(.conversation-entry) {
   display: flex;
   width: 100%;

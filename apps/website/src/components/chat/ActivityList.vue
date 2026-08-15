@@ -16,7 +16,7 @@ import { XMarkdown } from "@antdv-next/x-markdown";
 import type { ToolCallItem } from "../../services/OpenChatProvider";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
-import { formatWorkedDuration } from "../../utils/wakuDuration";
+import { formatWorkedDuration } from "../../utils/chatDuration";
 
 interface ReasoningInfo {
   content: string;
@@ -64,7 +64,7 @@ const theme = inject(
 );
 const markdownComponents: Record<string, Component> = { code: MarkdownCodeRenderer };
 const markdownClassName = computed(
-  () => `waku-reasoning-markdown chat-markdown x-markdown-${theme.value}`,
+  () => `activity-reasoning-markdown chat-markdown x-markdown-${theme.value}`,
 );
 
 const formatToolDetail = (value: unknown, maxLength = 4000): string => {
@@ -213,7 +213,7 @@ const entries = computed<ActivityEntry[]>(() => {
   return list;
 });
 
-/** Waku activity_summary："正在执行：1 次思考 · 2 次工具调用" / "已执行：…"。 */
+/** 活动摘要："正在执行：1 次思考 · 2 次工具调用" / "已执行：…"。 */
 const summaryLabel = computed(() => {
   if (!entries.value.length) return "";
   const nouns: Record<ActivityEntry["kind"], string> = {
@@ -308,42 +308,64 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="entries.length" class="waku-activity-list">
-    <!-- 摘要行：Waku 的 activities 折叠开关 -->
-    <button type="button" class="waku-summary" @click="toggleSummary">
-      <span v-if="anyRunning" class="waku-pulse" aria-hidden="true"></span>
-      <span class="waku-summary-text">{{ summaryLabel }}</span>
-      <ChevronRight v-if="!summaryExpanded" class="waku-chevron" />
-      <ChevronDown v-else class="waku-chevron" />
+  <div v-if="entries.length" class="flex w-full min-w-0 flex-col gap-0.5">
+    <!-- 摘要行：活动折叠开关 -->
+    <button
+      type="button"
+      class="inline-flex h-[22px] w-fit items-center gap-1.5 rounded border-0 bg-transparent px-0.5 py-0 text-left text-[11px] leading-[14px] font-medium text-brand-muted-strong hover:text-brand-muted"
+      @click="toggleSummary"
+    >
+      <span
+        v-if="anyRunning"
+        class="h-1.25 w-1.25 flex-none rounded-full bg-brand-accent animate-[activity-pulse_1.6s_ease-in-out_infinite]"
+        aria-hidden="true"
+      ></span>
+      <span class="whitespace-nowrap">{{ summaryLabel }}</span>
+      <ChevronRight v-if="!summaryExpanded" class="h-2.5 w-2.5 flex-none text-brand-ghost" />
+      <ChevronDown v-else class="h-2.5 w-2.5 flex-none text-brand-ghost" />
     </button>
 
-    <div v-if="summaryExpanded" class="waku-items">
+    <div v-if="summaryExpanded" class="flex w-full min-w-0 flex-col pl-[15px]">
       <div
         v-for="entry in entries"
         :key="entry.id"
-        class="waku-item"
-        :class="{ expandable: hasDetail(entry), expanded: isItemExpanded(entry.id) }"
+        class="flex min-w-0 flex-col"
         @click="toggleItem(entry)"
       >
         <!-- 标题行：与展开内容上下布局，互不居中 -->
-        <div class="waku-item-row">
-          <component :is="entry.icon" class="waku-item-icon" />
-          <span class="waku-item-title">{{ entry.title }}</span>
-          <span v-if="!isItemExpanded(entry.id) && entry.preview" class="waku-item-preview">{{
-            entry.preview
-          }}</span>
-          <span class="waku-item-status" aria-hidden="true">
-            <X v-if="entry.status === 'error'" class="waku-status-x" />
-            <Check v-else-if="entry.status === 'success'" class="waku-status-check" />
-            <span v-else-if="entry.status === 'running'" class="waku-pulse"></span>
-            <span v-else class="waku-pulse waku-pulse-pending"></span>
+        <div
+          class="group flex min-h-6 items-center gap-2 rounded-[6px] px-1.5 py-[3px] text-[11.5px] leading-[14px] w-full"
+          :class="
+            hasDetail(entry)
+              ? 'cursor-pointer hover:bg-[color-mix(in_srgb,var(--brand-foreground)_6%,transparent)] active:bg-[color-mix(in_srgb,var(--brand-foreground)_9%,transparent)]'
+              : 'cursor-default'
+          "
+        >
+          <component :is="entry.icon" class="h-[11px] w-[11px] flex-none text-brand-muted-strong" />
+          <span
+            class="min-w-0 max-w-[300px] flex-[0_1_auto] overflow-hidden truncate text-brand-muted"
+            >{{ entry.title }}</span
+          >
+          <span
+            v-if="!isItemExpanded(entry.id) && entry.preview"
+            class="min-w-0 flex-1 overflow-hidden truncate text-[11px] text-brand-ghost"
+            >{{ entry.preview }}</span
+          >
+          <span class="inline-flex flex-none items-center" aria-hidden="true">
+            <X v-if="entry.status === 'error'" class="h-2.5 w-2.5 text-brand-danger" />
+            <Check v-else-if="entry.status === 'success'" class="h-2.5 w-2.5 text-brand-ghost" />
+            <span
+              v-else-if="entry.status === 'running'"
+              class="h-1.25 w-1.25 rounded-full bg-brand-accent animate-[activity-pulse_1.6s_ease-in-out_infinite]"
+            ></span>
+            <span v-else class="h-1.25 w-1.25 rounded-full bg-brand-ghost opacity-45"></span>
           </span>
         </div>
 
         <!-- 思考展开：弱化 markdown（位于行下方） -->
         <div
           v-if="isItemExpanded(entry.id) && entry.kind === 'reasoning' && entry.content"
-          class="waku-reasoning-body"
+          class="box-border w-full min-w-0 max-w-full overflow-hidden px-1"
           @click.stop
         >
           <XMarkdown
@@ -356,7 +378,6 @@ onBeforeUnmount(() => {
             }"
             :class-name="markdownClassName"
             :config="{ breaks: true }"
-            escape-raw-html
             open-links-in-new-tab
           />
         </div>
@@ -365,24 +386,33 @@ onBeforeUnmount(() => {
 
         <div
           v-else-if="isItemExpanded(entry.id) && entry.sections?.length"
-          class="waku-detail-card"
+          class="my-0.5 mb-1 flex w-full min-w-0 flex-col gap-2 overflow-hidden rounded-[7px] border border-solid border-brand-border bg-brand-surface p-2 font-mono text-[10.5px] leading-4 text-brand-muted"
           @click.stop
         >
-          <div v-for="(section, index) in entry.sections" :key="index" class="waku-section">
-            <div class="waku-section-header">
-              <span class="waku-section-label">{{ section.label }}</span>
+          <div
+            v-for="(section, index) in entry.sections"
+            :key="index"
+            class="relative flex w-full min-w-0 flex-col gap-0.75"
+          >
+            <div class="flex min-h-5 items-start pr-6">
+              <span class="text-[10.5px] font-medium text-brand-muted">{{ section.label }}</span>
               <button
                 v-if="section.copyable"
                 type="button"
-                class="waku-copy"
+                class="absolute -top-0.5 -right-0.5 grid h-[22px] w-[22px] place-items-center rounded-[5px] border-0 bg-transparent p-0 hover:bg-[color-mix(in_srgb,var(--brand-foreground)_9%,transparent)]"
                 :title="copiedSection === entry.id ? '已复制' : '复制全部内容'"
                 @click="copyEntry(entry)"
               >
-                <Check v-if="copiedSection === entry.id" class="waku-copy-icon" />
-                <Copy v-else class="waku-copy-icon" />
+                <Check
+                  v-if="copiedSection === entry.id"
+                  class="h-[11px] w-[11px] text-brand-ghost"
+                />
+                <Copy v-else class="h-[11px] w-[11px] text-brand-ghost" />
               </button>
             </div>
-            <pre class="waku-section-content">{{ section.content }}</pre>
+            <pre
+              class="m-0 w-full min-w-0 whitespace-pre-wrap break-words font-inherit text-brand-muted"
+              >{{ section.content }}</pre>
           </div>
         </div>
       </div>
@@ -391,137 +421,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.waku-activity-list {
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-/* ---- 摘要行 ---- */
-.waku-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 22px;
-  padding: 0 2px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  line-height: 14px;
-  font-weight: 500;
-  color: var(--brand-muted-strong);
-  text-align: left;
-  border-radius: 4px;
-  width: fit-content;
-}
-.waku-summary:hover {
-  color: var(--brand-muted);
-}
-.waku-summary-text {
-  white-space: nowrap;
-}
-.waku-chevron {
-  width: 10px;
-  height: 10px;
-  color: var(--brand-ghost);
-  flex: none;
-}
-
-/* ---- 条目 ---- */
-.waku-items {
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  padding-left: 15px;
-}
-.waku-item {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.waku-item-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 24px;
-  padding: 3px 6px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  line-height: 14px;
-  cursor: default;
-}
-.waku-item.expandable .waku-item-row {
-  cursor: pointer;
-}
-.waku-item.expandable .waku-item-row:hover {
-  background: color-mix(in srgb, var(--brand-foreground) 6%, transparent);
-}
-.waku-item.expandable .waku-item-row:active {
-  background: color-mix(in srgb, var(--brand-foreground) 9%, transparent);
-}
-.waku-item-icon {
-  width: 11px;
-  height: 11px;
-  color: var(--brand-muted-strong);
-  flex: none;
-}
-.waku-item-title {
-  max-width: 300px;
-  min-width: 0;
-  flex: 0 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--brand-muted);
-}
-.waku-item-preview {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--brand-ghost);
-}
-.waku-item.expanded .waku-item-preview {
-  visibility: hidden;
-}
-.waku-item-status {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-}
-.waku-status-check {
-  width: 10px;
-  height: 10px;
-  color: var(--brand-ghost);
-}
-.waku-status-x {
-  width: 10px;
-  height: 10px;
-  color: var(--brand-danger);
-}
-
-/* ---- 呼吸圆点（waku pulse_dot：0.3 → 1.0，1.6s）---- */
-.waku-pulse {
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--brand-accent);
-  flex: none;
-  animation: waku-pulse 1.6s ease-in-out infinite;
-}
-.waku-pulse-pending {
-  background: var(--brand-ghost);
-  opacity: 0.45;
-  animation: none;
-}
-@keyframes waku-pulse {
+@keyframes activity-pulse {
   0%,
   100% {
     opacity: 0.3;
@@ -531,16 +431,7 @@ onBeforeUnmount(() => {
   }
 }
 
-/* ---- 思考展开：弱化 markdown ---- */
-.waku-reasoning-body {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  padding: 0 4px;
-  overflow: hidden;
-}
-:deep(.waku-reasoning-markdown) {
+:deep(.activity-reasoning-markdown) {
   width: 100%;
   max-width: 100%;
   --text-color: var(--brand-muted-strong);
@@ -550,93 +441,21 @@ onBeforeUnmount(() => {
   font-size: 13px;
   white-space: normal;
 }
-:deep(.waku-reasoning-markdown p),
-:deep(.waku-reasoning-markdown li) {
+:deep(.activity-reasoning-markdown p),
+:deep(.activity-reasoning-markdown li) {
   color: var(--brand-muted-strong);
   white-space: normal;
 }
-:deep(.waku-reasoning-markdown h1),
-:deep(.waku-reasoning-markdown h2),
-:deep(.waku-reasoning-markdown h3),
-:deep(.waku-reasoning-markdown h4) {
+:deep(.activity-reasoning-markdown h1),
+:deep(.activity-reasoning-markdown h2),
+:deep(.activity-reasoning-markdown h3),
+:deep(.activity-reasoning-markdown h4) {
   color: var(--brand-muted-strong);
   font-size: 14px;
   line-height: 20px;
 }
-:deep(.waku-reasoning-markdown a) {
-  color: var(--brand-muted);
-}
-:deep(.waku-reasoning-markdown code:not(pre code)) {
-  color: var(--brand-muted);
-}
-
-/* ---- 工具展开：inset 详情卡片 ---- */
-.waku-detail-card {
-  width: 100%;
-  min-width: 0;
-  margin: 2px 0 4px 0;
-  padding: 8px;
-  border: 1px solid var(--brand-border);
-  border-radius: 7px;
-  background: var(--brand-surface);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-family: var(--vp-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
-  font-size: 10.5px;
-  line-height: 16px;
-  color: var(--brand-muted);
-  overflow: hidden;
-}
-.waku-section {
-  position: relative;
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.waku-section-header {
-  min-height: 20px;
-  display: flex;
-  align-items: flex-start;
-  padding-right: 24px;
-}
-.waku-section-label {
-  font-family: var(--vp-font, inherit);
-  font-size: 10.5px;
-  font-weight: 500;
-  color: var(--brand-muted);
-}
-.waku-copy {
-  display: grid;
-  place-items: center;
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  cursor: pointer;
-}
-.waku-copy:hover {
-  background: color-mix(in srgb, var(--brand-foreground) 9%, transparent);
-}
-.waku-copy-icon {
-  width: 11px;
-  height: 11px;
-  color: var(--brand-ghost);
-}
-.waku-section-content {
-  width: 100%;
-  min-width: 0;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font: inherit;
+:deep(.activity-reasoning-markdown a),
+:deep(.activity-reasoning-markdown code:not(pre code)) {
   color: var(--brand-muted);
 }
 </style>
