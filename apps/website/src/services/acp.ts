@@ -164,7 +164,7 @@ export function flattenAcpSelectOptions(
 }
 
 /** 订阅 ACP 会话实时输出（SSE）。协议：先收到 `snapshot`（已完成历史 + 当前回合用户消息），
- * 随后是当前回合输出（data / tool_call / acp_plan / chat_permission …），回合结束收到 [DONE] 并关闭。
+ * 随后是当前回合输出（native_event / chat_permission / acp_session …），回合结束收到 [DONE] 并关闭。
  * 返回 AbortController；`onEnd` 在流关闭（正常或出错）时回调一次。 */
 export function subscribeAcpSessionStream(
   agentId: string,

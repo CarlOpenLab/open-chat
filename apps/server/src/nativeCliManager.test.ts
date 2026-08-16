@@ -3,13 +3,29 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { collectAcpHistoryUpdate } from "./transcript/adapters/acp";
 import { convertClaudeHistory } from "./transcript/adapters/claude";
-import { convertCodexThreadHistory } from "./transcript/adapters/codex";
+import { convertCodexThreadHistory, normalizeCodexActivity } from "./transcript/adapters/codex";
 import { convertOpenCodeHistory } from "./transcript/adapters/opencode";
 import { convertPiHistory } from "./transcript/adapters/pi";
 import { createTranscriptCollector } from "./transcript/core";
+import { nativeEventFrame } from "./nativeEvents";
+
+describe("native CLI event stream", () => {
+  it("preserves event type and payload without converting to an OpenAI chunk", () => {
+    const frame = nativeEventFrame({
+      type: "activity.upsert",
+      activity: { id: "tool-1", name: "read", status: "running", input: { path: "a.ts" } },
+    });
+    expect(frame).toBe(
+      `event: native_event\ndata: ${JSON.stringify({
+        type: "activity.upsert",
+        activity: { id: "tool-1", name: "read", status: "running", input: { path: "a.ts" } },
+      })}\n\n`,
+    );
+  });
+});
 
 describe("convertCodexThreadHistory", () => {
-  it("groups commentary, reasoning, tools, and the final answer into one assistant turn", () => {
+  it("keeps commentary, reasoning, tools, and the final answer in one ordered turn", () => {
     const history = convertCodexThreadHistory([
       {
         items: [
@@ -34,15 +50,15 @@ describe("convertCodexThreadHistory", () => {
     expect(history[1]).toMatchObject({
       id: "comment-1:assistant",
       role: "assistant",
-      content: "Fixed.",
-      reasoningContent: "Checking.\n\nFound it.\n\nVerified.",
+      content: "Checking.\n\nVerified.\n\nFixed.",
+      reasoningContent: "Found it.",
     });
     expect(history[1]?.toolCalls).toEqual([
       expect.objectContaining({ id: "tool-1", status: "completed", output: "ok" }),
     ]);
   });
 
-  it("uses only the last unphased agent message as the final answer", () => {
+  it("keeps unphased agent messages as visible assistant content", () => {
     const history = convertCodexThreadHistory([
       {
         items: [
@@ -56,14 +72,43 @@ describe("convertCodexThreadHistory", () => {
       {
         id: "progress:assistant",
         role: "assistant",
-        content: "Done.",
-        reasoningContent: "Working.",
+        content: "Working.\n\nDone.",
+        reasoningContent: undefined,
+        timeline: [
+          {
+            kind: "content",
+            id: "content-progress:assistant",
+            content: "Working.\n\nDone.",
+          },
+        ],
       },
     ]);
   });
 });
 
 describe("provider transcript adapters", () => {
+  it("normalizes Codex file changes into presentation metadata", () => {
+    const activity = normalizeCodexActivity(
+      {
+        id: "patch-1",
+        type: "fileChange",
+        changes: [
+          {
+            path: "src/app.ts",
+            diff: "@@ -1 +1,2 @@\n-old\n+new\n+more",
+          },
+        ],
+        status: "completed",
+      },
+      true,
+    );
+
+    expect(activity).toMatchObject({
+      kind: "fileChange",
+      fileChanges: [{ path: "src/app.ts", additions: 2, deletions: 1 }],
+    });
+  });
+
   it("merges Claude tool results and final text into one assistant turn", () => {
     const history = convertClaudeHistory([
       { uuid: "user", message: { role: "user", content: "Inspect it" } },

@@ -7,13 +7,13 @@ import type {
 } from "@antdv-next/x-sdk";
 import { DeepSeekChatProvider } from "@antdv-next/x-sdk";
 import type { WebSearchSourceItem } from "./ai";
-import type { TranscriptActivity } from "./transcript";
+import type { TranscriptActivity, TranscriptPlan, TranscriptTimelineItem } from "./transcript";
 
 /** Transient placeholder shown in the assistant bubble while the gateway runs
  * a web search round. Replaced by real text/reasoning as soon as it arrives. */
 export const WEB_SEARCHING_MARKER = "🔍 正在联网搜索…";
 
-/** 本地 opencode 工具调用（由网关 `tool_call` SSE 事件驱动，供 ThoughtChain 渲染）。 */
+/** Native CLI tool activity (由 `native_event` 驱动，供活动列表渲染)。 */
 export type ToolCallItem = TranscriptActivity;
 
 /** opencode 权限询问（由网关 `chat_permission` SSE 事件驱动，供前端弹窗批准）。 */
@@ -39,6 +39,14 @@ interface ProviderSessionNotice {
   agentId?: string;
   sessionId: string;
 }
+
+type NativeCliEvent =
+  | { type: "content.delta"; content: string }
+  | { type: "reasoning.delta"; content: string }
+  | { type: "activity.upsert"; activity: TranscriptActivity }
+  | { type: "plan.updated"; plan: TranscriptPlan }
+  | { type: "turn.completed"; stopReason?: string }
+  | { type: "turn.failed"; message: string };
 
 /** ACP 会话运行状态（running / idle / requires_action）。当前由服务端 activeRuns 推导，经 /api/acp/session 返回给前端。 */
 export interface AcpRunStateNotice {
@@ -100,7 +108,7 @@ export class OpenChatProvider extends DeepSeekChatProvider<
   /** Called when the gateway emits a `web_search` event carrying source results. */
   onWebSearchSources?: (sources: WebSearchSourceItem[]) => void;
 
-  /** Called when the gateway emits a `tool_call` event (工具调用状态变化)。 */
+  /** Called when the gateway emits an `activity.upsert` native event. */
   onToolCall?: (tool: ToolCallItem) => void;
 
   /** Called when the gateway emits a `chat_error` event（上游回合失败）。 */
@@ -138,20 +146,16 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       });
     }
 
-    if (chunk?.event === "tool_call" && chunk.data && chunk.data !== "[DONE]") {
+    if (chunk?.event === "native_event" && chunk.data && chunk.data !== "[DONE]") {
       try {
-        const tool = JSON.parse(chunk.data) as ToolCallItem;
-        this.onToolCall?.(tool);
-        const origin = info.originMessage ?? { content: "", role: "assistant" };
-        return {
-          ...origin,
-          toolCalls: mergeToolCalls(origin.toolCalls, tool),
-          ...(origin.reasoningContent ? { reasoningDone: true } : {}),
-        };
+        return this.applyNativeEvent(
+          info.originMessage ?? { role: "assistant", content: "" },
+          JSON.parse(chunk.data) as NativeCliEvent,
+        );
       } catch (err) {
-        console.error("Failed to parse tool_call event:", err);
+        console.error("Failed to parse native CLI event:", err);
       }
-      return info.originMessage ?? { content: "", role: "assistant" };
+      return info.originMessage ?? { role: "assistant", content: "" };
     }
 
     if (chunk?.event === "chat_error" && chunk.data && chunk.data !== "[DONE]") {
@@ -207,21 +211,6 @@ export class OpenChatProvider extends DeepSeekChatProvider<
         if (session.sessionId) this.onProviderSession?.(session);
       } catch (err) {
         console.error("Failed to parse provider_session event:", err);
-      }
-      return info.originMessage ?? { content: "", role: "assistant" };
-    }
-
-    if (chunk?.event === "acp_plan" && chunk.data && chunk.data !== "[DONE]") {
-      try {
-        const plan = JSON.parse(chunk.data) as Record<string, unknown>;
-        const origin = info.originMessage ?? { content: "", role: "assistant" };
-        return {
-          ...origin,
-          agentPlan: plan,
-          ...(origin.reasoningContent ? { reasoningDone: true } : {}),
-        };
-      } catch (err) {
-        console.error("Failed to parse acp_plan event:", err);
       }
       return info.originMessage ?? { content: "", role: "assistant" };
     }
@@ -304,6 +293,20 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       ...(split.reasoningContent || accumulatedReasoning
         ? { reasoningContent: split.reasoningContent || accumulatedReasoning }
         : {}),
+      ...((deltaReasoning || deltaContent) && !/<\/?think\b/i.test(accumulatedContent)
+        ? {
+            timeline: mergeTimeline(
+              (origin as (XModelMessage & { timeline?: TranscriptTimelineItem[] }) | undefined)
+                ?.timeline,
+              ...(deltaReasoning
+                ? [{ kind: "reasoning", id: "reasoning", content: deltaReasoning } as const]
+                : []),
+              ...(deltaContent
+                ? [{ kind: "content", id: "content", content: deltaContent } as const]
+                : []),
+            ),
+          }
+        : {}),
     };
     // 思考结束判定：<think> 闭合，或思考结束后开始输出正文。
     if (split.hasThink) {
@@ -312,6 +315,70 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       next.reasoningDone = true;
     }
     return preserveMessageMeta(origin, next);
+  }
+
+  private applyNativeEvent(origin: XModelMessage, event: NativeCliEvent): XModelMessage {
+    const base = origin ?? { role: "assistant", content: "" };
+    switch (event.type) {
+      case "content.delta": {
+        const content = `${getMessageText(base.content)}${event.content}`;
+        return preserveMessageMeta(base, {
+          ...base,
+          role: "assistant",
+          content,
+          timeline: mergeTimeline(
+            (base as XModelMessage & { timeline?: TranscriptTimelineItem[] }).timeline,
+            { kind: "content", id: "content", content: event.content },
+          ),
+          ...(base.reasoningContent ? { reasoningDone: true } : {}),
+        });
+      }
+      case "reasoning.delta": {
+        const reasoningContent = `${base.reasoningContent || ""}${event.content}`;
+        return preserveMessageMeta(base, {
+          ...base,
+          role: "assistant",
+          reasoningContent,
+          reasoningDone: false,
+          timeline: mergeTimeline(
+            (base as XModelMessage & { timeline?: TranscriptTimelineItem[] }).timeline,
+            { kind: "reasoning", id: "reasoning", content: event.content },
+          ),
+        });
+      }
+      case "activity.upsert":
+        this.onToolCall?.(event.activity);
+        return preserveMessageMeta(base, {
+          ...base,
+          role: "assistant",
+          toolCalls: mergeToolCalls(base.toolCalls, event.activity),
+          timeline: mergeTimeline(
+            (base as XModelMessage & { timeline?: TranscriptTimelineItem[] }).timeline,
+            { kind: "tool", id: event.activity.id, activity: event.activity },
+          ),
+          ...(base.reasoningContent ? { reasoningDone: true } : {}),
+        });
+      case "plan.updated":
+        return preserveMessageMeta(base, {
+          ...base,
+          role: "assistant",
+          agentPlan: event.plan,
+          timeline: mergeTimeline(
+            (base as XModelMessage & { timeline?: TranscriptTimelineItem[] }).timeline,
+            { kind: "plan", id: "plan", plan: event.plan },
+          ),
+          ...(base.reasoningContent ? { reasoningDone: true } : {}),
+        });
+      case "turn.completed":
+        return preserveMessageMeta(base, {
+          ...base,
+          role: "assistant",
+          ...(base.reasoningContent ? { reasoningDone: true } : {}),
+        });
+      case "turn.failed":
+        this.onChatError?.(event.message);
+        return preserveMessageMeta(base, { ...base, role: "assistant", chatError: event.message });
+    }
   }
 
   override transformParams(
@@ -341,7 +408,7 @@ export class OpenChatProvider extends DeepSeekChatProvider<
   }
 }
 
-/** 按工具 id 合并流式 `tool_call` 事件（后到的完整状态覆盖旧状态）。 */
+/** 按工具 id 合并有序 native activity 事件（后到的完整状态覆盖旧状态）。 */
 function mergeToolCalls(existing: unknown, incoming: ToolCallItem): ToolCallItem[] {
   const list = Array.isArray(existing) ? (existing as ToolCallItem[]) : [];
   const index = list.findIndex((tool) => tool.id && tool.id === incoming.id);
@@ -364,13 +431,26 @@ function preserveMessageMeta(
     reasoningContent?: string;
     reasoningDone?: boolean;
   } = {};
-  if (Array.isArray(origin?.toolCalls)) meta.toolCalls = origin.toolCalls;
-  if (typeof origin?.chatError === "string") meta.chatError = origin.chatError;
-  if (Array.isArray(origin?.chatNotices)) meta.chatNotices = origin.chatNotices;
-  if (Array.isArray(origin?.pendingPermissions))
+  if (next.toolCalls === undefined && Array.isArray(origin?.toolCalls)) {
+    meta.toolCalls = origin.toolCalls;
+  }
+  if (next.chatError === undefined && typeof origin?.chatError === "string") {
+    meta.chatError = origin.chatError;
+  }
+  if (next.chatNotices === undefined && Array.isArray(origin?.chatNotices)) {
+    meta.chatNotices = origin.chatNotices;
+  }
+  if (next.pendingPermissions === undefined && Array.isArray(origin?.pendingPermissions))
     meta.pendingPermissions = origin.pendingPermissions;
-  if (origin?.agentPlan && typeof origin.agentPlan === "object") {
+  if (next.agentPlan === undefined && origin?.agentPlan && typeof origin.agentPlan === "object") {
     (meta as Record<string, unknown>).agentPlan = origin.agentPlan;
+  }
+  if (
+    next.timeline === undefined &&
+    Array.isArray((origin as Record<string, unknown> | undefined)?.timeline)
+  ) {
+    (meta as Record<string, unknown>).timeline = (origin as Record<string, unknown>)
+      .timeline as TranscriptTimelineItem[];
   }
   if (
     typeof next.reasoningContent !== "string" &&
@@ -440,7 +520,43 @@ function stripLocalMessageFields(message: XModelMessage): XModelMessage {
   delete next.chatNotices;
   delete next.pendingPermissions;
   delete next.openChatLocalOnly;
+  delete (next as Record<string, unknown>).timeline;
   return next;
+}
+
+function mergeTimeline(
+  existing: unknown,
+  ...incoming: TranscriptTimelineItem[]
+): TranscriptTimelineItem[] {
+  const result = Array.isArray(existing) ? ([...existing] as TranscriptTimelineItem[]) : [];
+  for (const item of incoming) {
+    if (item.kind === "tool") {
+      const index = result.findIndex((entry) => entry.kind === "tool" && entry.id === item.id);
+      if (index === -1) result.push(item);
+      else {
+        const previous = result[index];
+        if (previous?.kind === "tool") {
+          result[index] = {
+            ...previous,
+            activity: { ...previous.activity, ...item.activity },
+          };
+        }
+      }
+    } else if (item.kind === "plan") {
+      const index = result.findIndex((entry) => entry.kind === "plan" && entry.id === item.id);
+      if (index === -1) result.push(item);
+      else result[index] = item;
+    } else {
+      const previous = result.at(-1);
+      if (previous?.kind === item.kind) {
+        result[result.length - 1] = { ...previous, content: `${previous.content}${item.content}` };
+      } else {
+        const duplicateCount = result.filter((entry) => entry.id === item.id).length;
+        result.push(duplicateCount ? { ...item, id: `${item.id}-${duplicateCount}` } : item);
+      }
+    }
+  }
+  return result;
 }
 
 /** 流结束时把未闭合的 `<think>` 标记为完成并补上闭合标签。 */

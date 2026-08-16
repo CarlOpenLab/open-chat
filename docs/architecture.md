@@ -30,16 +30,13 @@ Reasoning, tool calls, plans, and file changes are activity data inside an assis
 Codex / Claude / Pi / OMP / OpenCode / ACP
                     │ provider protocol
                     ▼
-          SessionRunRegistry (Open Chat 任务)
-                    │ snapshot + replay + live SSE
+       thin provider adapter in the manager
+                    │ ordered native_event SSE
                     ▼
-       transcript/adapters/<provider>.ts
-                    │ TranscriptMessage / TranscriptStreamEvent
+          SessionRunRegistry (replay/broadcast)
+                    │ native_event + history snapshot
                     ▼
-          transcript/core.ts + stream.ts
-                    │ JSON history + SSE
-                    ▼
-      services/transcript.ts + OpenChatProvider
+       OpenChatProvider native event reducer
                     │ XModelMessage
                     ▼
                   useXChat
@@ -48,7 +45,12 @@ Codex / Claude / Pi / OMP / OpenCode / ACP
       ChatMessages -> AssistantMessageContent
 ```
 
-`XRequest` owns HTTP and SSE transport. `OpenChatProvider` transforms stream frames into model messages. `useXChat` owns request and message state. `Chat.vue` coordinates the workspace but does not parse provider history formats.
+`XRequest` owns HTTP and SSE transport. Native CLI content crosses the gateway
+as ordered `native_event` frames; the gateway does not accumulate a transcript
+while a turn is running. `OpenChatProvider` is the browser-side reducer that
+accumulates deltas into the existing `XModelMessage` shape. `useXChat` owns
+request and message state. `Chat.vue` coordinates the workspace but does not
+parse provider wire formats.
 
 ## Canonical Transcript
 
@@ -62,6 +64,7 @@ interface TranscriptMessage {
   reasoningContent?: string;
   toolCalls?: TranscriptActivity[];
   agentPlan?: TranscriptPlan;
+  timeline?: TranscriptTimelineItem[];
 }
 ```
 
@@ -72,31 +75,59 @@ The contract has four invariants:
 3. Tool start, progress, result, and error records upsert one activity by `id`.
 4. Tool-result protocol records never become user chat messages.
 
-History uses camel-case JSON fields. OpenAI-compatible streaming keeps `content` and `reasoning_content` deltas for SDK compatibility. Structured updates use `tool_call`, `acp_plan`, and `transcript_message`; `transcript/stream.ts` is the only serializer for these shared frames.
+History uses camel-case JSON fields. Live agent output uses ordered
+`native_event` frames:
+
+```ts
+type NativeCliEvent =
+  | { type: "content.delta"; content: string }
+  | { type: "reasoning.delta"; content: string }
+  | { type: "activity.upsert"; activity: TranscriptActivity }
+  | { type: "plan.updated"; plan: TranscriptPlan }
+  | { type: "turn.completed"; stopReason?: string }
+  | { type: "turn.failed"; message: string };
+```
+
+Permission, provider-session, retry, and user-control messages remain separate
+control events. `transcript/stream.ts` is retained for ordinary upstream
+OpenAI compatibility and legacy history snapshots; it is not used for native
+turn output.
 
 ## Server Ownership
 
-| Module                     | Responsibility                                                      |
-| -------------------------- | ------------------------------------------------------------------- |
-| `nativeCliManager.ts`      | Native CLI process, session, permission, and cancellation lifecycle |
-| `localProvider.ts`         | OpenCode server and session lifecycle                               |
-| `acpManager.ts`            | ACP connection, session, event-bus, and permission lifecycle        |
-| `transcript/types.ts`      | Canonical history, activity, plan, and stream types                 |
-| `transcript/core.ts`       | Provider-neutral collection, merge, and activity-upsert rules       |
-| `transcript/adapters/*.ts` | Provider protocol parsing and normalization                         |
-| `transcript/stream.ts`     | Canonical event to SSE serialization                                |
+| Module                     | Responsibility                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| `nativeCliManager.ts`      | Native CLI process, session, permission, cancellation, and thin event adaptation lifecycle |
+| `localProvider.ts`         | OpenCode server and session lifecycle                                                      |
+| `acpManager.ts`            | ACP connection, session, event-bus, and permission lifecycle                               |
+| `transcript/types.ts`      | Canonical history, activity, plan, and stream types                                        |
+| `transcript/core.ts`       | Provider-neutral collection, merge, and activity-upsert rules                              |
+| `transcript/adapters/*.ts` | Provider history loading only                                                              |
+| `nativeEvents.ts`          | Native event contract and SSE serialization                                                |
 
-Managers may retain provider lifecycle state such as a process handle, current turn ID, or pending permission. Renderable content must cross the transcript adapter boundary before it leaves the server.
+Managers may retain provider lifecycle state such as a process handle, current
+turn ID, or pending permission. Renderable live content leaves the server as a
+native event; history adapters are only used when loading persisted provider
+sessions.
 
 ## Open Chat Run Synchronization
 
-`SessionRunRegistry` tracks only turns started by the current Open Chat gateway. At the start of a turn, `AgentManager` stores the provider-neutral history snapshot plus the new user message. It then mirrors every SSE frame written by ACP and native CLI managers into a bounded per-turn buffer.
+`SessionRunRegistry` tracks turns started by the current Open Chat gateway. At
+the start of a turn, `AgentManager` stores the history snapshot plus the new
+user message. It mirrors every native event into a bounded per-turn buffer for
+reconnects and additional browser subscribers. Provider sessions started
+directly in a terminal are loaded as history snapshots only; the gateway does
+not poll and reinterpret provider log files as a fake live stream.
 
 While an ACP provider is active, the browser periodically refreshes both `GET /api/acp/provider-sessions?agentId=...` (provider-owned session directory and metadata) and `GET /api/acp/sessions?agentId=...` (gateway-owned run state). The loop runs every two seconds while any task is running and every five seconds while idle; hidden pages pause it and resume with an immediate refresh. Each run-state entry exposes `conversationId`, `sessionId`, `running`, and `startedAt`. The gateway-owned query is distinct from provider session discovery and does not claim to detect CLI turns started directly in a terminal.
 
-When a user opens a running session, `GET /api/acp/session/stream` returns the stored snapshot, replays frames already emitted for the active turn, then remains attached to live frames. The UI applies every frame through `OpenChatProvider` and the existing `useXChat` message state. On stream completion it reloads provider history as the final source of truth. Loading or switching a session is read-only from the sidebar's ordering perspective; `updatedAt` changes only when a new user turn is submitted.
+When a user opens a session, `GET /api/acp/session/stream` returns the stored
+snapshot, replays frames already emitted for an active turn, then remains
+attached to live frames. The UI applies native frames through
+`OpenChatProvider` and the existing `useXChat` message state. On stream
+completion it reloads provider history as the final source of truth.
 
-Disconnecting the originating browser tab does not cancel a gateway-owned task. Explicit cancellation calls `/api/acp/session/cancel`. The registry is in memory, so a gateway restart ends its tracking and cannot restore an in-flight run.
+Disconnecting the originating browser tab aborts the gateway-owned task and closes its provider turn. Explicit cancellation calls `/api/acp/session/cancel`. The registry is in memory, so a gateway restart ends its tracking and cannot restore an in-flight run.
 
 ## Website Ownership
 
@@ -114,7 +145,7 @@ Disconnecting the originating browser tab does not cancel a gateway-owned task. 
 
 1. Add a focused adapter under `apps/server/src/transcript/adapters`.
 2. Convert history to `TranscriptMessage[]` and normalize activity states to `pending`, `running`, `completed`, or `error`.
-3. Convert live protocol events to canonical transcript events and serialize them through `transcript/stream.ts`.
+3. Convert only provider-specific wire records into ordered `native_event` frames through `nativeEvents.ts`.
 4. Keep process and session mechanics in the appropriate manager.
 5. Verify one assistant item per turn, tool-result upserts, error termination, and parity between loaded history and live output.
 

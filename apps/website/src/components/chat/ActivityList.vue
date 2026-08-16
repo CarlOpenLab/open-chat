@@ -14,6 +14,7 @@ import {
 } from "@lucide/vue";
 import { XMarkdown } from "@antdv-next/x-markdown";
 import type { ToolCallItem } from "../../services/OpenChatProvider";
+import type { TranscriptTimelineItem } from "../../services/transcript";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 import { formatWorkedDuration } from "../../utils/chatDuration";
@@ -38,6 +39,7 @@ interface Props {
   tools?: ToolCallItem[];
   plan?: PlanInfo | null;
   workspace?: WorkspaceInfo | null;
+  timeline?: TranscriptTimelineItem[];
   streaming: boolean;
   summaryExpanded: boolean;
   itemExpandedIds: string[];
@@ -55,6 +57,7 @@ const props = withDefaults(defineProps<Props>(), {
   workspace: null,
   summaryExpanded: false,
   itemExpandedIds: () => [],
+  timeline: () => [],
 });
 const emit = defineEmits<Emits>();
 
@@ -63,9 +66,7 @@ const theme = inject(
   computed<MarkdownTheme>(() => "dark"),
 );
 const markdownComponents: Record<string, Component> = { code: MarkdownCodeRenderer };
-const markdownClassName = computed(
-  () => `activity-reasoning-markdown chat-markdown x-markdown-${theme.value}`,
-);
+const markdownClassName = computed(() => `chat-markdown x-markdown-${theme.value}`);
 
 const formatToolDetail = (value: unknown, maxLength = 4000): string => {
   let text = "";
@@ -85,21 +86,169 @@ const formatToolDetail = (value: unknown, maxLength = 4000): string => {
 
 interface ActivityEntry {
   id: string;
-  kind: "reasoning" | "tool" | "plan" | "workspace";
-  icon: Component;
+  kind: "reasoning" | "tool" | "plan" | "workspace" | "content";
+  icon: Component | null;
   title: string;
   preview: string;
   status: "running" | "success" | "error" | "pending";
   content?: string;
   sections?: Array<{ label: string; content: string; copyable?: boolean }>;
+  fileChanges?: Array<{ path: string; additions?: number; deletions?: number }>;
+  fileStats?: { additions: number; deletions: number };
 }
+
+/**
+ * Activity ids come from several provider protocols. Reasoning chunks in
+ * particular often reuse the same provider id after a tool call, so make the
+ * ids unique at the UI boundary before they are used as Vue keys/state keys.
+ */
+const normalizeEntryIds = (items: ActivityEntry[]): ActivityEntry[] => {
+  const used = new Set<string>();
+  return items.map((entry, index) => {
+    const base = entry.kind === "reasoning" ? "reasoning" : entry.id || `activity-${index}`;
+    let id = base;
+    let suffix = 1;
+    while (used.has(id)) id = `${base}-${suffix++}`;
+    used.add(id);
+    return id === entry.id ? entry : { ...entry, id };
+  });
+};
 
 const reasoningLive = computed(
   () => props.streaming && Boolean(props.reasoning) && !props.reasoning!.done,
 );
 
+const isFileChange = (tool: ToolCallItem): boolean =>
+  tool.kind === "fileChange" || tool.name === "fileChange";
+
+const fileName = (path: string): string => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+
+const fileChangeStats = (tool: ToolCallItem): { additions: number; deletions: number } => {
+  const changes = tool.fileChanges ?? [];
+  const additions = changes.reduce((total, change) => total + (change.additions ?? 0), 0);
+  const deletions = changes.reduce((total, change) => total + (change.deletions ?? 0), 0);
+  return { additions, deletions };
+};
+
+const fileChangeSubject = (tool: ToolCallItem): string => {
+  const changes = tool.fileChanges ?? [];
+  if (changes.length === 1 && changes[0]) return fileName(changes[0].path);
+  if (changes.length > 1) return `${changes.length} 个文件`;
+  return tool.displayTarget ? fileName(tool.displayTarget) : "文件";
+};
+
+function toolActivityEntry(tool: ToolCallItem): ActivityEntry {
+  const sections: Array<{ label: string; content: string; copyable?: boolean }> = [];
+  if (tool.input !== undefined) {
+    sections.push({ label: "参数", content: formatToolDetail(tool.input, 2000), copyable: true });
+  }
+  const output = [tool.output, tool.error]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => formatToolDetail(value))
+    .join("\n\n");
+  if (output) sections.push({ label: "输出", content: output, copyable: tool.input === undefined });
+
+  const status: ActivityEntry["status"] =
+    tool.status === "completed"
+      ? "success"
+      : tool.status === "error"
+        ? "error"
+        : tool.status === "running"
+          ? "running"
+          : "pending";
+  const fileChange = isFileChange(tool);
+  const fileStats = fileChange ? fileChangeStats(tool) : undefined;
+  const subject = fileChange ? fileChangeSubject(tool) : tool.name;
+  const title = fileChange
+    ? tool.status === "running"
+      ? `正在编辑 ${subject}`
+      : tool.status === "completed"
+        ? `已编辑 ${subject}`
+        : tool.status === "error"
+          ? `编辑 ${subject} 失败`
+          : `等待编辑 ${subject}`
+    : tool.status === "running"
+      ? `正在运行 ${tool.name}`
+      : tool.status === "completed"
+        ? `已运行 ${tool.name}`
+        : tool.status === "error"
+          ? `${tool.name} 失败`
+          : `等待运行 ${tool.name}`;
+  const preview =
+    tool.status === "error"
+      ? firstPreviewLine(tool.error)
+      : tool.status === "completed"
+        ? fileChange
+          ? firstPreviewLine(tool.output)
+          : firstPreviewLine(tool.output) ||
+            (tool.durationMs ? `已完成 · ${(tool.durationMs / 1000).toFixed(1)}s` : "已完成")
+        : "";
+  return {
+    id: `tool-${tool.id || tool.name}`,
+    kind: "tool",
+    icon: fileChange ? Pencil : Wrench,
+    title,
+    preview,
+    status,
+    sections: sections.length ? sections : undefined,
+    ...(fileChange && tool.fileChanges?.length ? { fileChanges: tool.fileChanges } : {}),
+    ...(fileStats ? { fileStats } : {}),
+  };
+}
+
 const entries = computed<ActivityEntry[]>(() => {
   const list: ActivityEntry[] = [];
+
+  if (props.timeline.length) {
+    for (const item of props.timeline) {
+      if (item.kind === "content") {
+        list.push({
+          id: item.id,
+          kind: "content",
+          icon: null,
+          title: "",
+          preview: "",
+          status: "success",
+          content: item.content,
+        });
+      } else if (item.kind === "reasoning") {
+        list.push({
+          id: item.id,
+          kind: "reasoning",
+          icon: Sparkles,
+          title: props.streaming ? "正在思考" : "思考过程",
+          preview: "",
+          status: props.streaming ? "running" : "success",
+          content: item.content,
+        });
+      } else if (item.kind === "plan") {
+        for (const [index, entry] of (item.plan.entries ?? []).entries()) {
+          const status: ActivityEntry["status"] =
+            entry.status === "completed"
+              ? "success"
+              : entry.status === "in_progress"
+                ? "running"
+                : "pending";
+          list.push({
+            id: `${item.id}-${index}`,
+            kind: "plan",
+            icon: ListTodo,
+            title: entry.content || `步骤 ${index + 1}`,
+            preview:
+              entry.status === "completed"
+                ? "已完成"
+                : entry.status === "in_progress"
+                  ? "进行中"
+                  : "等待中",
+            status,
+          });
+        }
+      } else {
+        list.push(toolActivityEntry(item.activity));
+      }
+    }
+    return normalizeEntryIds(list);
+  }
 
   if (props.reasoning?.content.trim()) {
     list.push({
@@ -118,50 +267,7 @@ const entries = computed<ActivityEntry[]>(() => {
   }
 
   for (const tool of props.tools) {
-    const sections: Array<{ label: string; content: string; copyable?: boolean }> = [];
-    if (tool.input !== undefined) {
-      // 复制入口挂在第一段参数标题上，但复制内容包含整个工具详情。
-      sections.push({ label: "参数", content: formatToolDetail(tool.input, 2000), copyable: true });
-    }
-    const output = [tool.output, tool.error]
-      .filter((value): value is string => Boolean(value))
-      .map((value) => formatToolDetail(value))
-      .join("\n\n");
-    if (output) {
-      sections.push({ label: "输出", content: output, copyable: tool.input === undefined });
-    }
-    const status: ActivityEntry["status"] =
-      tool.status === "completed"
-        ? "success"
-        : tool.status === "error"
-          ? "error"
-          : tool.status === "running"
-            ? "running"
-            : "pending";
-    const title =
-      tool.status === "running"
-        ? `正在运行 ${tool.name}`
-        : tool.status === "completed"
-          ? `已运行 ${tool.name}`
-          : tool.status === "error"
-            ? `${tool.name} 失败`
-            : `等待运行 ${tool.name}`;
-    const preview =
-      tool.status === "error"
-        ? firstPreviewLine(tool.error)
-        : tool.status === "completed"
-          ? firstPreviewLine(tool.output) ||
-            (tool.durationMs ? `已完成 · ${(tool.durationMs / 1000).toFixed(1)}s` : "已完成")
-          : "";
-    list.push({
-      id: `tool-${tool.id || tool.name}`,
-      kind: "tool",
-      icon: Wrench,
-      title,
-      preview,
-      status,
-      sections: sections.length ? sections : undefined,
-    });
+    list.push(toolActivityEntry(tool));
   }
 
   for (const [index, entry] of (props.plan?.entries ?? []).entries()) {
@@ -210,7 +316,7 @@ const entries = computed<ActivityEntry[]>(() => {
     }
   }
 
-  return list;
+  return normalizeEntryIds(list);
 });
 
 /** 活动摘要："正在执行：1 次思考 · 2 次工具调用" / "已执行：…"。 */
@@ -221,6 +327,7 @@ const summaryLabel = computed(() => {
     tool: "工具调用",
     plan: "计划步骤",
     workspace: "文件修改",
+    content: "回答",
   };
   const counts = new Map<ActivityEntry["kind"], number>();
   for (const entry of entries.value) {
@@ -233,7 +340,7 @@ const summaryLabel = computed(() => {
 const anyRunning = computed(() => entries.value.some((entry) => entry.status === "running"));
 
 const hasDetail = (entry: ActivityEntry): boolean =>
-  Boolean(entry.content) || Boolean(entry.sections?.length);
+  Boolean(entry.content) || Boolean(entry.sections?.length) || Boolean(entry.fileChanges?.length);
 const isItemExpanded = (id: string) => props.itemExpandedIds.includes(id);
 
 const toggleSummary = () => emit("update:summaryExpanded", !props.summaryExpanded);
@@ -311,6 +418,7 @@ onBeforeUnmount(() => {
   <div v-if="entries.length" class="flex w-full min-w-0 flex-col gap-0.5">
     <!-- 摘要行：活动折叠开关 -->
     <button
+      v-if="!timeline.length"
       type="button"
       class="inline-flex h-[22px] w-fit items-center gap-1.5 rounded border-0 bg-transparent px-0.5 py-0 text-left text-[11px] leading-[14px] font-medium text-brand-muted-strong hover:text-brand-muted"
       @click="toggleSummary"
@@ -325,26 +433,51 @@ onBeforeUnmount(() => {
       <ChevronDown v-else class="h-2.5 w-2.5 flex-none text-brand-ghost" />
     </button>
 
-    <div v-if="summaryExpanded" class="flex w-full min-w-0 flex-col pl-[15px]">
+    <div v-if="summaryExpanded || timeline.length" class="flex w-full min-w-0 flex-col pl-[15px]">
       <div
         v-for="entry in entries"
         :key="entry.id"
         class="flex min-w-0 flex-col"
         @click="toggleItem(entry)"
       >
+        <XMarkdown
+          v-if="entry.kind === 'content' && entry.content"
+          :content="entry.content"
+          :components="markdownComponents"
+          :streaming="{ hasNextChunk: streaming, enableAnimation: streaming, tail: false }"
+          :class-name="markdownClassName"
+          :config="{ breaks: true }"
+          open-links-in-new-tab
+        />
+
         <!-- 标题行：与展开内容上下布局，互不居中 -->
         <div
-          class="group flex min-h-6 items-center gap-2 rounded-[6px] px-1.5 py-[3px] text-[11.5px] leading-[14px] w-full"
+          v-else
+          class="my-4px group flex min-h-6 items-center gap-2 rounded-[6px] px-1.5 py-[3px] text-[11.5px] leading-[14px] w-full"
           :class="
             hasDetail(entry)
               ? 'cursor-pointer hover:bg-[color-mix(in_srgb,var(--brand-foreground)_6%,transparent)] active:bg-[color-mix(in_srgb,var(--brand-foreground)_9%,transparent)]'
               : 'cursor-default'
           "
         >
-          <component :is="entry.icon" class="h-[11px] w-[11px] flex-none text-brand-muted-strong" />
+          <component
+            v-if="entry.icon"
+            :is="entry.icon"
+            class="h-[11px] w-[11px] flex-none text-brand-muted-strong"
+          />
           <span
             class="min-w-0 max-w-[300px] flex-[0_1_auto] overflow-hidden truncate text-brand-muted"
             >{{ entry.title }}</span
+          >
+          <span
+            v-if="entry.fileStats?.additions"
+            class="flex-none font-mono text-[10.5px] text-brand-success"
+            >+{{ entry.fileStats.additions }}</span
+          >
+          <span
+            v-if="entry.fileStats?.deletions"
+            class="flex-none font-mono text-[10.5px] text-brand-danger"
+            >-{{ entry.fileStats.deletions }}</span
           >
           <span
             v-if="!isItemExpanded(entry.id) && entry.preview"
@@ -362,59 +495,96 @@ onBeforeUnmount(() => {
           </span>
         </div>
 
-        <!-- 思考展开：弱化 markdown（位于行下方） -->
-        <div
-          v-if="isItemExpanded(entry.id) && entry.kind === 'reasoning' && entry.content"
-          class="box-border w-full min-w-0 max-w-full overflow-hidden px-1"
-          @click.stop
-        >
-          <XMarkdown
-            :content="entry.content"
-            :components="markdownComponents"
-            :streaming="{
-              hasNextChunk: reasoningLive,
-              enableAnimation: reasoningLive,
-              tail: false,
-            }"
-            :class-name="markdownClassName"
-            :config="{ breaks: true }"
-            open-links-in-new-tab
-          />
-        </div>
-
-        <!-- 工具展开：inset 详情卡片（位于行下方） -->
-
-        <div
-          v-else-if="isItemExpanded(entry.id) && entry.sections?.length"
-          class="my-0.5 mb-1 flex w-full min-w-0 flex-col gap-2 overflow-hidden rounded-[7px] border border-solid border-brand-border bg-brand-surface p-2 font-mono text-[10.5px] leading-4 text-brand-muted"
-          @click.stop
-        >
+        <Transition name="activity-collapse">
           <div
-            v-for="(section, index) in entry.sections"
-            :key="index"
-            class="relative flex w-full min-w-0 flex-col gap-0.75"
+            v-if="
+              isItemExpanded(entry.id) &&
+              ((entry.kind === 'reasoning' && entry.content) ||
+                entry.fileChanges?.length ||
+                entry.sections?.length)
+            "
+            class="activity-collapse-shell"
+            @click.stop
           >
-            <div class="flex min-h-5 items-start pr-6">
-              <span class="text-[10.5px] font-medium text-brand-muted">{{ section.label }}</span>
-              <button
-                v-if="section.copyable"
-                type="button"
-                class="absolute -top-0.5 -right-0.5 grid h-[22px] w-[22px] place-items-center rounded-[5px] border-0 bg-transparent p-0 hover:bg-[color-mix(in_srgb,var(--brand-foreground)_9%,transparent)]"
-                :title="copiedSection === entry.id ? '已复制' : '复制全部内容'"
-                @click="copyEntry(entry)"
+            <div class="activity-collapse-content">
+              <!-- 思考展开：弱化 markdown（位于行下方） -->
+              <div
+                v-if="entry.kind === 'reasoning' && entry.content"
+                class="box-border w-full min-w-0 max-w-full overflow-hidden px-1"
               >
-                <Check
-                  v-if="copiedSection === entry.id"
-                  class="h-[11px] w-[11px] text-brand-ghost"
+                <XMarkdown
+                  :content="entry.content"
+                  :components="markdownComponents"
+                  :streaming="{
+                    hasNextChunk: reasoningLive,
+                    enableAnimation: reasoningLive,
+                    tail: false,
+                  }"
+                  :class-name="[markdownClassName, 'activity-reasoning-markdown'].join(' ')"
+                  :config="{ breaks: true }"
+                  open-links-in-new-tab
                 />
-                <Copy v-else class="h-[11px] w-[11px] text-brand-ghost" />
-              </button>
+              </div>
+
+              <!-- 工具展开：inset 详情卡片（位于行下方） -->
+              <div
+                v-else
+                class="my-0.5 mb-1 flex w-full min-w-0 flex-col gap-2 overflow-hidden rounded-[7px] border border-solid border-brand-border bg-brand-surface p-2 font-mono text-[10.5px] leading-4 text-brand-muted"
+              >
+                <div v-if="entry.fileChanges?.length" class="flex flex-col gap-1">
+                  <div class="flex min-h-5 items-center text-[10.5px] font-medium text-brand-muted">
+                    变更文件
+                  </div>
+                  <div
+                    v-for="change in entry.fileChanges"
+                    :key="change.path"
+                    class="flex min-w-0 items-center gap-2 rounded-[4px] px-1 py-0.5"
+                  >
+                    <Pencil class="h-3 w-3 flex-none text-brand-muted-strong" />
+                    <span
+                      class="min-w-0 flex-1 truncate font-sans text-[11px] text-brand-muted-strong"
+                    >
+                      {{ change.path }}
+                    </span>
+                    <span v-if="change.additions" class="flex-none text-brand-success"
+                      >+{{ change.additions }}</span
+                    >
+                    <span v-if="change.deletions" class="flex-none text-brand-danger"
+                      >-{{ change.deletions }}</span
+                    >
+                  </div>
+                </div>
+                <div
+                  v-for="(section, index) in entry.sections"
+                  :key="index"
+                  class="relative flex w-full min-w-0 flex-col gap-0.75"
+                >
+                  <div class="flex min-h-5 items-start pr-6">
+                    <span class="text-[10.5px] font-medium text-brand-muted">
+                      {{ section.label }}
+                    </span>
+                    <button
+                      v-if="section.copyable"
+                      type="button"
+                      class="absolute -top-0.5 -right-0.5 grid h-[22px] w-[22px] place-items-center rounded-[5px] border-0 bg-transparent p-0 hover:bg-[color-mix(in_srgb,var(--brand-foreground)_9%,transparent)]"
+                      :title="copiedSection === entry.id ? '已复制' : '复制全部内容'"
+                      @click="copyEntry(entry)"
+                    >
+                      <Check
+                        v-if="copiedSection === entry.id"
+                        class="h-[11px] w-[11px] text-brand-ghost"
+                      />
+                      <Copy v-else class="h-[11px] w-[11px] text-brand-ghost" />
+                    </button>
+                  </div>
+                  <pre
+                    class="m-0 w-full min-w-0 whitespace-pre-wrap break-words font-inherit text-brand-muted"
+                    >{{ section.content }}</pre>
+                </div>
+              </div>
             </div>
-            <pre
-              class="m-0 w-full min-w-0 whitespace-pre-wrap break-words font-inherit text-brand-muted"
-              >{{ section.content }}</pre>
           </div>
-        </div>
+        </Transition>
       </div>
     </div>
   </div>
@@ -431,6 +601,10 @@ onBeforeUnmount(() => {
   }
 }
 
+:deep(.chat-markdown a) {
+  color: var(--brand-accent);
+}
+
 :deep(.activity-reasoning-markdown) {
   width: 100%;
   max-width: 100%;
@@ -438,8 +612,9 @@ onBeforeUnmount(() => {
   --heading-color: var(--brand-muted-strong);
   --line-color: color-mix(in srgb, var(--brand-muted-strong) 30%, transparent);
   color: var(--brand-muted-strong);
-  font-size: 13px;
+  font-size: 12px;
   white-space: normal;
+  padding: 4px 0 16px 8px;
 }
 :deep(.activity-reasoning-markdown p),
 :deep(.activity-reasoning-markdown li) {
@@ -457,5 +632,29 @@ onBeforeUnmount(() => {
 :deep(.activity-reasoning-markdown a),
 :deep(.activity-reasoning-markdown code:not(pre code)) {
   color: var(--brand-muted);
+}
+
+.activity-collapse-shell {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-height: 0;
+  opacity: 1;
+  transition:
+    grid-template-rows 180ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 140ms ease;
+}
+.activity-collapse-content {
+  min-height: 0;
+  overflow: hidden;
+}
+.activity-collapse-enter-from,
+.activity-collapse-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+.activity-collapse-enter-to,
+.activity-collapse-leave-from {
+  grid-template-rows: 1fr;
+  opacity: 1;
 }
 </style>

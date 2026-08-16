@@ -116,7 +116,7 @@ export class AgentManager {
     projectPath: string | undefined,
     providerSessionId: string | undefined,
     res: ServerResponse,
-    _signal: AbortSignal,
+    signal: AbortSignal,
   ): Promise<void> {
     const state = await this.getSessionState(
       agentId,
@@ -141,6 +141,8 @@ export class AgentManager {
       snapshot,
       response: res,
     });
+    const cancel = () => this.runs.cancel(agentId, conversationId);
+    signal.addEventListener("abort", cancel, { once: true });
     try {
       if (this.acp.hasAgent(agentId)) {
         await this.acp.runTurn(
@@ -167,6 +169,8 @@ export class AgentManager {
     } catch (error) {
       this.runs.finish(agentId, conversationId, error);
       throw error;
+    } finally {
+      signal.removeEventListener("abort", cancel);
     }
   }
 
@@ -178,7 +182,7 @@ export class AgentManager {
     return this.managerFor(agentId).replyPermission(permissionId, response);
   }
 
-  /** 订阅会话实时输出（SSE）；返回是否找到会话。ACP 走事件总线，pi / omp 走会话文件尾随。 */
+  /** 订阅由网关启动的会话事件流（SSE）；native CLI 不通过文件轮询伪造实时事件。 */
   async subscribeSessionStream(
     agentId: string,
     conversationId: string,
@@ -188,7 +192,7 @@ export class AgentManager {
     if (this.acp.hasAgent(agentId)) {
       return this.acp.subscribeSessionStream(agentId, conversationId, res);
     }
-    return this.native.subscribeSessionStream(agentId, conversationId, res);
+    return false;
   }
 
   /** 取消由 Open Chat 启动的运行中回合。 */

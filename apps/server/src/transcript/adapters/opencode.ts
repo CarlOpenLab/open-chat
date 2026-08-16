@@ -1,4 +1,4 @@
-import { normalizeTranscriptHistory } from "../core";
+import { appendTranscriptTimeline, normalizeTranscriptHistory } from "../core";
 import type { TranscriptActivity, TranscriptMessage } from "../types";
 import { asRecord, stringifyValue, stringValue } from "../value";
 
@@ -29,13 +29,38 @@ export function convertOpenCodeHistory(values: unknown[]): TranscriptMessage[] {
     }
     if (!content) content = stringValue(info.content);
     if (!content && !reasoningContent && toolCalls.length === 0) continue;
-    history.push({
+    const normalized: TranscriptMessage = {
       id: stringValue(info.id) || `opencode-${history.length}`,
       role,
       content,
       ...(reasoningContent ? { reasoningContent } : {}),
       ...(toolCalls.length ? { toolCalls } : {}),
-    });
+    };
+    for (const partValue of parts) {
+      const part = asRecord(partValue);
+      if (!part) continue;
+      if (part.type === "text") {
+        const text = stringValue(part.text);
+        if (text)
+          appendTranscriptTimeline(normalized, {
+            kind: "content",
+            id: `content-${normalized.id}`,
+            content: text,
+          });
+      } else if (part.type === "reasoning" || part.type === "thinking") {
+        const text = stringValue(part.text);
+        if (text)
+          appendTranscriptTimeline(normalized, {
+            kind: "reasoning",
+            id: `reasoning-${normalized.id}`,
+            content: text,
+          });
+      } else if (part.type === "tool") {
+        const activity = normalizeOpenCodeActivity(part);
+        appendTranscriptTimeline(normalized, { kind: "tool", id: activity.id, activity });
+      }
+    }
+    history.push(normalized);
   }
   return normalizeTranscriptHistory(history);
 }

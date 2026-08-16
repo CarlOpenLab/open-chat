@@ -8,7 +8,9 @@ import {
   Cpu,
   FolderOpen,
   Hammer,
+  ImagePlus,
   ListTodo,
+  Paperclip,
   ShieldCheck,
   ShieldQuestion,
   Square,
@@ -18,8 +20,8 @@ import { Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, h, ref, watch, type Component } from "vue";
 import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import type { PermissionRequest } from "../../services/OpenChatProvider";
+import { aiService, type UploadedAttachment } from "../../services/ai";
 import ModelIcon from "../Icons/ModelIcon.vue";
-import { aiService } from "../../services/ai";
 
 interface Props {
   modelValue: string;
@@ -51,7 +53,7 @@ interface Emits {
   (e: "update:modelValue", value: string): void;
   (e: "change", value: string): void;
   (e: "cancel"): void;
-  (e: "submit", value: string): void;
+  (e: "submit", value: string, attachments: UploadedAttachment[]): void;
   (e: "modelChange", key: string): void;
   (e: "thinkingChange", value: boolean): void;
   (e: "fileModeChange", value: boolean): void;
@@ -340,10 +342,101 @@ const handleChange = (value: string) => {
   emit("change", value);
 };
 
+// ============ 附件（图片粘贴 / 拖拽 / 选择） ============
+
+/** 输入框中的待发送附件：上传完成前本地预览，上传后携带持久引用。 */
+interface StagedAttachment extends UploadedAttachment {
+  /** 去重键：name + size + lastModified。 */
+  sourceKey: string;
+  /** 本地预览 URL（blob:），发送前有效。 */
+  previewUrl: string;
+  uploading: boolean;
+  error?: string;
+}
+
+const stagedAttachments = ref<StagedAttachment[]>([]);
+const dragActive = ref(false);
+const fileInputRef = ref<HTMLInputElement | null>(null);
+
+/** 把 File 列表上传到网关并加入预览行；非图片忽略。 */
+const stageFiles = async (files: File[]) => {
+  for (const file of files) {
+    if (!file.type.startsWith("image/")) continue;
+    const sourceKey = `${file.name}:${file.size}:${file.lastModified}`;
+    if (stagedAttachments.value.some((entry) => entry.sourceKey === sourceKey)) continue;
+    const previewUrl = URL.createObjectURL(file);
+    const entry: StagedAttachment = {
+      sourceKey,
+      reference: "",
+      name: file.name,
+      isImage: true,
+      previewUrl,
+      uploading: true,
+    };
+    stagedAttachments.value.push(entry);
+    try {
+      const uploaded = await aiService.uploadAttachment(file);
+      entry.reference = uploaded.reference;
+      entry.name = uploaded.name;
+      entry.isImage = uploaded.isImage;
+      entry.uploading = false;
+    } catch (error) {
+      entry.uploading = false;
+      entry.error = error instanceof Error ? error.message : "上传失败";
+    }
+  }
+};
+
+/** Sender 的 onPasteFile：粘贴文件（含截图）时加入附件。 */
+const handlePasteFile = (files: FileList) => {
+  void stageFiles(Array.from(files));
+};
+
+const handleDragOver = (event: DragEvent) => {
+  event.preventDefault();
+  if (event.dataTransfer?.types.includes("Files")) dragActive.value = true;
+};
+
+const handleDragLeave = (event: DragEvent) => {
+  if (event.target === event.currentTarget) dragActive.value = false;
+};
+
+const handleDrop = (event: DragEvent) => {
+  dragActive.value = false;
+  const files = event.dataTransfer?.files;
+  if (files?.length) {
+    event.preventDefault();
+    void stageFiles(Array.from(files));
+  }
+};
+
+const pickFiles = () => fileInputRef.value?.click();
+
+const handleFileInputChange = (event: Event) => {
+  const input = event.target as HTMLInputElement;
+  if (input.files?.length) void stageFiles(Array.from(input.files));
+  input.value = "";
+};
+
+const removeAttachment = (index: number) => {
+  const entry = stagedAttachments.value[index];
+  if (entry?.previewUrl.startsWith("blob:")) URL.revokeObjectURL(entry.previewUrl);
+  stagedAttachments.value.splice(index, 1);
+};
+
 const handleSubmit = (value: string) => {
   const prompt = value.trim();
-  if (!prompt) return;
-  emit("submit", prompt);
+  const ready = stagedAttachments.value.filter((entry) => entry.reference && !entry.uploading);
+  if (!prompt && ready.length === 0) return;
+  emit(
+    "submit",
+    prompt,
+    ready.map(({ reference, name, isImage }) => ({ reference, name, isImage })),
+  );
+  for (const entry of stagedAttachments.value) {
+    if (entry.previewUrl.startsWith("blob:")) URL.revokeObjectURL(entry.previewUrl);
+  }
+  stagedAttachments.value = [];
 };
 
 const chipClass = (active: boolean, disabled = false) => {
@@ -364,6 +457,9 @@ const chipClass = (active: boolean, disabled = false) => {
   <section
     class="chat-footer relative z-12 pt-[20px] px-[max(20px,calc((100%_-_760px)/2))] pb-[max(16px,env(safe-area-inset-bottom))] bg-[linear-gradient(to_bottom,transparent_0,var(--brand-workspace)_32px,var(--brand-workspace)_100%)] lt-md:px-[18px] lt-sm:px-[10px]"
     aria-label="消息输入区"
+    @dragover.prevent="handleDragOver"
+    @dragleave="handleDragLeave"
+    @drop="handleDrop"
   >
     <Sender
       :value="modelValue"
@@ -372,9 +468,51 @@ const chipClass = (active: boolean, disabled = false) => {
       :on-cancel="() => emit('cancel')"
       :on-change="handleChange"
       :on-submit="handleSubmit"
+      :on-paste-file="handlePasteFile"
       :suffix="false"
       :disabled="agentMode && (!agentAvailable || agentConfiguring)"
     >
+      <template #header>
+        <div v-if="stagedAttachments.length" class="attachment-preview-row">
+          <div
+            v-for="(attachment, index) in stagedAttachments"
+            :key="attachment.sourceKey"
+            class="attachment-tile"
+            :class="{
+              'is-uploading': attachment.uploading,
+              'has-error': Boolean(attachment.error),
+            }"
+          >
+            <img
+              v-if="attachment.isImage"
+              :src="attachment.previewUrl"
+              class="attachment-image"
+              alt=""
+            />
+            <button
+              type="button"
+              class="attachment-remove"
+              aria-label="移除附件"
+              @click="removeAttachment(index)"
+            >
+              <X class="!h-[10px] !w-[10px]" />
+            </button>
+            <div v-if="attachment.uploading" class="attachment-overlay">上传中…</div>
+            <div v-else-if="attachment.error" class="attachment-overlay">上传失败</div>
+          </div>
+          <button type="button" class="attachment-add" aria-label="添加图片" @click="pickFiles">
+            <ImagePlus class="!h-[14px] !w-[14px]" />
+          </button>
+          <input
+            ref="fileInputRef"
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            @change="handleFileInputChange"
+          />
+        </div>
+      </template>
       <template #footer="{ defaultNode }">
         <div class="flex w-full flex-col gap-2">
           <div v-if="pendingPermission" class="permission-request-inline">
@@ -406,8 +544,21 @@ const chipClass = (active: boolean, disabled = false) => {
             </div>
           </div>
           <div class="flex min-h-[26px] w-full items-center justify-between gap-3">
-            <!-- composer 左排：推理、工作模式和文件工作区 -->
+            <!-- composer 左排：附件、推理、工作模式和文件工作区 -->
             <div class="flex min-w-0 items-center gap-[3px]">
+              <Tooltip title="添加图片（支持粘贴 / 拖拽）">
+                <button
+                  type="button"
+                  :class="chipClass(false)"
+                  aria-label="添加图片"
+                  @click="pickFiles"
+                >
+                  <ImagePlus
+                    class="!h-[12px] !w-[12px] flex-none"
+                    :class="stagedAttachments.length ? 'text-brand-accent' : ''"
+                  />
+                </button>
+              </Tooltip>
               <Dropdown
                 :menu="reasoningMenu"
                 :trigger="['click']"
@@ -587,6 +738,7 @@ const chipClass = (active: boolean, disabled = false) => {
         </div>
       </template>
     </Sender>
+    <div v-if="dragActive" class="drop-overlay">松开以添加图片</div>
   </section>
 </template>
 
@@ -666,6 +818,96 @@ const chipClass = (active: boolean, disabled = false) => {
 .chat-footer :deep(.antd-sender-footer) {
   min-height: 32px;
   padding: 0 10px 10px;
+}
+
+/* 附件预览行：输入框上方，仿 Waku composer 缩略图 chip */
+.attachment-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 0;
+}
+.attachment-tile {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--brand-border);
+  border-radius: 8px;
+  background: var(--brand-inset);
+}
+.attachment-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.attachment-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.attachment-tile:hover .attachment-remove {
+  opacity: 1;
+}
+.attachment-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  color: var(--brand-foreground);
+  background: color-mix(in srgb, var(--brand-workspace) 78%, transparent);
+}
+.attachment-add {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  flex: none;
+  place-items: center;
+  border: 1px dashed var(--brand-border-strong);
+  border-radius: 8px;
+  padding: 0;
+  background: transparent;
+  color: var(--brand-muted-strong);
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease;
+}
+.attachment-add:hover {
+  border-color: var(--brand-accent);
+  color: var(--brand-accent);
+}
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-accent);
+  background: color-mix(in srgb, var(--brand-workspace) 82%, transparent);
+  border: 1.5px dashed var(--brand-accent);
+  border-radius: 13px;
+  pointer-events: none;
 }
 .chat-footer :deep(textarea) {
   max-height: 152px;

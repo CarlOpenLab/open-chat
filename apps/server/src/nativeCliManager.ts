@@ -2,8 +2,8 @@ import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ServerResponse } from "node:http";
-import { createReadStream, watch, type FSWatcher } from "node:fs";
-import { open, readdir, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
@@ -13,10 +13,11 @@ import { GatewayError } from "./error";
 import type { LocalChatManager, LocalModelInfo } from "./localProvider";
 import { convertClaudeHistory } from "./transcript/adapters/claude";
 import { convertCodexThreadHistory, normalizeCodexActivity } from "./transcript/adapters/codex";
-import { convertPiHistory, normalizePiStreamLine } from "./transcript/adapters/pi";
-import { writeTranscriptStreamEvent } from "./transcript/stream";
+import { convertPiHistory } from "./transcript/adapters/pi";
 import type { TranscriptMessage } from "./transcript/types";
-import { writeTranscriptChunk, writeTranscriptCustomEvent } from "./transcript/stream";
+import { writeTranscriptCustomEvent } from "./transcript/stream";
+import { writeNativeEvent } from "./nativeEvents";
+import { defaultWorkspaceDir } from "./attachments";
 
 type NativeTransport = Exclude<AgentTransport, "acp">;
 
@@ -178,7 +179,7 @@ export class NativeCliManager {
     const history = await this.readProviderHistory(
       agent,
       session.sessionId,
-      projectPath || agent.cwd || this.config.cwd || process.cwd(),
+      projectPath || agent.cwd || this.config.cwd || defaultWorkspaceDir(),
       session.sessionId !== conversationId || Boolean(providerSessionId),
     );
     return sessionView(session, history);
@@ -188,7 +189,7 @@ export class NativeCliManager {
     const agent = this.requireAgent(agentId);
     const executable = resolveExecutable(agent.command);
     if (!executable && agent.transport !== "opencode") return { supported: false, sessions: [] };
-    const cwd = agent.cwd || this.config.cwd || process.cwd();
+    const cwd = agent.cwd || this.config.cwd || defaultWorkspaceDir();
     switch (agent.transport) {
       case "codex":
         return {
@@ -215,85 +216,6 @@ export class NativeCliManager {
       }
       default:
         return { supported: false, sessions: [] };
-    }
-  }
-
-  /** 订阅 CLI（pi / omp）会话实时输出：先发历史快照，再尾随会话文件推送新增消息（只读，不写入文件）。
-   * 用于把终端里正在运行的会话实时渲染到 WEB UI。找不到会话或 transport 不支持时返回 false。 */
-  async subscribeSessionStream(
-    agentId: string,
-    conversationId: string,
-    res: ServerResponse,
-  ): Promise<boolean> {
-    const agent = this.requireAgent(agentId);
-    if (agent.transport !== "pi" && agent.transport !== "omp") return false;
-    const session = [...this.sessions.values()].find(
-      (entry) => entry.agentId === agentId && entry.conversationId === conversationId,
-    );
-    if (!session) return false;
-    const sessionId = session.sessionId;
-    if (!sessionId || sessionId === conversationId) return false;
-    const cwd = session.projectPath || agent.cwd || this.config.cwd || process.cwd();
-    const file = await findPiSessionPath(sessionId, cwd, agent.transport as NativeTransport);
-    if (!file) return false;
-
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    });
-    // 1) 快照：已有历史（CLI 会话此前的内容）
-    const history = await this.readProviderHistory(agent, sessionId, cwd, true);
-    res.write(`event: snapshot\ndata: ${JSON.stringify({ messages: history })}\n\n`);
-
-    // 2) 尾随文件：从当前末尾开始读新增行，转成 SSE 事件
-    const handle = await open(file, "r");
-    let position = (await handle.stat()).size;
-    let buffer = "";
-    let watcher: FSWatcher | null = null;
-    let timer: NodeJS.Timeout | null = null;
-    const cleanup = () => {
-      watcher?.close();
-      if (timer) clearInterval(timer);
-      void handle.close().catch(() => {});
-    };
-    res.on("close", cleanup);
-    const flush = async () => {
-      try {
-        const { size } = await handle.stat();
-        while (position < size) {
-          const chunk = Buffer.alloc(Math.min(size - position, 64 * 1024));
-          const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
-          if (bytesRead <= 0) break;
-          position += bytesRead;
-          buffer += chunk.toString("utf8").slice(0, bytesRead);
-          let newline: number;
-          while ((newline = buffer.indexOf("\n")) !== -1) {
-            const line = buffer.slice(0, newline);
-            buffer = buffer.slice(newline + 1);
-            if (line.trim()) this.emitNativeTailLine(res, line);
-          }
-        }
-      } catch {
-        // 文件被删除/替换等：静默，下一次 flush 或 close 兜底
-      }
-    };
-    watcher = watch(file, () => void flush());
-    timer = setInterval(() => void flush(), 1000);
-    return true;
-  }
-
-  /** 把会话文件的一行增量事件转成 SSE 帧（复用前端 ACP stream 渲染管线）。 */
-  private emitNativeTailLine(res: ServerResponse, line: string): void {
-    let value: Record<string, unknown>;
-    try {
-      value = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      return;
-    }
-    for (const event of normalizePiStreamLine(value)) {
-      writeTranscriptStreamEvent(res, "pi", event);
     }
   }
 
@@ -371,7 +293,7 @@ export class NativeCliManager {
     }
     try {
       await session.runtime.runTurn(text, res, signal);
-      writeChunk(res, `${agent.transport}/${session.model || agent.id}`, {}, "stop");
+      writeNativeDelta(res, `${agent.transport}/${session.model || agent.id}`, {}, "stop");
       res.write("data: [DONE]\n\n");
       res.end();
     } catch (error) {
@@ -464,7 +386,7 @@ export class NativeCliManager {
   ): Promise<NativeRuntime> {
     const executable = resolveExecutable(agent.command);
     if (!executable) throw GatewayError.invalidRequest(`${agent.name} CLI 不可用`);
-    const cwd = session.projectPath || agent.cwd || this.config.cwd || process.cwd();
+    const cwd = session.projectPath || agent.cwd || this.config.cwd || defaultWorkspaceDir();
     const requestPermission: PermissionRequester = (agentId, res, request) =>
       this.requestPermission(agentId, res, request);
     switch (agent.transport) {
@@ -653,7 +575,6 @@ class CodexRuntime implements NativeRuntime {
   private active: ActiveNativeRun | null = null;
   private threadId = "";
   private turnId = "";
-  private agentMessagePhase: "commentary" | "final_answer" | "" = "";
   private model: string;
   private readonly toolCalls = new Map<string, { name: string; input?: unknown }>();
 
@@ -717,7 +638,6 @@ class CodexRuntime implements NativeRuntime {
   async runTurn(text: string, res: ServerResponse, signal: AbortSignal): Promise<void> {
     if (this.active) throw GatewayError.invalidRequest("该 Codex 会话仍在运行");
     this.toolCalls.clear();
-    this.agentMessagePhase = "";
     const done = new Promise<void>((resolve, reject) => {
       this.active = { res, resolve, reject, sawText: false, sawReasoning: false };
     });
@@ -788,10 +708,10 @@ class CodexRuntime implements NativeRuntime {
     if (method === "item/agentMessage/delta") {
       const delta = stringValue(params.delta);
       if (delta) {
-        const field = this.agentMessagePhase === "commentary" ? "reasoning_content" : "content";
-        if (field === "reasoning_content") this.active.sawReasoning = true;
-        else this.active.sawText = true;
-        writeChunk(this.active.res, `codex/${this.model || "default"}`, { [field]: delta });
+        // Codex commentary is visible assistant text, not hidden reasoning.
+        // Hidden reasoning arrives through item/reasoning/*Delta below.
+        this.active.sawText = true;
+        writeNativeDelta(this.active.res, `codex/${this.model || "default"}`, { content: delta });
       }
       return;
     }
@@ -799,7 +719,7 @@ class CodexRuntime implements NativeRuntime {
       const delta = stringValue(params.delta);
       if (delta) {
         this.active.sawReasoning = true;
-        writeChunk(this.active.res, `codex/${this.model || "default"}`, {
+        writeNativeDelta(this.active.res, `codex/${this.model || "default"}`, {
           reasoning_content: delta,
         });
       }
@@ -808,12 +728,6 @@ class CodexRuntime implements NativeRuntime {
     if (method === "item/started" || method === "item/completed") {
       const item = asRecord(params.item);
       if (item && stringValue(item.type) === "agentMessage") {
-        if (method === "item/started") {
-          const phase = stringValue(item.phase);
-          this.agentMessagePhase = phase === "commentary" || phase === "final_answer" ? phase : "";
-        } else {
-          this.agentMessagePhase = "";
-        }
         return;
       }
       if (
@@ -828,13 +742,13 @@ class CodexRuntime implements NativeRuntime {
         } else {
           this.toolCalls.set(tool.id, { name: tool.name, input: tool.input });
         }
-        writeCustomEvent(this.active.res, "tool_call", tool);
+        writeNativeEvent(this.active.res, { type: "activity.upsert", activity: tool });
       }
       return;
     }
     if (method === "error") {
       const message = stringValue(params.message);
-      if (message) writeCustomEvent(this.active.res, "chat_error", { message });
+      if (message) this.failActive(new Error(message));
       return;
     }
     if (method === "turn/completed") {
@@ -843,7 +757,6 @@ class CodexRuntime implements NativeRuntime {
       const active = this.active;
       this.finishToolCalls(active, status !== "completed", error || `Codex 回合结束：${status}`);
       this.turnId = "";
-      this.agentMessagePhase = "";
       this.active = null;
       if (status === "completed" || status === "interrupted") active.resolve();
       else active.reject(new Error(error || `Codex 回合结束：${status}`));
@@ -853,12 +766,15 @@ class CodexRuntime implements NativeRuntime {
   private finishToolCalls(active: ActiveNativeRun | null, failed: boolean, error: string): void {
     if (active && !active.res.writableEnded) {
       for (const [id, tool] of this.toolCalls) {
-        writeCustomEvent(active.res, "tool_call", {
-          id,
-          name: tool.name,
-          status: failed ? "error" : "completed",
-          input: tool.input,
-          ...(failed ? { error } : {}),
+        writeNativeEvent(active.res, {
+          type: "activity.upsert",
+          activity: {
+            id,
+            name: tool.name,
+            status: failed ? "error" : "completed",
+            input: tool.input,
+            ...(failed ? { error } : {}),
+          },
         });
       }
     }
@@ -1013,14 +929,14 @@ class ClaudeRuntime implements NativeRuntime {
         const text = stringValue(delta?.text);
         if (text) {
           active.sawText = true;
-          writeChunk(active.res, `claude/${this.model || "default"}`, { content: text });
+          writeNativeDelta(active.res, `claude/${this.model || "default"}`, { content: text });
         }
       }
       if (stringValue(delta?.type) === "thinking_delta") {
         const text = stringValue(delta?.thinking);
         if (text) {
           active.sawReasoning = true;
-          writeChunk(active.res, `claude/${this.model || "default"}`, {
+          writeNativeDelta(active.res, `claude/${this.model || "default"}`, {
             reasoning_content: text,
           });
         }
@@ -1035,11 +951,12 @@ class ClaudeRuntime implements NativeRuntime {
         const blockType = stringValue(block.type);
         if (blockType === "text" && !active.sawText) {
           const text = stringValue(block.text);
-          if (text) writeChunk(active.res, `claude/${this.model || "default"}`, { content: text });
+          if (text)
+            writeNativeDelta(active.res, `claude/${this.model || "default"}`, { content: text });
         } else if (blockType === "thinking" && !active.sawReasoning) {
           const text = stringValue(block.thinking);
           if (text) {
-            writeChunk(active.res, `claude/${this.model || "default"}`, {
+            writeNativeDelta(active.res, `claude/${this.model || "default"}`, {
               reasoning_content: text,
             });
           }
@@ -1047,11 +964,14 @@ class ClaudeRuntime implements NativeRuntime {
           const id = stringValue(block.id) || randomUUID();
           const name = stringValue(block.name) || "工具调用";
           this.tools.set(id, { name, input: block.input });
-          writeCustomEvent(active.res, "tool_call", {
-            id,
-            name,
-            status: "running",
-            input: block.input,
+          writeNativeEvent(active.res, {
+            type: "activity.upsert",
+            activity: {
+              id,
+              name,
+              status: "running",
+              input: block.input,
+            },
           });
         }
       }
@@ -1063,13 +983,16 @@ class ClaudeRuntime implements NativeRuntime {
         if (!block || stringValue(block.type) !== "tool_result") continue;
         const id = stringValue(block.tool_use_id);
         const tool = this.tools.get(id);
-        writeCustomEvent(active.res, "tool_call", {
-          id,
-          name: tool?.name || "工具调用",
-          status: block.is_error === true ? "error" : "completed",
-          input: tool?.input,
-          output: stringifyValue(block.content),
-          ...(block.is_error === true ? { error: stringifyValue(block.content) } : {}),
+        writeNativeEvent(active.res, {
+          type: "activity.upsert",
+          activity: {
+            id,
+            name: tool?.name || "工具调用",
+            status: block.is_error === true ? "error" : "completed",
+            input: tool?.input,
+            output: stringifyValue(block.content),
+            ...(block.is_error === true ? { error: stringifyValue(block.content) } : {}),
+          },
         });
         this.tools.delete(id);
       }
@@ -1078,9 +1001,10 @@ class ClaudeRuntime implements NativeRuntime {
     if (type === "result") {
       const isError = value.is_error === true;
       if (isError) {
-        writeCustomEvent(active.res, "chat_error", {
-          message: stringValue(value.result) || "Claude 回合失败",
-        });
+        const message = stringValue(value.result) || "Claude 回合失败";
+        this.active = null;
+        active.reject(new Error(message));
+        return;
       }
       this.active = null;
       active.resolve();
@@ -1333,10 +1257,12 @@ class PiRuntime implements NativeRuntime {
       const delta = stringValue(update?.delta);
       if (updateType === "text_delta" && delta) {
         active.sawText = true;
-        writeChunk(active.res, `${this.agentId}/${this.model || "default"}`, { content: delta });
+        writeNativeDelta(active.res, `${this.agentId}/${this.model || "default"}`, {
+          content: delta,
+        });
       } else if (updateType === "thinking_delta" && delta) {
         active.sawReasoning = true;
-        writeChunk(active.res, `${this.agentId}/${this.model || "default"}`, {
+        writeNativeDelta(active.res, `${this.agentId}/${this.model || "default"}`, {
           reasoning_content: delta,
         });
       }
@@ -1349,13 +1275,15 @@ class PiRuntime implements NativeRuntime {
         if (block.type === "text" && !active.sawText) {
           const text = stringValue(block.text);
           if (text) {
-            writeChunk(active.res, `${this.agentId}/${this.model || "default"}`, { content: text });
+            writeNativeDelta(active.res, `${this.agentId}/${this.model || "default"}`, {
+              content: text,
+            });
           }
         }
         if (block.type === "thinking" && !active.sawReasoning) {
           const text = stringValue(block.thinking);
           if (text) {
-            writeChunk(active.res, `${this.agentId}/${this.model || "default"}`, {
+            writeNativeDelta(active.res, `${this.agentId}/${this.model || "default"}`, {
               reasoning_content: text,
             });
           }
@@ -1369,13 +1297,16 @@ class PiRuntime implements NativeRuntime {
       if (type === "tool_execution_start") this.tools.set(id, { name, input: value.args });
       const complete = type === "tool_execution_end";
       const tool = this.tools.get(id);
-      writeCustomEvent(active.res, "tool_call", {
-        id,
-        name,
-        status: complete ? (value.isError === true ? "error" : "completed") : "running",
-        input: tool?.input ?? value.args,
-        output: stringifyValue(value.result ?? value.partialResult),
-        ...(value.isError === true ? { error: stringifyValue(value.result) } : {}),
+      writeNativeEvent(active.res, {
+        type: "activity.upsert",
+        activity: {
+          id,
+          name,
+          status: complete ? (value.isError === true ? "error" : "completed") : "running",
+          input: tool?.input ?? value.args,
+          output: stringifyValue(value.result ?? value.partialResult),
+          ...(value.isError === true ? { error: stringifyValue(value.result) } : {}),
+        },
       });
       if (complete) this.tools.delete(id);
       return;
@@ -1401,7 +1332,7 @@ async function discoverNativeModels(
 ): Promise<NativeModel[]> {
   const executable = resolveExecutable(agent.command);
   if (!executable) return [];
-  const cwd = agent.cwd || process.cwd();
+  const cwd = agent.cwd || defaultWorkspaceDir();
   switch (agent.transport) {
     case "codex":
       return discoverCodexModels(executable, cwd, agent.args);
@@ -1948,11 +1879,17 @@ function contentText(value: unknown): string {
     .join("\n");
 }
 
-const writeChunk = (
+const writeNativeDelta = (
   res: ServerResponse,
-  model: string,
+  _model: string,
   delta: Record<string, unknown>,
   finishReason: string | null = null,
-): void => writeTranscriptChunk(res, model, delta, { finishReason });
+): void => {
+  const content = typeof delta.content === "string" ? delta.content : "";
+  const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : "";
+  if (content) writeNativeEvent(res, { type: "content.delta", content });
+  if (reasoning) writeNativeEvent(res, { type: "reasoning.delta", content: reasoning });
+  if (finishReason) writeNativeEvent(res, { type: "turn.completed", stopReason: finishReason });
+};
 
 const writeCustomEvent = writeTranscriptCustomEvent;

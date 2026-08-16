@@ -31,6 +31,34 @@ export interface ModelsResponse {
   local?: LocalModelsInfo;
 }
 
+/** 上传后的附件元数据：reference 是持久引用，渲染用 URL，agent 用网关侧 path。 */
+export interface UploadedAttachment {
+  reference: string;
+  name: string;
+  isImage: boolean;
+  /** 网关侧绝对路径（仅供同机 agent 读取，前端不使用）。 */
+  path?: string;
+}
+
+/** 附件渲染 URL（历史消息图片按引用读取）。 */
+export function attachmentUrl(reference: string, name: string): string {
+  return `${API_BASE_URL}/api/attachments/${encodeURIComponent(reference)}/${encodeURIComponent(name)}`;
+}
+
+/** 把 File 读成 base64 字符串。 */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      const comma = dataUrl.indexOf(",");
+      resolve(comma >= 0 ? dataUrl.slice(comma + 1) : "");
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
 /** Display-ready source item consumed by the `Sources` UI component. */
 export interface WebSearchSourceItem {
   key: string;
@@ -80,6 +108,42 @@ export const aiService = {
     return {
       path: typeof data.path === "string" ? data.path : undefined,
       canceled: data.canceled === true,
+    };
+  },
+
+  /**
+   * 上传附件（图片/文件）到网关，落盘 `~/.cc-hearts-open-code/attachments/`。
+   * 返回持久引用，后续发送消息与历史渲染都只用引用，字节不再回传浏览器。
+   */
+  async uploadAttachment(file: File): Promise<UploadedAttachment> {
+    const dataBase64 = await fileToBase64(file);
+    const response = await fetch(`${API_BASE_URL}/api/attachments`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : {}),
+      },
+      body: JSON.stringify({ name: file.name, dataBase64 }),
+    });
+    const data = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      reference?: unknown;
+      name?: unknown;
+      isImage?: unknown;
+      path?: unknown;
+      error?: { message?: string };
+    };
+    if (!response.ok) {
+      throw new Error(data.error?.message || `附件上传失败（HTTP ${response.status}）`);
+    }
+    if (typeof data.reference !== "string" || typeof data.name !== "string") {
+      throw new Error("附件上传返回了无效响应");
+    }
+    return {
+      reference: data.reference,
+      name: data.name,
+      isImage: data.isImage === true,
+      ...(typeof data.path === "string" ? { path: data.path } : {}),
     };
   },
 };

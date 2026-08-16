@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { normalizeTranscriptHistory, upsertTranscriptActivity } from "../core";
+import {
+  appendTranscriptTimeline,
+  normalizeTranscriptHistory,
+  upsertTranscriptActivity,
+} from "../core";
 import type { TranscriptActivity, TranscriptMessage } from "../types";
 import { asRecord, contentText, messageContentText, stringifyValue, stringValue } from "../value";
 
@@ -38,13 +42,38 @@ export function convertClaudeHistory(lines: Array<Record<string, unknown>>): Tra
       .filter((block) => stringValue(block?.type) === "tool_use")
       .map((block) => normalizeClaudeToolUse(block!));
     if (!text && !reasoning && !toolCalls.length) continue;
-    history.push({
+    const normalized: TranscriptMessage = {
       id: stringValue(line.uuid) || randomUUID(),
       role: "assistant",
       content: text,
       ...(reasoning ? { reasoningContent: reasoning } : {}),
       ...(toolCalls.length ? { toolCalls } : {}),
-    });
+    };
+    for (const blockValue of blocks) {
+      const block = asRecord(blockValue);
+      if (!block) continue;
+      if (stringValue(block.type) === "thinking") {
+        const text = stringValue(block.thinking);
+        if (text)
+          appendTranscriptTimeline(normalized, {
+            kind: "reasoning",
+            id: `reasoning-${normalized.id}`,
+            content: text,
+          });
+      } else if (stringValue(block.type) === "tool_use") {
+        const activity = normalizeClaudeToolUse(block);
+        appendTranscriptTimeline(normalized, { kind: "tool", id: activity.id, activity });
+      } else if (stringValue(block.type) === "text") {
+        const text = stringValue(block.text);
+        if (text)
+          appendTranscriptTimeline(normalized, {
+            kind: "content",
+            id: `content-${normalized.id}`,
+            content: text,
+          });
+      }
+    }
+    history.push(normalized);
   }
 
   return normalizeTranscriptHistory(history);
@@ -68,12 +97,14 @@ function applyClaudeToolResults(history: TranscriptMessage[], blocks: unknown[])
     const id = stringValue(block?.tool_use_id);
     if (!id) continue;
     const error = block?.is_error === true;
-    assistant.toolCalls = upsertTranscriptActivity(assistant.toolCalls, {
+    const activity: TranscriptActivity = {
       id,
       name: assistant.toolCalls?.find((tool) => tool.id === id)?.name || "工具调用",
       status: error ? "error" : "completed",
       output: contentText(block?.content),
       ...(error ? { error: stringifyValue(block?.content) } : {}),
-    });
+    };
+    assistant.toolCalls = upsertTranscriptActivity(assistant.toolCalls, activity);
+    appendTranscriptTimeline(assistant, { kind: "tool", id, activity });
   }
 }

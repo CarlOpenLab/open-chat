@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { nativeEventFrame } from "./nativeEvents";
 import type { TranscriptMessage } from "./transcript/types";
 
 export interface SessionRunView {
@@ -124,9 +125,17 @@ export class SessionRunRegistry {
 
     if (error && !entry.doneSeen) {
       const message = error instanceof Error ? error.message : "任务异常";
-      this.publish(entry, `event: chat_error\ndata: ${JSON.stringify({ message })}\n\n`);
+      const frame = nativeEventFrame({ type: "turn.failed", message });
+      this.publish(entry, frame);
+      if (!entry.response.writableEnded && !entry.response.destroyed) entry.response.write(frame);
     }
-    if (!entry.doneSeen) this.publish(entry, "data: [DONE]\n\n");
+    if (!entry.doneSeen) {
+      this.publish(entry, "data: [DONE]\n\n");
+      if (!entry.response.writableEnded && !entry.response.destroyed) {
+        entry.response.write("data: [DONE]\n\n");
+      }
+    }
+    if (!entry.response.writableEnded && !entry.response.destroyed) entry.response.end();
     for (const subscriber of entry.subscribers) {
       if (!subscriber.writableEnded && !subscriber.destroyed) subscriber.end();
     }

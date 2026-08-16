@@ -5,7 +5,12 @@ import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest, useXChat } from "@antdv-next/x-sdk";
 import { message } from "antdv-next";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
-import { API_BASE_URL, GATEWAY_API_KEY, type WebSearchSourceItem } from "../services/ai";
+import {
+  API_BASE_URL,
+  GATEWAY_API_KEY,
+  type UploadedAttachment,
+  type WebSearchSourceItem,
+} from "../services/ai";
 import {
   OpenChatProvider,
   WEB_SEARCHING_MARKER,
@@ -1026,7 +1031,7 @@ watch(isRequesting, (requesting) => {
 
 // ============ 会话实时输出（Open Chat 任务事件总线） ============
 
-/** 兼容旧的 native 文件尾随流：没有协议级状态时用事件活跃度推断。 */
+/** Native turns expose protocol-level completion; ACP keeps this activity timer as a fallback. */
 let nativeStreamIdleTimer: ReturnType<typeof setTimeout> | null = null;
 let acpStreamConversationKey = "";
 const touchNativeStreamActivity = () => {
@@ -1100,13 +1105,15 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
   }
 };
 
-/** 订阅当前会话的实时输出：ACP 在会话运行且本页无本地请求时；native（pi/omp）打开会话即尾随文件。 */
+/**
+ * 订阅当前会话的实时输出：只订阅由网关启动并管理的当前回合。
+ * CLI 自己在终端中启动的回合不通过日志轮询伪造实时事件。
+ */
 const startAcpLiveStream = () => {
   if (!isAcpAgent.value || !activeAgent.value.available) return;
   const conversationId = currentConversationKey.value || ensureDraftConversationKey();
   const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
   if (!conversation) return;
-  // 只订阅由 Open Chat 网关管理的运行中会话；外部 CLI 会话不在本轮范围内。
   const selectedRun = currentOpenChatRun.value;
   const isRunning = Boolean(selectedRun) || acpRunState.value?.state === "running";
   if (!isRunning || isRequesting.value) return;
@@ -1363,6 +1370,8 @@ const handleSubmit = (
   options: {
     extraInfo?: Record<string, unknown>;
     systemPrompt?: string;
+    /** 随消息发送的附件（已上传到网关，携带持久引用）。 */
+    attachments?: UploadedAttachment[];
   } = {},
 ) => {
   if (!nextContent || !nextContent.trim()) return;
@@ -1410,7 +1419,13 @@ const handleSubmit = (
   const forwardProvider = getForwardProvider(currentModel.value);
   onRequest(
     {
-      messages: [{ role: "user", content: nextContent }],
+      messages: [
+        {
+          role: "user",
+          content: nextContent,
+          ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+        },
+      ],
       model: inputCurrentModel.value,
       mode: workMode.value,
       permission: effectivePermissionMode.value,
@@ -1800,7 +1815,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :agent-configuring="acpSessionLoading"
         @change="handleChange"
         @cancel="handleCancel"
-        @submit="handleSubmit"
+        @submit="(value, attachments) => handleSubmit(value, { attachments })"
         @model-change="handleModelChange"
         @thinking-change="handleThinkingChange"
         @mode-change="handleModeChange"

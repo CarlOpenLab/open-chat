@@ -7,6 +7,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
 import type { ToolCallItem } from "../../services/OpenChatProvider";
+import type { TranscriptTimelineItem } from "../../services/transcript";
 import { formatWorkedDuration, formatWorkingElapsed } from "../../utils/chatDuration";
 import type { A2UIActionPayload, A2UISubmission } from "../../utils/a2ui";
 import A2UIRenderer from "./A2UIRenderer.vue";
@@ -77,6 +78,15 @@ const toolCalls = computed<ToolCallItem[]>(() => {
   const value = props.item.extraInfo?.toolCalls;
   return Array.isArray(value) ? (value as ToolCallItem[]) : [];
 });
+const timeline = computed<TranscriptTimelineItem[]>(() => {
+  const value = props.item.extraInfo?.timeline;
+  return Array.isArray(value) ? (value as TranscriptTimelineItem[]) : [];
+});
+const visibleTimeline = computed(() =>
+  timeline.value.filter(
+    (entry) => props.streaming || props.foldExpanded || entry.kind === "content",
+  ),
+);
 
 const planInfo = computed(() => props.item.extraInfo?.agentPlan ?? null);
 const workspaceInfo = computed(() => props.item.extraInfo?.parsedWorkspace ?? null);
@@ -91,6 +101,7 @@ const reasoningInfo = computed(() => {
 });
 
 const hasActivities = computed(() => {
+  if (timeline.value.length) return true;
   if (reasoningContent.value.trim()) return true;
   if (toolCalls.value.length) return true;
   if (Array.isArray(planInfo.value?.entries) && planInfo.value.entries.length) return true;
@@ -174,11 +185,12 @@ const onFaviconError = (url: string) => {
         @toggle="emit('update:foldExpanded', !foldExpanded)"
       />
       <ActivityList
-        v-if="streaming || foldExpanded"
+        v-if="streaming || foldExpanded || timeline.some((entry) => entry.kind === 'content')"
         :reasoning="reasoningInfo"
         :tools="toolCalls"
         :plan="planInfo"
         :workspace="workspaceInfo"
+        :timeline="visibleTimeline"
         :streaming="streaming"
         :summary-expanded="summaryExpanded"
         :item-expanded-ids="itemExpandedIds"
@@ -188,7 +200,7 @@ const onFaviconError = (url: string) => {
     </template>
 
     <XMarkdown
-      v-if="answerContent.trim()"
+      v-if="!timeline.length && answerContent.trim()"
       :content="answerContent"
       :components="markdownComponents"
       :streaming="markdownStreaming"

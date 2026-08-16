@@ -10,9 +10,8 @@
  * - 聊天：`POST /session/{id}/prompt_async`（model 与 system prompt 随每个
  *   prompt 下发），回复流经 `GET /event`（server-wide SSE，
  *   按 sessionID 过滤）。
- * - 事件转换：`message.part.delta`（field=text → content，
- *   field=reasoning → reasoning_content）转 OpenAI SSE chunk；
- *   `session.idle` → `[DONE]`。
+ * - 事件转换：`message.part.delta`（field=text / reasoning）转 native_event；
+ *   `session.idle` → native turn.completed。
  *
  * 每次请求只发最后一条用户消息（历史在 opencode session 里），无需重放。
  */
@@ -23,7 +22,8 @@ import { GatewayError } from "./error";
 import type { LocalConfig } from "./config";
 import { cliProcessEnv, resolveExecutable } from "./commandEnv";
 import { convertOpenCodeHistory } from "./transcript/adapters/opencode";
-import { writeTranscriptChunk, writeTranscriptCustomEvent } from "./transcript/stream";
+import { writeTranscriptCustomEvent } from "./transcript/stream";
+import { writeNativeEvent } from "./nativeEvents";
 import type { TranscriptMessage } from "./transcript/types";
 
 export interface LocalModelInfo {
@@ -473,7 +473,7 @@ export class LocalChatManager {
   }
 
   /**
-   * 发 prompt 并把 opencode 事件流转成 OpenAI SSE 流。
+   * 发 prompt 并把 opencode 事件流转成 native CLI 事件流。
    * system prompt 随每个 prompt 下发（同一会话不变，opencode 会正确应用）；
    * 客户端断开时通过 abort 中断本地回合。
    */
@@ -503,6 +503,7 @@ export class LocalChatManager {
     let reasoningSent = false;
     let contentStarted = false;
     let turnDone = false;
+    let turnFailed = false;
     let lastSessionEventAt = Date.now();
     let sentFinal = false;
     let retryNotice = "";
@@ -516,12 +517,12 @@ export class LocalChatManager {
     /** 把已累积的 reasoning 以 reasoning_content 帧发出去（工具调用前先落盘思考内容）。 */
     const flushReasoning = (): void => {
       if (reasoningBuffer && !reasoningSent) {
-        writeChunk(res, model, { reasoning_content: reasoningBuffer });
+        writeNativeDelta(res, model, { reasoning_content: reasoningBuffer });
         reasoningSent = true;
       }
     };
 
-    /** 把 opencode 工具 part 转成自定义 `tool_call` SSE 事件，供前端 ThoughtChain 渲染。 */
+    /** 把 opencode 工具 part 转成有序 native activity 事件，供前端活动列表渲染。 */
     const emitToolPart = (part: Record<string, unknown> | undefined): void => {
       if (!part || part.type !== "tool") return;
       flushReasoning();
@@ -567,14 +568,24 @@ export class LocalChatManager {
         durationMs = time.completed - time.created;
       }
       toolParts.set(id, { name, output });
-      writeCustomEvent(res, "tool_call", {
-        id,
-        name,
-        status,
-        input,
-        output: output || undefined,
-        error,
-        durationMs,
+      writeNativeEvent(res, {
+        type: "activity.upsert",
+        activity: {
+          id,
+          name,
+          status:
+            status === "pending"
+              ? "pending"
+              : status === "error"
+                ? "error"
+                : status === "completed"
+                  ? "completed"
+                  : "running",
+          input,
+          output: output || undefined,
+          error,
+          durationMs,
+        },
       });
     };
 
@@ -582,9 +593,9 @@ export class LocalChatManager {
       if (sentFinal) return;
       sentFinal = true;
       if (reasoningBuffer && !reasoningSent) {
-        writeChunk(res, model, { reasoning_content: reasoningBuffer });
+        writeNativeDelta(res, model, { reasoning_content: reasoningBuffer });
       }
-      writeChunk(res, model, {}, "stop");
+      if (!turnFailed) writeNativeDelta(res, model, {}, "stop");
       res.write("data: [DONE]\n\n");
       res.end();
     };
@@ -599,7 +610,9 @@ export class LocalChatManager {
           permissionPendingAt === null &&
           Date.now() - lastSessionEventAt > SESSION_EVENT_STALL_MS
         ) {
-          writeCustomEvent(res, "chat_error", {
+          turnFailed = true;
+          writeNativeEvent(res, {
+            type: "turn.failed",
             message: retryNotice
               ? `模型请求重试失败：${retryNotice}`
               : "opencode 回合超时，未收到模型响应，请重试",
@@ -611,7 +624,9 @@ export class LocalChatManager {
           permissionPendingAt !== null &&
           Date.now() - permissionPendingAt > PERMISSION_WAIT_TIMEOUT_MS
         ) {
-          writeCustomEvent(res, "chat_error", {
+          turnFailed = true;
+          writeNativeEvent(res, {
+            type: "turn.failed",
             message: "权限请求等待超时，回合已结束，请重试",
           });
           break;
@@ -668,19 +683,22 @@ export class LocalChatManager {
                 if (!contentStarted) {
                   contentStarted = true;
                   if (reasoningBuffer && !reasoningSent) {
-                    writeChunk(res, model, { reasoning_content: reasoningBuffer });
+                    writeNativeDelta(res, model, { reasoning_content: reasoningBuffer });
                     reasoningSent = true;
                   }
-                  writeChunk(res, model, { role: "assistant", content: "" });
+                  writeNativeDelta(res, model, { role: "assistant", content: "" });
                 }
-                if (delta) writeChunk(res, model, { content: delta });
+                if (delta) writeNativeDelta(res, model, { content: delta });
               } else if (field === "reasoning" || field === "thinking") {
                 if (!contentStarted) reasoningBuffer += delta;
               } else if ((field === "name" || field === "tool") && partID && delta) {
                 // 工具名开始流式输出：先发 pending，之后由 message.part.updated 补全。
                 flushReasoning();
                 toolParts.set(partID, { name: delta, output: "" });
-                writeCustomEvent(res, "tool_call", { id: partID, name: delta, status: "pending" });
+                writeNativeEvent(res, {
+                  type: "activity.upsert",
+                  activity: { id: partID, name: delta, status: "pending" },
+                });
               } else if (field === "output" && partID) {
                 // 工具输出流式输出。
                 flushReasoning();
@@ -688,11 +706,14 @@ export class LocalChatManager {
                 const name = existing?.name ?? "";
                 const output = (existing?.output ?? "") + delta;
                 if (existing) existing.output = output;
-                writeCustomEvent(res, "tool_call", {
-                  id: partID,
-                  name,
-                  status: "running",
-                  output: output || undefined,
+                writeNativeEvent(res, {
+                  type: "activity.upsert",
+                  activity: {
+                    id: partID,
+                    name,
+                    status: "running",
+                    output: output || undefined,
+                  },
                 });
               }
               break;
@@ -759,7 +780,8 @@ export class LocalChatManager {
               const error = props.error as { message?: string } | undefined;
               const message = error?.message || "opencode 会话错误";
               if (contentStarted) {
-                writeCustomEvent(res, "chat_error", { message });
+                turnFailed = true;
+                writeNativeEvent(res, { type: "turn.failed", message });
                 turnDone = true;
               } else {
                 throw new Error(message);
@@ -862,15 +884,23 @@ function splitModel(model: string): [string, string] {
   return [model.slice(0, index), model.slice(index + 1)];
 }
 
-/** OpenAI 兼容 SSE chunk。 */
-const writeChunk = (
+/** Native CLI event stream. Local OpenCode is treated like the other agents. */
+const writeNativeDelta = (
   res: ServerResponse,
-  model: string,
+  _model: string,
   delta: Record<string, unknown>,
   finishReason: string | null = null,
-): void => writeTranscriptChunk(res, model, delta, { id: "chatcmpl-local", finishReason });
+): void => {
+  if (typeof delta.content === "string" && delta.content) {
+    writeNativeEvent(res, { type: "content.delta", content: delta.content });
+  }
+  if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+    writeNativeEvent(res, { type: "reasoning.delta", content: delta.reasoning_content });
+  }
+  if (finishReason) writeNativeEvent(res, { type: "turn.completed", stopReason: finishReason });
+};
 
-/** 自定义 SSE 事件帧（`event: xxx` + `data: json`），前端 XStream 解析为 `{event, data}`。 */
+/** 控制类 SSE 事件帧（权限、重试提示等），内容事件走 native_event。 */
 const writeCustomEvent = writeTranscriptCustomEvent;
 
 /** 把 OpenAI 格式消息列表中的内容提取为纯文本。 */

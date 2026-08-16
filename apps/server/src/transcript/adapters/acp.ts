@@ -1,5 +1,5 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import { transcriptMessageFor, upsertTranscriptActivity } from "../core";
+import { appendTranscriptTimeline, transcriptMessageFor, upsertTranscriptActivity } from "../core";
 import type { TranscriptActivity, TranscriptHistoryCollector, TranscriptPlan } from "../types";
 import { stringifyValue } from "../value";
 
@@ -15,7 +15,15 @@ export function collectAcpHistoryUpdate(
     }
     case "agent_message_chunk": {
       const text = acpContentText(update.content);
-      if (text) transcriptMessageFor(collector, "assistant", "acp-history").content += text;
+      if (text) {
+        const message = transcriptMessageFor(collector, "assistant", "acp-history");
+        message.content += text;
+        appendTranscriptTimeline(message, {
+          kind: "content",
+          id: `content-${message.id}`,
+          content: text,
+        });
+      }
       break;
     }
     case "agent_thought_chunk": {
@@ -23,18 +31,27 @@ export function collectAcpHistoryUpdate(
       if (!text) break;
       const message = transcriptMessageFor(collector, "assistant", "acp-history");
       message.reasoningContent = `${message.reasoningContent ?? ""}${text}`;
+      appendTranscriptTimeline(message, {
+        kind: "reasoning",
+        id: `reasoning-${message.id}`,
+        content: text,
+      });
       break;
     }
     case "tool_call":
     case "tool_call_update": {
       const message = transcriptMessageFor(collector, "assistant", "acp-history");
-      message.toolCalls = upsertTranscriptActivity(message.toolCalls, normalizeAcpActivity(update));
+      const activity = normalizeAcpActivity(update);
+      message.toolCalls = upsertTranscriptActivity(message.toolCalls, activity);
+      appendTranscriptTimeline(message, { kind: "tool", id: activity.id, activity });
       break;
     }
     case "plan":
     case "plan_update":
-      transcriptMessageFor(collector, "assistant", "acp-history").agentPlan =
-        normalizeAcpPlan(update);
+      const message = transcriptMessageFor(collector, "assistant", "acp-history");
+      const plan = normalizeAcpPlan(update);
+      message.agentPlan = plan;
+      appendTranscriptTimeline(message, { kind: "plan", id: `plan-${message.id}`, plan });
       break;
     default:
       break;

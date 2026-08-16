@@ -10,8 +10,14 @@ import type { Express, NextFunction, Request, Response } from "express";
 import cors from "cors";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import {
+  AttachmentStore,
+  ATTACHMENT_SCHEME,
+  attachmentContentType,
+  defaultWorkspaceDir,
+} from "./attachments";
 import { defaultAppConfig, type AppConfig, type LocalConfig } from "./config";
 import { GatewayError } from "./error";
 import {
@@ -33,6 +39,10 @@ import {
 import { AgentManager } from "./agentManager";
 import { resolveExecutable } from "./commandEnv";
 import { pickProjectDirectory } from "./projectPicker";
+import { writeNativeEvent } from "./nativeEvents";
+
+/** 附件存储单例：落盘到 ~/.cc-hearts-open-code/attachments（OPEN_CHAT_DATA_DIR 可覆盖）。 */
+const attachments = new AttachmentStore();
 
 /** 网关运行时：配置 + 由配置构建的各管理器。 */
 export interface GatewayRuntime {
@@ -74,10 +84,13 @@ export function loadGatewayRuntime(): GatewayRuntime {
 /** 构建网关 Express 应用；`staticDir` 非空时在同一端口托管 Web UI。 */
 export function createGatewayApp(runtime: GatewayRuntime, staticDir?: string): Express {
   const { config, searchProvider, localChat, agentManager } = runtime;
+  // 无项目目录时的默认 agent 工作目录：~/.cc-hearts-open-code/workspace
+  mkdirSync(defaultWorkspaceDir(), { recursive: true });
   const app = express();
   app.disable("x-powered-by");
   app.use(cors(buildCorsOptions(config.corsAllowedOrigins)));
-  app.use(express.json());
+  // 附件上传走 base64 JSON，放大后可达 40MB 左右，放宽 body 上限。
+  app.use(express.json({ limit: "44mb" }));
 
   if (config.gatewayApiKey) {
     app.use(gatewayAuthMiddleware(config.gatewayApiKey));
@@ -114,6 +127,47 @@ export function createGatewayApp(runtime: GatewayRuntime, staticDir?: string): E
       search: { enabled: !!searchProvider, provider: searchProvider?.name ?? "" },
       local,
     });
+  });
+
+  // 附件上传：浏览器 → 网关落盘到 ~/.cc-hearts-open-code/attachments/<uuid>/<name>。
+  // 返回持久引用 `cc-attachment:<uuid>`；agent 发送时直接读磁盘路径（同机）。
+  app.post("/api/attachments", (req: Request, res: Response) => {
+    try {
+      const body = req.body as { name?: unknown; dataBase64?: unknown };
+      if (typeof body.name !== "string" || typeof body.dataBase64 !== "string") {
+        throw GatewayError.invalidRequest("name 与 dataBase64 是必填项");
+      }
+      const stored = attachments.importBytes(body.name, Buffer.from(body.dataBase64, "base64"));
+      res.json({ ok: true, ...stored });
+    } catch (err) {
+      sendRouteError(res, err, "附件上传失败");
+    }
+  });
+
+  // 附件读取：渲染历史消息图片用。reference(UUID) + 文件名双重校验，防路径穿越。
+  app.get("/api/attachments/:reference/:name", (req: Request, res: Response) => {
+    try {
+      const reference = String(req.params.reference);
+      const name = String(req.params.name);
+      const bytes = attachments.read(reference, name);
+      res.setHeader("Content-Type", attachmentContentType(name));
+      res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+      res.send(bytes);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("不存在")) {
+        return sendGatewayError(res, GatewayError.invalidRequest("附件不存在或引用无效"));
+      }
+      sendRouteError(res, err, "附件读取失败");
+    }
+  });
+
+  // 手动触发孤儿附件清理（默认保留 7 天未修改的目录）。
+  app.post("/api/attachments/sweep", (_req: Request, res: Response) => {
+    try {
+      res.json({ ok: true, removed: attachments.sweep() });
+    } catch (err) {
+      sendRouteError(res, err, "附件清理失败");
+    }
   });
 
   app.post("/api/project-path/pick", async (req: Request, res: Response) => {
@@ -253,6 +307,8 @@ export function createGatewayApp(runtime: GatewayRuntime, staticDir?: string): E
       delete body.mode;
       delete body.permission;
       delete body.projectPath;
+      // 附件引用 → OpenAI 多模态 image_url（data URL，远端模型读不到本地路径）。
+      injectAttachmentsForUpstream(body.messages as unknown[], attachments);
 
       const stream = body.stream === true;
 
@@ -434,7 +490,13 @@ async function handleAgentChat(
 ): Promise<void> {
   const messages = body.messages as Array<{ role?: unknown; content?: unknown }>;
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
-  const text = lastUser ? extractTextFromMessage(lastUser) : "";
+  // 附件以 `@<网关侧绝对路径>` mention 追加（Waku 方式）：agent 与网关同机，直接读文件。
+  const text = [
+    lastUser ? extractTextFromMessage(lastUser) : "",
+    ...attachmentMentions(messages, attachments),
+  ]
+    .filter(Boolean)
+    .join(" ");
   if (!text.trim()) throw GatewayError.invalidRequest("本地 Agent 需要至少一条 user 消息");
   const conversationId =
     typeof body.conversationId === "string" && body.conversationId.trim()
@@ -471,9 +533,11 @@ async function handleAgentChat(
       );
     }
     const message = err instanceof Error ? err.message : String(err);
-    res.write(`event: chat_error\ndata: ${JSON.stringify({ message })}\n\n`);
-    res.write("data: [DONE]\n\n");
-    res.end();
+    if (!res.writableEnded && !res.destroyed) {
+      writeNativeEvent(res, { type: "turn.failed", message });
+      res.write("data: [DONE]\n\n");
+      res.end();
+    }
   }
 }
 
@@ -482,7 +546,7 @@ async function handleAgentChat(
  *
  * - 会话按 `conversationId` 复用 opencode 长会话（历史积累在本地），
  *   只发最后一条用户消息；无 conversationId 时按消息内容生成兜底 key。
- * - 输出 OpenAI SSE 流（content / reasoning_content），前端 SDK 无需改动。
+ * - 输出 native_event 流（正文 / 思考 / 工具），前端只负责事件投影。
  */
 async function handleLocalChat(
   req: Request,
@@ -503,7 +567,12 @@ async function handleLocalChat(
     const role = (m as { role?: unknown }).role;
     return role === "user";
   });
-  const text = lastUser ? extractTextFromMessage(lastUser) : "";
+  const text = [
+    lastUser ? extractTextFromMessage(lastUser) : "",
+    ...attachmentMentions(messages, attachments),
+  ]
+    .filter(Boolean)
+    .join(" ");
   if (!text.trim()) {
     throw GatewayError.invalidRequest("本地模型需要至少一条 user 消息");
   }
@@ -541,10 +610,7 @@ async function handleLocalChat(
     }
     try {
       const message = err instanceof Error ? err.message : String(err);
-      res.write(
-        `event: chat_error\n` +
-          `data: ${JSON.stringify({ message, type: "upstream_error", code: "provider_error" })}\n\n`,
-      );
+      writeNativeEvent(res, { type: "turn.failed", message });
       res.write("data: [DONE]\n\n");
       res.end();
     } catch {
@@ -673,4 +739,65 @@ function parseProjectPath(value: unknown): string | undefined {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+// ============ 附件 → 发送分派 ============
+
+/** 从 OpenAI 格式消息里收集最后一条 user 消息携带的附件引用。 */
+function extractAttachments(messages: unknown[]): Array<{ reference: string; name: string }> {
+  const user = [...messages].reverse().find((message) => {
+    const role = (message as { role?: unknown } | null)?.role;
+    return role === "user";
+  });
+  if (!user || typeof user !== "object" || user === null) return [];
+  const list = (user as { attachments?: unknown }).attachments;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const reference = (item as { reference?: unknown }).reference;
+    const name = (item as { name?: unknown }).name;
+    if (typeof reference !== "string" || !reference.startsWith(ATTACHMENT_SCHEME)) return [];
+    if (typeof name !== "string" || !name.trim()) return [];
+    return [{ reference, name: name.trim() }];
+  });
+}
+
+/** 把附件解析成网关侧绝对路径的 `@路径` mention，供同机 agent 直接读文件。 */
+function attachmentMentions(messages: unknown[], store: AttachmentStore): string[] {
+  return extractAttachments(messages).flatMap(({ reference, name }) => {
+    const directory = store.pathFor(reference);
+    if (!directory) return [];
+    const file = join(directory, name);
+    return existsSync(file) ? [`@${file}`] : [];
+  });
+}
+
+/** 透传上游前，把消息里的附件引用注入为 OpenAI 多模态 image_url（data URL）。 */
+function injectAttachmentsForUpstream(messages: unknown[], store: AttachmentStore): void {
+  for (const message of messages) {
+    if (typeof message !== "object" || message === null) continue;
+    const record = message as { content?: unknown; attachments?: unknown };
+    if (!Array.isArray(record.attachments)) continue;
+    const attachments = extractAttachments([record]);
+    delete record.attachments;
+    if (attachments.length === 0) continue;
+
+    const parts: unknown[] = [];
+    const text = extractTextFromMessage(record);
+    if (text.trim()) parts.push({ type: "text", text });
+    for (const { reference, name } of attachments) {
+      try {
+        const bytes = store.read(reference, name);
+        parts.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${attachmentContentType(name)};base64,${bytes.toString("base64")}`,
+          },
+        });
+      } catch {
+        // 附件缺失时跳过，保留文本继续发送
+      }
+    }
+    if (parts.length > 0) record.content = parts;
+  }
 }

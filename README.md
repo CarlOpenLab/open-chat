@@ -144,13 +144,16 @@ Example local-agent request:
 }
 ```
 
-In addition to normal assistant chunks, the SSE stream can carry `tool_call`, `acp_plan`, `acp_session`, `acp_turn`, and `chat_permission` events.
+For local agents, renderable output is sent as ordered `native_event` frames
+(`content.delta`, `reasoning.delta`, `activity.upsert`, `plan.updated`, and
+turn completion/failure). Session metadata, permissions, notices, and ACP
+usage remain separate control events.
 
 ### Running session behavior
 
-The web UI periodically refreshes both the active provider's session directory and gateway-owned run state. It polls every two seconds while any task is running and every five seconds while idle. Every running item in the active provider's conversation list shows a loading indicator and elapsed duration. Opening such an item loads its cached/provider history and then attaches to the replayable session stream. Reading or switching sessions does not update their timestamps, so the sidebar order remains stable.
+The web UI periodically refreshes both the active provider's session directory and gateway-owned run state. It polls every two seconds while any task is running and every five seconds while idle. Every running item in the active provider's conversation list shows a loading indicator and elapsed duration. Opening such an item loads its cached/provider history and attaches to the replayable session stream. Turns started through Open Chat are rendered from ordered native events; provider history is used only for loading persisted sessions. Reading or switching sessions does not update their timestamps, so the sidebar order remains stable.
 
-This applies only to turns started through Open Chat while the same gateway process remains alive. Direct terminal sessions and turns from a previous gateway process are intentionally outside this tracking contract.
+Gateway-owned `running` state still applies only to turns started through Open Chat while the same gateway process remains alive. Direct terminal sessions can be loaded from provider history, but their raw PTY/TUI output is not reinterpreted as a live Web stream.
 
 ## Session deep links
 

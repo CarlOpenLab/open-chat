@@ -3,6 +3,7 @@ import type {
   TranscriptHistoryCollector,
   TranscriptMessage,
   TranscriptRole,
+  TranscriptTimelineItem,
 } from "./types";
 
 export function createTranscriptCollector(
@@ -46,6 +47,42 @@ export function upsertTranscriptActivity(
   return next;
 }
 
+export function appendTranscriptTimeline(
+  message: TranscriptMessage,
+  item: TranscriptTimelineItem,
+): void {
+  const timeline = message.timeline ? message.timeline.slice() : [];
+  if (item.kind === "tool") {
+    const index = timeline.findIndex((entry) => entry.kind === "tool" && entry.id === item.id);
+    if (index === -1) timeline.push(item);
+    else {
+      const previous = timeline[index];
+      if (previous?.kind === "tool") {
+        timeline[index] = {
+          ...previous,
+          activity: { ...previous.activity, ...item.activity },
+        };
+      }
+    }
+  } else if (item.kind === "plan") {
+    const index = timeline.findIndex((entry) => entry.kind === "plan" && entry.id === item.id);
+    if (index === -1) timeline.push(item);
+    else timeline[index] = item;
+  } else {
+    const previous = timeline.at(-1);
+    if (previous?.kind === item.kind) {
+      timeline[timeline.length - 1] = {
+        ...previous,
+        content: `${previous.content}${item.content}`,
+      };
+    } else {
+      const duplicateCount = timeline.filter((entry) => entry.id === item.id).length;
+      timeline.push(duplicateCount ? { ...item, id: `${item.id}-${duplicateCount}` } : item);
+    }
+  }
+  message.timeline = timeline;
+}
+
 /**
  * Provider histories occasionally split one assistant turn across several
  * adjacent records. Merge only adjacent assistant records; user boundaries
@@ -65,13 +102,41 @@ export function normalizeTranscriptHistory(messages: TranscriptMessage[]): Trans
         previous.toolCalls = upsertTranscriptActivity(previous.toolCalls, activity);
       }
       if (message.agentPlan) previous.agentPlan = message.agentPlan;
+      for (const item of message.timeline ?? []) appendTranscriptTimeline(previous, item);
       continue;
     }
-    history.push({
+    const normalized = {
       ...message,
       content: message.content.trim(),
       reasoningContent: optionalText(message.reasoningContent?.trim() ?? ""),
-    });
+    };
+    if (normalized.role === "assistant" && !normalized.timeline?.length) {
+      if (normalized.reasoningContent) {
+        appendTranscriptTimeline(normalized, {
+          kind: "reasoning",
+          id: `reasoning-${normalized.id}`,
+          content: normalized.reasoningContent,
+        });
+      }
+      for (const activity of normalized.toolCalls ?? []) {
+        appendTranscriptTimeline(normalized, { kind: "tool", id: activity.id, activity });
+      }
+      if (normalized.agentPlan) {
+        appendTranscriptTimeline(normalized, {
+          kind: "plan",
+          id: `plan-${normalized.id}`,
+          plan: normalized.agentPlan,
+        });
+      }
+      if (normalized.content) {
+        appendTranscriptTimeline(normalized, {
+          kind: "content",
+          id: `content-${normalized.id}`,
+          content: normalized.content,
+        });
+      }
+    }
+    history.push(normalized);
   }
   return history;
 }

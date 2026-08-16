@@ -23,12 +23,10 @@ import {
   normalizeAcpActivity,
   normalizeAcpPlan,
 } from "./transcript/adapters/acp";
+import { defaultWorkspaceDir } from "./attachments";
 import { createTranscriptCollector } from "./transcript/core";
-import {
-  createTranscriptChunk,
-  writeTranscriptCustomEvent,
-  writeTranscriptData,
-} from "./transcript/stream";
+import { writeTranscriptCustomEvent } from "./transcript/stream";
+import { writeNativeEvent } from "./nativeEvents";
 import type { TranscriptHistoryCollector, TranscriptMessage } from "./transcript/types";
 
 export interface AcpAgentView {
@@ -92,7 +90,6 @@ interface ActiveRun {
   agentId: string;
   conversationId: string;
   response: ServerResponse;
-  model: string;
 }
 
 interface PendingPermission {
@@ -275,7 +272,7 @@ export class AcpManager {
     projectPath: string | undefined,
     providerSessionId: string | undefined,
     res: ServerResponse,
-    _signal: AbortSignal,
+    signal: AbortSignal,
   ): Promise<void> {
     const runtime = this.getAvailableRuntime(agentId);
 
@@ -294,10 +291,13 @@ export class AcpManager {
       agentId,
       conversationId,
       response: res,
-      model: `acp/${agentId}`,
     };
     this.activeRuns.set(session.sessionId, run);
     session.lastUsed = Date.now();
+    const cancel = () => {
+      void connection.cancel({ sessionId: session.sessionId }).catch(() => {});
+    };
+    signal.addEventListener("abort", cancel, { once: true });
 
     // 回合边界：清空事件缓冲（重放只覆盖当前回合），并把用户消息写入历史
     // （快照按 turnHistoryStart 截断，新订阅者以此重建会话视图）。
@@ -327,17 +327,16 @@ export class AcpManager {
         stopReason: response.stopReason,
         usage: response.usage,
       });
-      this.emitChunk(session.sessionId, res, run.model, {}, "stop");
+      this.emitNative(session.sessionId, res, {
+        type: "turn.completed",
+        stopReason: response.stopReason,
+      });
       if (!res.writableEnded && !res.destroyed) {
         res.write("data: [DONE]\n\n");
         res.end();
       }
-    } catch (err) {
-      this.publishToBus(session.sessionId, "chat_error", {
-        message: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
     } finally {
+      signal.removeEventListener("abort", cancel);
       this.activeRuns.delete(session.sessionId);
       this.turnHistoryStart.delete(session.sessionId);
       this.cancelPermissionsForSession(session.sessionId);
@@ -400,7 +399,7 @@ export class AcpManager {
       return existing;
     }
     const connection = await this.connectionFor(runtime);
-    const cwd = projectPath || runtime.config.cwd || this.config.cwd || process.cwd();
+    const cwd = projectPath || runtime.config.cwd || this.config.cwd || defaultWorkspaceDir();
     const normalizedProviderSessionId = providerSessionId?.trim();
     if (normalizedProviderSessionId) {
       const loaded = [...this.sessions.values()].find(
@@ -486,7 +485,7 @@ export class AcpManager {
   }
 
   private async startRuntime(runtime: AcpRuntime): Promise<ClientSideConnection> {
-    const cwd = runtime.config.cwd || this.config.cwd || process.cwd();
+    const cwd = runtime.config.cwd || this.config.cwd || defaultWorkspaceDir();
     const executable = resolveExecutable(runtime.config.command);
     if (!executable) {
       throw GatewayError.invalidRequest(
@@ -566,30 +565,38 @@ export class AcpManager {
     }
     const run = this.activeRuns.get(notification.sessionId);
     const res = run?.response;
-    const model = run?.model;
     const update = notification.update;
     switch (update.sessionUpdate) {
       case "agent_message_chunk": {
         const text = contentText(update.content);
-        if (text) this.emitChunk(notification.sessionId, res, model ?? "acp", { content: text });
+        if (text) {
+          this.emitNative(notification.sessionId, res, { type: "content.delta", content: text });
+        }
         break;
       }
       case "agent_thought_chunk": {
         const text = contentText(update.content);
         if (text) {
-          this.emitChunk(notification.sessionId, res, model ?? "acp", {
-            reasoning_content: text,
+          this.emitNative(notification.sessionId, res, {
+            type: "reasoning.delta",
+            content: text,
           });
         }
         break;
       }
       case "tool_call":
       case "tool_call_update":
-        this.emitCustom(notification.sessionId, res, "tool_call", normalizeAcpActivity(update));
+        this.emitNative(notification.sessionId, res, {
+          type: "activity.upsert",
+          activity: normalizeAcpActivity(update),
+        });
         break;
       case "plan":
       case "plan_update":
-        this.emitCustom(notification.sessionId, res, "acp_plan", normalizeAcpPlan(update));
+        this.emitNative(notification.sessionId, res, {
+          type: "plan.updated",
+          plan: normalizeAcpPlan(update),
+        });
         break;
       case "available_commands_update":
       case "current_mode_update":
@@ -733,19 +740,15 @@ export class AcpManager {
     this.busSubscribers.delete(sessionId);
   }
 
-  /** 向发起者 SSE 与会话总线同时写 OpenAI 兼容 chunk。 */
-  private emitChunk(
+  /** 向发起者 SSE 与会话总线同时写原生事件。 */
+  private emitNative(
     sessionId: string,
     res: ServerResponse | undefined,
-    model: string,
-    delta: Record<string, unknown>,
-    finishReason: string | null = null,
+    event: Parameters<typeof writeNativeEvent>[1],
   ): void {
-    const payload = createTranscriptChunk(model, delta, { finishReason });
-    this.publishToBus(sessionId, null, payload);
-    if (res && !res.writableEnded && !res.destroyed) {
-      writeTranscriptData(res, payload);
-    }
+    const payload = JSON.stringify(event);
+    this.publishToBus(sessionId, "native_event", payload);
+    if (res) writeNativeEvent(res, event);
   }
 
   /** 向发起者 SSE 与会话总线同时写自定义事件。 */

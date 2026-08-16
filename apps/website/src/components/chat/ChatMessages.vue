@@ -10,7 +10,8 @@ import {
   type A2UIActionPayload,
   type A2UISubmission,
 } from "../../utils/a2ui";
-import type { WebSearchSourceItem } from "../../services/ai";
+import type { WebSearchSourceItem, UploadedAttachment } from "../../services/ai";
+import { attachmentUrl } from "../../services/ai";
 import { parseFileWorkspaceContent } from "../../utils/fileWorkspace";
 import AssistantMessageContent from "./AssistantMessageContent.vue";
 import EmptyState from "./EmptyState.vue";
@@ -44,6 +45,23 @@ interface ParsedThinkContent {
   thinkDone: boolean;
 }
 
+/** 从消息里取出图片附件（仅 user 消息携带，经 modelMessagesToBubbleItems 放入 extraInfo）。 */
+function userMessageAttachments(item: {
+  extraInfo?: { attachments?: unknown };
+}): UploadedAttachment[] {
+  const list = item.extraInfo?.attachments;
+  if (!Array.isArray(list)) return [];
+  return list.filter((entry): entry is UploadedAttachment => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const candidate = entry as UploadedAttachment;
+    return (
+      typeof candidate.reference === "string" &&
+      typeof candidate.name === "string" &&
+      candidate.isImage === true
+    );
+  });
+}
+
 const props = withDefaults(defineProps<Props>(), {
   a2uiPendingSurfaceId: "",
   a2uiSubmissions: () => [],
@@ -53,6 +71,7 @@ const emit = defineEmits<Emits>();
 const messagesRoot = ref<HTMLElement | null>(null);
 const showScrollToBottom = ref(false);
 let scrollBox: HTMLElement | null = null;
+let scrollRestoreFrame: number | null = null;
 
 const updateScrollState = () => {
   if (!scrollBox) {
@@ -76,6 +95,39 @@ const scrollToBottom = () => {
   if (!scrollBox) return;
   scrollBox.scrollTo({ top: scrollBox.scrollHeight, behavior: "smooth" });
   showScrollToBottom.value = false;
+};
+
+/** 展开/收起活动详情会改变气泡高度，动画期间保持当前滚动锚点。 */
+const updateWithScrollAnchor = (update: () => void) => {
+  const box = scrollBox;
+  if (!box) {
+    update();
+    return;
+  }
+
+  if (scrollRestoreFrame !== null) cancelAnimationFrame(scrollRestoreFrame);
+  const top = box.scrollTop;
+  const maxTop = Math.max(0, box.scrollHeight - box.clientHeight);
+  const stickToBottom = maxTop - top <= 24;
+  update();
+
+  const startedAt = performance.now();
+  const restore = () => {
+    if (!scrollBox) {
+      scrollRestoreFrame = null;
+      return;
+    }
+    const nextMaxTop = Math.max(0, scrollBox.scrollHeight - scrollBox.clientHeight);
+    scrollBox.scrollTop = stickToBottom ? nextMaxTop : Math.min(top, nextMaxTop);
+    updateScrollState();
+    if (performance.now() - startedAt < 260) {
+      scrollRestoreFrame = requestAnimationFrame(restore);
+    } else {
+      scrollRestoreFrame = null;
+    }
+  };
+
+  void nextTick(restore);
 };
 const markdownTheme = computed<MarkdownTheme>(() => (props.dark ? "dark" : "light"));
 const markdownClassName = computed(() => `chat-markdown x-markdown-${markdownTheme.value}`);
@@ -270,6 +322,9 @@ const isA2UIActionPending = (commands: XCardCommand[]) =>
 const lastAssistantMessageKey = computed(
   () => [...displayItems.value].reverse().find((item) => item.role === "assistant")?.key,
 );
+const autoScroll = computed(() =>
+  displayItems.value.some((item) => isStreamingStatus(item.status)),
+);
 
 const submissionsForMessage = (messageId: string | number) =>
   props.a2uiSubmissions.filter((submission) => submission.ownerMessageId === String(messageId));
@@ -317,15 +372,17 @@ const setSummaryExpanded = (messageId: string | number, expanded: boolean) => {
 };
 const setItemExpandedIds = (messageId: string | number, ids: string[]) => {
   const key = getThinkKey(messageId);
-  itemExpandedMap.value = { ...itemExpandedMap.value, [key]: ids };
-  const collapsed = !ids.includes("reasoning");
-  reasoningCollapsedMap.value = collapsed
-    ? { ...reasoningCollapsedMap.value, [key]: true }
-    : (() => {
-        const next = { ...reasoningCollapsedMap.value };
-        delete next[key];
-        return next;
-      })();
+  updateWithScrollAnchor(() => {
+    itemExpandedMap.value = { ...itemExpandedMap.value, [key]: ids };
+    const collapsed = !ids.includes("reasoning");
+    reasoningCollapsedMap.value = collapsed
+      ? { ...reasoningCollapsedMap.value, [key]: true }
+      : (() => {
+          const next = { ...reasoningCollapsedMap.value };
+          delete next[key];
+          return next;
+        })();
+  });
 };
 
 /** 气泡下方操作栏：复制 + 重新生成（x Actions 原生样式）。 */
@@ -426,6 +483,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   scrollBox?.removeEventListener("scroll", updateScrollState);
+  if (scrollRestoreFrame !== null) cancelAnimationFrame(scrollRestoreFrame);
 });
 </script>
 
@@ -442,7 +500,13 @@ onBeforeUnmount(() => {
     </section>
 
     <!-- 转录无头像列，消息贴左/右缘渲染 -->
-    <BubbleList v-else class="h-full" :role="roleConfig" :items="displayItems" :auto-scroll="true">
+    <BubbleList
+      v-else
+      class="h-full"
+      :role="roleConfig"
+      :items="displayItems"
+      :auto-scroll="autoScroll"
+    >
       <template #contentRender="{ content, item }">
         <AssistantMessageContent
           v-if="item.role === 'assistant'"
@@ -469,6 +533,25 @@ onBeforeUnmount(() => {
           @update:item-expanded-ids="setItemExpandedIds(item.key, $event)"
         />
         <span v-else class="whitespace-pre-wrap break-words">{{ content }}</span>
+        <div
+          v-if="item.role === 'user' && userMessageAttachments(item).length"
+          class="user-attachments"
+        >
+          <a
+            v-for="att in userMessageAttachments(item)"
+            :key="att.reference"
+            :href="attachmentUrl(att.reference, att.name)"
+            target="_blank"
+            rel="noopener"
+            class="user-attachment-link"
+          >
+            <img
+              :src="attachmentUrl(att.reference, att.name)"
+              :alt="att.name"
+              class="user-attachment-image"
+            />
+          </a>
+        </div>
       </template>
 
       <template #footer="{ item }">
@@ -509,6 +592,30 @@ onBeforeUnmount(() => {
 .messages-wrapper :deep(.antd-bubble-list-scroll-box) {
   overflow-x: hidden;
   overscroll-behavior-x: none;
+}
+.user-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.user-attachment-link {
+  display: block;
+  width: 160px;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--brand-border);
+  border-radius: 10px;
+}
+.user-attachment-image {
+  display: block;
+  width: 100%;
+  height: 112px;
+  object-fit: cover;
+  transition: transform 160ms ease;
+}
+.user-attachment-link:hover .user-attachment-image {
+  transform: scale(1.02);
 }
 .messages-wrapper :deep(.antd-bubble-list-scroll-content) {
   padding-inline: clamp(4px, 1.5vw, 16px);
