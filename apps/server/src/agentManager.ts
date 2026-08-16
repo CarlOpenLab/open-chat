@@ -116,7 +116,6 @@ export class AgentManager {
     projectPath: string | undefined,
     providerSessionId: string | undefined,
     res: ServerResponse,
-    signal: AbortSignal,
   ): Promise<void> {
     const state = await this.getSessionState(
       agentId,
@@ -141,8 +140,6 @@ export class AgentManager {
       snapshot,
       response: res,
     });
-    const cancel = () => this.runs.cancel(agentId, conversationId);
-    signal.addEventListener("abort", cancel, { once: true });
     try {
       if (this.acp.hasAgent(agentId)) {
         await this.acp.runTurn(
@@ -172,8 +169,6 @@ export class AgentManager {
       // misleading turn.failed event to other tabs subscribed to this session.
       this.runs.finish(agentId, conversationId, tracked.signal.aborted ? undefined : error);
       throw error;
-    } finally {
-      signal.removeEventListener("abort", cancel);
     }
   }
 

@@ -3,8 +3,16 @@ import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
 import { isValidA2UISubmission, type A2UISubmission } from "../utils/a2ui";
 import { isValidWorkspaceFileDraft, type WorkspaceFileDraft } from "../utils/fileWorkspace";
 import { deleteLocalValue, readLocalValue, writeLocalValue } from "./localDatabase";
+import type { UploadedAttachment } from "./ai";
 
 const CHAT_STATE_KEY = "chat-state-v1";
+
+export interface QueuedChatMessage {
+  id: string;
+  content: string;
+  createdAt: number;
+  attachments?: UploadedAttachment[];
+}
 
 export interface PersistedConversation extends Omit<ConversationItemType, "messages"> {
   agentId?: string;
@@ -12,9 +20,51 @@ export interface PersistedConversation extends Omit<ConversationItemType, "messa
   messages: DefaultMessageInfo<XModelMessage>[];
   a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
+  queuedMessages?: QueuedChatMessage[];
+  queuePaused?: boolean;
   systemPrompt?: string;
   projectPath?: string;
   providerSessionId?: string;
+}
+
+function normalizeQueuedMessage(value: unknown): QueuedChatMessage | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<QueuedChatMessage>;
+  const attachments = Array.isArray(item.attachments)
+    ? item.attachments.flatMap((attachment) => {
+        if (!attachment || typeof attachment !== "object") return [];
+        const candidate = attachment as Partial<UploadedAttachment>;
+        if (
+          typeof candidate.reference !== "string" ||
+          !candidate.reference.trim() ||
+          typeof candidate.name !== "string" ||
+          !candidate.name.trim()
+        ) {
+          return [];
+        }
+        return [
+          {
+            reference: candidate.reference.trim(),
+            name: candidate.name.trim(),
+            isImage: candidate.isImage === true,
+          },
+        ];
+      })
+    : [];
+  const content = typeof item.content === "string" ? item.content.trim() : "";
+  if (!content && attachments.length === 0) return null;
+  return {
+    id:
+      typeof item.id === "string" && item.id.trim()
+        ? item.id.trim()
+        : `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    content,
+    createdAt:
+      typeof item.createdAt === "number" && Number.isFinite(item.createdAt)
+        ? item.createdAt
+        : Date.now(),
+    ...(attachments.length ? { attachments } : {}),
+  };
 }
 
 export interface PersistedChatState {
@@ -60,8 +110,16 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
         systemPrompt,
         projectPath,
         providerSessionId,
+        queuedMessages,
+        queuePaused,
         ...persistedConversation
       } = conversation;
+      const normalizedQueue = Array.isArray(queuedMessages)
+        ? queuedMessages.flatMap((item) => {
+            const normalized = normalizeQueuedMessage(item);
+            return normalized ? [normalized] : [];
+          })
+        : [];
       return {
         ...persistedConversation,
         ...(typeof conversation.modelId === "string" && conversation.modelId
@@ -73,6 +131,8 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
         ...(Array.isArray(conversation.workspaceDrafts)
           ? { workspaceDrafts: conversation.workspaceDrafts.filter(isValidWorkspaceFileDraft) }
           : {}),
+        ...(normalizedQueue.length ? { queuedMessages: normalizedQueue } : {}),
+        ...(queuePaused === true && normalizedQueue.length ? { queuePaused: true } : {}),
         ...(typeof systemPrompt === "string" ? { systemPrompt } : {}),
         ...(typeof projectPath === "string" && projectPath.trim()
           ? { projectPath: projectPath.trim() }

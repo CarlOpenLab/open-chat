@@ -66,13 +66,19 @@ export class SessionRunRegistry {
     response: ServerResponse;
   }): { response: ServerResponse; signal: AbortSignal } {
     const key = runKey(options.agentId, options.conversationId);
-    if (this.runs.has(key)) throw new Error("该会话仍在运行，请先停止当前任务");
+    const sessionId = options.sessionId?.trim() || options.conversationId;
+    const existing = [...this.runs.values()].find(
+      (run) =>
+        run.agentId === options.agentId &&
+        (run.conversationId === options.conversationId || run.sessionId === sessionId),
+    );
+    if (existing) throw new Error("该会话仍在运行，请先停止当前任务");
 
     const now = Date.now();
     const entry: SessionRunEntry = {
       agentId: options.agentId,
       conversationId: options.conversationId,
-      sessionId: options.sessionId?.trim() || options.conversationId,
+      sessionId,
       ...(options.projectPath ? { projectPath: options.projectPath } : {}),
       createdAt: now,
       startedAt: now,

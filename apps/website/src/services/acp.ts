@@ -83,6 +83,8 @@ export interface OpenChatSessionView {
   projectPath?: string;
 }
 
+export type AcpSessionStreamOutcome = "completed" | "failed" | "disconnected";
+
 export const API_AGENT: AgentView = {
   id: "api",
   name: "Model API",
@@ -165,24 +167,28 @@ export function flattenAcpSelectOptions(
 
 /** 订阅 ACP 会话实时输出（SSE）。协议：先收到 `snapshot`（已完成历史 + 当前回合用户消息），
  * 随后是当前回合输出（native_event / chat_permission / acp_session …），回合结束收到 [DONE] 并关闭。
- * 返回 AbortController；`onEnd` 在流关闭（正常或出错）时回调一次。 */
+ * 返回 AbortController；`onEnd` 会区分正常完成、任务失败和连接中断。 */
 export function subscribeAcpSessionStream(
   agentId: string,
   conversationId: string,
   projectPath: string,
   onEvent: (event: string | null, data: string) => void,
-  onEnd: () => void,
+  onEnd: (outcome: AcpSessionStreamOutcome) => void,
 ): AbortController {
   const controller = new AbortController();
   const query = new URLSearchParams({ agentId, conversationId });
   if (projectPath.trim()) query.set("projectPath", projectPath.trim());
   void (async () => {
+    let outcome: AcpSessionStreamOutcome = "disconnected";
     try {
       const response = await fetch(`${API_BASE_URL}/api/acp/session/stream?${query}`, {
         headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
         signal: controller.signal,
       });
-      if (response.status === 204) return;
+      if (response.status === 204) {
+        outcome = "completed";
+        return;
+      }
       if (!response.ok) {
         console.error(`Agent session stream failed (HTTP ${response.status})`);
         return;
@@ -208,7 +214,21 @@ export function subscribeAcpSessionStream(
               dataLines.push(line.slice("data:".length).trimStart());
             }
           }
-          if (dataLines.length > 0) onEvent(event, dataLines.join("\n"));
+          if (dataLines.length > 0) {
+            const data = dataLines.join("\n");
+            if (event === "chat_error") outcome = "failed";
+            if (event === "native_event") {
+              try {
+                const nativeEvent = JSON.parse(data) as { type?: string };
+                if (nativeEvent.type === "turn.failed") outcome = "failed";
+                else if (nativeEvent.type === "turn.completed") outcome = "completed";
+              } catch {
+                // The provider owns malformed-event reporting; keep the stream alive here.
+              }
+            }
+            if (data === "[DONE]" && outcome !== "failed") outcome = "completed";
+            onEvent(event, data);
+          }
         }
       }
     } catch (error) {
@@ -216,7 +236,7 @@ export function subscribeAcpSessionStream(
         console.error("ACP session stream error:", error);
       }
     } finally {
-      onEnd();
+      onEnd(outcome);
     }
   })();
   return controller;

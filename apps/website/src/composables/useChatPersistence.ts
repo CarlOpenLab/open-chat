@@ -8,6 +8,7 @@ import {
   saveChatState,
   type PersistedChatState,
   type PersistedConversation,
+  type QueuedChatMessage,
 } from "../services/chatStorage";
 import { isA2UISubmissionContextMessage, type A2UISubmission } from "../utils/a2ui";
 import type { WorkspaceFileDraft } from "../utils/fileWorkspace";
@@ -20,6 +21,8 @@ export interface OpenChatConversation extends ConversationItemType {
   messages?: DefaultMessageInfo<XModelMessage>[];
   a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
+  queuedMessages?: QueuedChatMessage[];
+  queuePaused?: boolean;
   systemPrompt?: string;
   projectPath?: string;
   /** ACP 供应商返回的真实会话 id；key 仍是 Open Chat 的本地 UI key。 */
@@ -73,7 +76,11 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
     return list
       .filter((conversation) => {
         const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
-        return messages.length > 0 || Boolean(conversation.providerSessionId?.trim());
+        return (
+          messages.length > 0 ||
+          Boolean(conversation.providerSessionId?.trim()) ||
+          Boolean(conversation.queuedMessages?.length)
+        );
       })
       .map((conversation, index) => {
         const normalizedLabel =
@@ -111,6 +118,10 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
           workspaceDrafts: Array.isArray(conversation.workspaceDrafts)
             ? conversation.workspaceDrafts
             : [],
+          queuedMessages: Array.isArray(conversation.queuedMessages)
+            ? conversation.queuedMessages
+            : [],
+          ...(conversation.queuePaused ? { queuePaused: true } : {}),
           systemPrompt:
             typeof conversation.systemPrompt === "string" ? conversation.systemPrompt : "",
           ...(typeof conversation.projectPath === "string" && conversation.projectPath.trim()

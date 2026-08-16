@@ -79,6 +79,7 @@ interface NativeRuntime {
   cancel(): void;
   close(): void;
   sessionId?(): string;
+  takeStartupNotice?(): string | undefined;
 }
 
 interface PendingPermission {
@@ -293,6 +294,8 @@ export class NativeCliManager {
           sessionId: runtimeSessionId,
         });
       }
+      const startupNotice = session.runtime.takeStartupNotice?.();
+      if (startupNotice) writeCustomEvent(res, "chat_notice", { message: startupNotice });
     }
     try {
       const runtime = session.runtime;
@@ -348,17 +351,36 @@ export class NativeCliManager {
   ): Promise<NativeSession> {
     const agent = this.requireAgent(agentId);
     const key = `${agentId}:${conversationId}:${projectPath || ""}`;
-    const existing = this.sessions.get(key);
+    const normalizedProviderSessionId = providerSessionId?.trim();
+    const findExisting = (): NativeSession | undefined => {
+      const exact = this.sessions.get(key);
+      if (exact) return exact;
+      if (!normalizedProviderSessionId) return undefined;
+      return [...this.sessions.values()].find(
+        (entry) => entry.agentId === agentId && entry.sessionId === normalizedProviderSessionId,
+      );
+    };
+    const existing = findExisting();
     if (existing) {
       existing.lastUsed = Date.now();
+      this.sessions.set(key, existing);
       return existing;
     }
     const models = await this.discoverModels(agent);
+    // Model discovery yields to the event loop. A concurrent state refresh or
+    // submit may have created this local session (or another alias for the same
+    // provider session) while it was pending.
+    const concurrent = findExisting();
+    if (concurrent) {
+      concurrent.lastUsed = Date.now();
+      this.sessions.set(key, concurrent);
+      return concurrent;
+    }
     const preferred = models.find((model) => model.isDefault) ?? models[0];
     const session: NativeSession = {
       agentId,
       conversationId,
-      sessionId: providerSessionId?.trim() || conversationId,
+      sessionId: normalizedProviderSessionId || conversationId,
       model: preferred?.id ?? "",
       models,
       runtime: null,
@@ -599,10 +621,15 @@ function createAbortError(): Error {
   return error;
 }
 
+function isActiveWriterError(error: unknown): boolean {
+  return error instanceof Error && /thread .* already has an active writer/i.test(error.message);
+}
+
 class CodexRuntime implements NativeRuntime {
   private active: ActiveNativeRun | null = null;
   private threadId = "";
   private turnId = "";
+  private startupNotice = "";
   private model: string;
   private readonly streamedAgentMessages = new Set<string>();
   private readonly toolCalls = new Map<string, { name: string; input?: unknown }>();
@@ -624,20 +651,15 @@ class CodexRuntime implements NativeRuntime {
     requestPermission: PermissionRequester,
     providerSessionId?: string,
   ): Promise<CodexRuntime> {
-    let runtime: CodexRuntime;
+    let runtime: CodexRuntime | null = null;
     const rpc = new JsonRpcProcess(
       executable,
       ["app-server", "--stdio", ...agent.args],
       cwd,
-      (value) => runtime.handleMessage(value),
-      (error) => runtime.failActive(error),
+      (value) => runtime?.handleMessage(value),
+      (error) => runtime?.failActive(error),
     );
     runtime = new CodexRuntime(agent, rpc, model, requestPermission);
-    await rpc.request("initialize", {
-      clientInfo: { name: "open-chat", title: "Open Chat", version: "0.1.0" },
-      capabilities: { experimentalApi: true },
-    });
-    rpc.notify("initialized", {});
     const params: Record<string, unknown> = {
       cwd,
       // Codex is used here as a local coding agent. Match the native
@@ -649,19 +671,48 @@ class CodexRuntime implements NativeRuntime {
       serviceName: "open-chat",
       ...(model ? { model } : {}),
     };
-    const opened = await rpc.request(
-      providerSessionId?.trim() ? "thread/resume" : "thread/start",
-      providerSessionId?.trim()
-        ? { threadId: providerSessionId.trim(), ...(model ? { model } : {}) }
-        : params,
-    );
+    const normalizedProviderSessionId = providerSessionId?.trim();
+    let opened: Record<string, unknown>;
+    try {
+      await rpc.request("initialize", {
+        clientInfo: { name: "open-chat", title: "Open Chat", version: "0.1.0" },
+        capabilities: { experimentalApi: true },
+      });
+      rpc.notify("initialized", {});
+      if (!normalizedProviderSessionId) {
+        opened = await rpc.request("thread/start", params);
+      } else {
+        try {
+          opened = await rpc.request("thread/resume", {
+            threadId: normalizedProviderSessionId,
+            ...(model ? { model } : {}),
+          });
+        } catch (error) {
+          if (!isActiveWriterError(error)) throw error;
+          opened = await rpc.request("thread/fork", { threadId: normalizedProviderSessionId });
+          runtime.startupNotice = "原会话正在其他客户端中使用，已自动创建分支并继续。";
+        }
+      }
+    } catch (error) {
+      rpc.close();
+      throw error;
+    }
     runtime.threadId = stringAt(opened, "result", "thread", "id");
-    if (!runtime.threadId) throw new Error("Codex 未返回 thread id");
+    if (!runtime.threadId) {
+      rpc.close();
+      throw new Error("Codex 未返回 thread id");
+    }
     return runtime;
   }
 
   sessionId(): string {
     return this.threadId;
+  }
+
+  takeStartupNotice(): string | undefined {
+    const notice = this.startupNotice || undefined;
+    this.startupNotice = "";
+    return notice;
   }
 
   async runTurn(text: string, res: ServerResponse, signal: AbortSignal): Promise<void> {

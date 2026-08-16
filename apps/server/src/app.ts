@@ -550,19 +550,13 @@ async function handleAgentChat(
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
-  const abort = attachAbortOnClose(res);
   try {
-    await agentManager.runTurn(
-      agentId,
-      conversationId,
-      text,
-      projectPath,
-      providerSessionId,
-      res,
-      abort.signal,
-    );
+    await agentManager.runTurn(agentId, conversationId, text, projectPath, providerSessionId, res);
   } catch (err) {
-    if (abort.signal.aborted || (err instanceof Error && err.name === "AbortError")) return;
+    // A page refresh only disconnects this response; the tracked run continues
+    // and can be re-subscribed through /api/acp/session/stream. AbortError here
+    // therefore only comes from the explicit session cancellation endpoint.
+    if (err instanceof Error && err.name === "AbortError") return;
     console.error(`Agent ${agentId} error:`, err);
     if (!res.headersSent) {
       if (err instanceof GatewayError) return sendGatewayError(res, err);

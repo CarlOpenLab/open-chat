@@ -14,6 +14,8 @@ import {
   ImagePlus,
   ListTodo,
   Paperclip,
+  Pencil,
+  SendHorizontal,
   ShieldCheck,
   ShieldQuestion,
   Square,
@@ -25,12 +27,16 @@ import { computed, h, ref, watch, type Component } from "vue";
 import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import type { PermissionRequest } from "../../services/OpenChatProvider";
 import { aiService, type GitWorkspaceInfo, type UploadedAttachment } from "../../services/ai";
+import type { QueuedChatMessage } from "../../services/chatStorage";
 import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../../utils/projectPath";
 import ModelIcon from "../Icons/ModelIcon.vue";
 
 interface Props {
   modelValue: string;
   loading: boolean;
+  disabled?: boolean;
+  queuedMessages?: QueuedChatMessage[];
+  queuePaused?: boolean;
   /** ACP 会话运行状态（running / requires_action / …），来自服务端 activeRuns；非 ACP 或空闲时为 null。 */
   runState?: string | null;
   currentModel: string;
@@ -60,6 +66,10 @@ interface Emits {
   (e: "change", value: string): void;
   (e: "cancel"): void;
   (e: "submit", value: string, attachments: UploadedAttachment[]): void;
+  (e: "queuedMessageChange", id: string, content: string): void;
+  (e: "queuedMessageRemove", id: string): void;
+  (e: "queuedMessageClear"): void;
+  (e: "queuedMessageSend"): void;
   (e: "modelChange", key: string): void;
   (e: "thinkingChange", value: boolean): void;
   (e: "fileModeChange", value: boolean): void;
@@ -77,6 +87,9 @@ const props = withDefaults(defineProps<Props>(), {
   agentMode: false,
   agentAvailable: true,
   agentConfiguring: false,
+  disabled: false,
+  queuedMessages: () => [],
+  queuePaused: false,
   runState: null,
   mode: "build",
   permission: "supervised",
@@ -499,24 +512,36 @@ const stagedAttachments = ref<StagedAttachment[]>([]);
 const dragActive = ref(false);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const attachmentsPanelOpen = ref(false);
-type SenderHeaderPanel = "attachments" | "permission";
+type SenderHeaderPanel = "queue" | "attachments" | "permission";
 const activeHeaderPanel = ref<SenderHeaderPanel>("attachments");
 const hasAttachments = computed(() => stagedAttachments.value.length > 0);
 const hasAttachmentPanel = computed(() => attachmentsPanelOpen.value || hasAttachments.value);
 const hasPendingPermission = computed(() => Boolean(props.pendingPermission));
-const hasHeaderNavigation = computed(() => hasAttachmentPanel.value && hasPendingPermission.value);
+const hasQueuedMessages = computed(() => props.queuedMessages.length > 0);
+const headerPanels = computed<SenderHeaderPanel[]>(() => [
+  ...(hasQueuedMessages.value ? (["queue"] as const) : []),
+  ...(hasAttachmentPanel.value ? (["attachments"] as const) : []),
+  ...(hasPendingPermission.value ? (["permission"] as const) : []),
+]);
+const hasHeaderNavigation = computed(() => headerPanels.value.length > 1);
 const visibleHeaderPanel = computed<SenderHeaderPanel>(() => {
-  if (activeHeaderPanel.value === "permission" && hasPendingPermission.value) return "permission";
-  if (activeHeaderPanel.value === "attachments" && hasAttachmentPanel.value) return "attachments";
-  return hasPendingPermission.value ? "permission" : "attachments";
+  if (headerPanels.value.includes(activeHeaderPanel.value)) return activeHeaderPanel.value;
+  return headerPanels.value[0] ?? "attachments";
 });
 
 const switchHeaderPanel = (direction: -1 | 1) => {
   if (!hasHeaderNavigation.value) return;
-  const panels: SenderHeaderPanel[] = ["attachments", "permission"];
+  const panels = headerPanels.value;
   const currentIndex = panels.indexOf(activeHeaderPanel.value);
   activeHeaderPanel.value = panels[(currentIndex + direction + panels.length) % panels.length];
 };
+
+watch(
+  () => props.queuedMessages.length,
+  (length, previousLength) => {
+    if (length > previousLength) activeHeaderPanel.value = "queue";
+  },
+);
 
 /** 把 File 列表上传到网关并加入预览行；非图片忽略。 */
 const stageFiles = async (files: File[]) => {
@@ -609,6 +634,36 @@ const handleSubmit = (value: string) => {
   attachmentsPanelOpen.value = false;
 };
 
+const editingQueueId = ref("");
+const editingQueueValue = ref("");
+
+const startQueueEdit = (item: QueuedChatMessage) => {
+  editingQueueId.value = item.id;
+  editingQueueValue.value = item.content;
+};
+
+const cancelQueueEdit = () => {
+  editingQueueId.value = "";
+  editingQueueValue.value = "";
+};
+
+const saveQueueEdit = (item: QueuedChatMessage) => {
+  const content = editingQueueValue.value.trim();
+  if (!content && !item.attachments?.length) return;
+  emit("queuedMessageChange", item.id, content);
+  cancelQueueEdit();
+};
+
+const handleQueueEditKeydown = (event: KeyboardEvent, item: QueuedChatMessage) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cancelQueueEdit();
+  } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    saveQueueEdit(item);
+  }
+};
+
 const toggleAttachmentsPanel = () => {
   attachmentsPanelOpen.value = !attachmentsPanelOpen.value;
   if (attachmentsPanelOpen.value) activeHeaderPanel.value = "attachments";
@@ -639,7 +694,7 @@ const chipClass = (active: boolean, disabled = false) => {
     <!-- 由 Sender 外部承载，避免附件上传状态被 Sender slot 的渲染节奏延迟。 -->
     <Transition name="sender-header">
       <div
-        v-if="hasAttachmentPanel || pendingPermission"
+        v-if="hasQueuedMessages || hasAttachmentPanel || pendingPermission"
         class="sender-header-card"
         :class="{
           'has-permission': Boolean(pendingPermission),
@@ -657,7 +712,104 @@ const chipClass = (active: boolean, disabled = false) => {
           <ChevronLeft class="!h-4 !w-4" />
         </button>
         <div class="sender-header-panel">
-          <div v-if="visibleHeaderPanel === 'attachments'" class="attachment-preview-row">
+          <div v-if="visibleHeaderPanel === 'queue'" class="queued-message-panel">
+            <div class="queued-message-heading">
+              <span>待发送 · {{ queuedMessages.length }}</span>
+              <div class="queued-message-heading-actions">
+                <span v-if="queuePaused" class="queued-message-state">已暂停</span>
+                <Tooltip title="清空队列">
+                  <button
+                    type="button"
+                    class="queued-message-clear"
+                    aria-label="清空队列"
+                    @click="emit('queuedMessageClear')"
+                  >
+                    <Trash2 class="!h-3.5 !w-3.5" />
+                  </button>
+                </Tooltip>
+              </div>
+            </div>
+            <div class="queued-message-list">
+              <div
+                v-for="(item, index) in queuedMessages"
+                :key="item.id"
+                class="queued-message-item"
+              >
+                <span class="queued-message-order">{{ index + 1 }}</span>
+                <textarea
+                  v-if="editingQueueId === item.id"
+                  v-model="editingQueueValue"
+                  class="queued-message-editor"
+                  rows="2"
+                  @keydown="handleQueueEditKeydown($event, item)"
+                ></textarea>
+                <div v-else class="queued-message-copy">
+                  <span class="queued-message-content">{{ item.content || "仅附件" }}</span>
+                  <span v-if="item.attachments?.length" class="queued-message-attachments">
+                    <Paperclip class="!h-3 !w-3" />{{ item.attachments.length }}
+                  </span>
+                </div>
+                <div class="queued-message-actions">
+                  <template v-if="editingQueueId === item.id">
+                    <Tooltip title="保存">
+                      <button
+                        type="button"
+                        class="queued-message-action"
+                        aria-label="保存队列消息"
+                        :disabled="!editingQueueValue.trim() && !item.attachments?.length"
+                        @click="saveQueueEdit(item)"
+                      >
+                        <Check class="!h-3.5 !w-3.5" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip title="取消">
+                      <button
+                        type="button"
+                        class="queued-message-action"
+                        aria-label="取消编辑"
+                        @click="cancelQueueEdit"
+                      >
+                        <X class="!h-3.5 !w-3.5" />
+                      </button>
+                    </Tooltip>
+                  </template>
+                  <template v-else>
+                    <Tooltip v-if="index === 0 && !loading" title="发送下一条">
+                      <button
+                        type="button"
+                        class="queued-message-action is-primary"
+                        aria-label="发送下一条队列消息"
+                        @click="emit('queuedMessageSend')"
+                      >
+                        <SendHorizontal class="!h-3.5 !w-3.5" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip title="编辑">
+                      <button
+                        type="button"
+                        class="queued-message-action"
+                        aria-label="编辑队列消息"
+                        @click="startQueueEdit(item)"
+                      >
+                        <Pencil class="!h-3.5 !w-3.5" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip title="删除">
+                      <button
+                        type="button"
+                        class="queued-message-action is-danger"
+                        aria-label="删除队列消息"
+                        @click="emit('queuedMessageRemove', item.id)"
+                      >
+                        <Trash2 class="!h-3.5 !w-3.5" />
+                      </button>
+                    </Tooltip>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="visibleHeaderPanel === 'attachments'" class="attachment-preview-row">
             <div
               v-for="(attachment, index) in stagedAttachments"
               :key="attachment.sourceKey"
@@ -741,14 +893,14 @@ const chipClass = (active: boolean, disabled = false) => {
     />
     <Sender
       :value="modelValue"
-      :loading="loading"
+      :loading="false"
       placeholder="做什么都可以..."
       :on-cancel="() => emit('cancel')"
       :on-change="handleChange"
       :on-submit="handleSubmit"
       :on-paste-file="handlePasteFile"
       :suffix="false"
-      :disabled="agentMode && (!agentAvailable || agentConfiguring)"
+      :disabled="disabled || (agentMode && (!agentAvailable || agentConfiguring))"
     >
       <template #footer="{ defaultNode }">
         <div class="flex w-full flex-col gap-2">
@@ -850,7 +1002,7 @@ const chipClass = (active: boolean, disabled = false) => {
               >
             </div>
 
-            <!-- composer 右排：模型选择 + 发送 / 停止 -->
+            <!-- composer 右排：模型选择 + 发送 + 独立停止会话 -->
             <div class="sender-footer-secondary">
               <Dropdown
                 :menu="modelMenu"
@@ -890,12 +1042,13 @@ const chipClass = (active: boolean, disabled = false) => {
                   />
                 </button>
               </Dropdown>
-              <component v-if="!loading" :is="defaultNode" />
-              <Tooltip v-else title="停止生成">
+              <component :is="defaultNode" />
+              <Tooltip v-if="loading" title="停止会话">
                 <button
                   type="button"
-                  class="grid h-[26px] w-[26px] place-items-center rounded-full border-0 bg-brand-surface-subtle p-0 text-brand-foreground cursor-pointer hover:bg-brand-danger-subtle"
-                  aria-label="停止生成"
+                  class="sender-stop-button"
+                  aria-label="停止会话"
+                  title="停止会话，保留待发送队列"
                   @click="emit('cancel')"
                 >
                   <Square class="!h-[11px] !w-[11px] fill-current" />
@@ -1050,6 +1203,148 @@ const chipClass = (active: boolean, disabled = false) => {
 .sender-header-card .permission-request-inline {
   margin-top: 8px;
 }
+.queued-message-panel {
+  padding: 1px 2px 0;
+}
+.queued-message-heading {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 6px 4px;
+  color: var(--brand-muted-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.queued-message-heading-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.queued-message-state {
+  color: var(--brand-warning, #b7791f);
+  font-weight: 500;
+}
+.queued-message-clear {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  background: transparent;
+  color: var(--brand-muted-strong);
+  cursor: pointer;
+}
+.queued-message-clear:hover {
+  background: var(--brand-danger-subtle);
+  color: var(--brand-danger);
+}
+.queued-message-list {
+  display: flex;
+  max-height: 190px;
+  flex-direction: column;
+  gap: 3px;
+  overflow-y: auto;
+}
+.queued-message-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  min-height: 36px;
+  align-items: center;
+  gap: 7px;
+  border-radius: 6px;
+  padding: 4px 5px;
+  background: var(--brand-surface-subtle);
+}
+.queued-message-order {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brand-inset);
+  color: var(--brand-muted-strong);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.queued-message-copy {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+.queued-message-content {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--brand-foreground);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.queued-message-attachments {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  color: var(--brand-muted-strong);
+  font-size: 10.5px;
+}
+.queued-message-editor {
+  width: 100%;
+  min-height: 40px;
+  max-height: 92px;
+  resize: vertical;
+  border: 1px solid var(--brand-border-strong);
+  border-radius: 5px;
+  padding: 5px 7px;
+  outline: none;
+  background: var(--brand-composer);
+  color: var(--brand-foreground);
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+}
+.queued-message-editor:focus {
+  border-color: var(--brand-accent);
+}
+.queued-message-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.queued-message-action {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  background: transparent;
+  color: var(--brand-muted-strong);
+  cursor: pointer;
+}
+.queued-message-action:hover:not(:disabled) {
+  background: var(--brand-inset);
+  color: var(--brand-foreground);
+}
+.queued-message-action.is-primary {
+  color: var(--brand-accent);
+}
+.queued-message-action.is-danger:hover:not(:disabled) {
+  color: var(--brand-danger);
+}
+.queued-message-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 .chat-footer :deep(.antd-sender) {
   position: relative;
   z-index: 3;
@@ -1167,6 +1462,26 @@ const chipClass = (active: boolean, disabled = false) => {
 .sender-footer-secondary {
   flex: none;
   gap: 6px;
+}
+.sender-stop-button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--brand-danger, #c2413b);
+  border-radius: 7px;
+  padding: 0;
+  background: color-mix(in srgb, var(--brand-danger, #c2413b) 10%, transparent);
+  color: var(--brand-danger, #c2413b);
+  cursor: pointer;
+  transition:
+    background 150ms ease,
+    color 150ms ease;
+}
+.sender-stop-button:hover {
+  background: var(--brand-danger, #c2413b);
+  color: var(--brand-workspace, #fff);
 }
 
 @media (max-width: 560px) {

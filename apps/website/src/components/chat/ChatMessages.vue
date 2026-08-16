@@ -295,6 +295,7 @@ const displayItems = computed<BubbleItemType[]>(() => {
 
     if (
       item.role === "assistant" &&
+      !isStreamingStatus(item.status) &&
       !hasVisibleText &&
       !hasVisibleReasoning &&
       !hasVisibleA2UI &&

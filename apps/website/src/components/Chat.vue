@@ -3,7 +3,7 @@ import type { ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest, useXChat } from "@antdv-next/x-sdk";
-import { message } from "antdv-next";
+import { message, notification } from "antdv-next";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import {
   API_BASE_URL,
@@ -33,7 +33,7 @@ import {
 } from "../utils/fileWorkspace";
 import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../utils/projectPath";
 import { FILE_WORKSPACE_SYSTEM_PROMPT } from "../prompts/fileWorkspace";
-import { loadChatState } from "../services/chatStorage";
+import { loadChatState, type QueuedChatMessage } from "../services/chatStorage";
 import {
   API_AGENT,
   cancelAcpTurn,
@@ -115,9 +115,13 @@ const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const pendingA2UISurfaceId = ref("");
 const showWelcome = ref(true);
 const isHydrating = ref(true);
+const sessionStateLoading = ref(true);
 const activeRequestConversationKey = ref<string>("");
 /** 请求开始时间，供侧栏「工作中」条目计时 */
 const requestStartedAt = ref(0);
+let activeRequestOutcome: "pending" | "error" | "abort" | null = null;
+const manuallyStoppedConversationKeys = new Set<string>();
+let scheduleNextQueuedMessage: (conversationKey: string) => void = () => {};
 const turnTimingStarts = new Map<string, number>();
 const turnTimingValues = new Map<string, { startedAtMs?: number; durationMs: number }>();
 
@@ -283,6 +287,8 @@ const createNewConversation = (
     messages: [],
     a2uiSubmissions: [],
     workspaceDrafts: [],
+    queuedMessages: [],
+    queuePaused: false,
     systemPrompt,
     agentId: activeAgentId.value,
     modelId,
@@ -478,7 +484,7 @@ const refreshAcpSession = async () => {
     );
     if (sequence !== acpSessionLoadSequence) return;
     acpSession.value = session;
-    // 以服务端 activeRuns 为准；若回合恰在本次加载后结束，轮询（pollAcpRunState）兜底纠正。
+    // 以服务端 activeRuns 为准；若回合恰在本次加载后结束，下次状态刷新会兜底纠正。
     // native（pi/omp）的 running 由流事件活跃度推断（touchNativeStreamActivity），不在此设置。
     if (usesAcpProtocol.value) {
       acpRunState.value = session.running ? { state: "running" } : null;
@@ -517,6 +523,48 @@ const getCurrentConversation = (): OpenChatConversation | undefined => {
   return conversationList.value.find((c) => c.key === currentConversationKey.value);
 };
 
+interface TaskCompletionNotice {
+  key: string;
+  agentId: string;
+  conversationKey: string;
+}
+
+const pendingTaskCompletionNotices = new Map<string, TaskCompletionNotice>();
+
+const showTaskCompletionNotification = (notice: TaskCompletionNotice) => {
+  const conversation = conversationList.value.find(
+    (item) =>
+      (item.agentId || "api") === notice.agentId && String(item.key) === notice.conversationKey,
+  );
+  const conversationTitle = String(conversation?.label ?? "").trim();
+  notification.success({
+    key: notice.key,
+    title: "任务已完成",
+    description:
+      conversationTitle && conversationTitle !== "新对话"
+        ? `${conversationTitle} 已完成，可以查看结果。`
+        : "Agent 任务已完成，可以查看结果。",
+    placement: "bottomRight",
+    pauseOnHover: true,
+    showProgress: true,
+  });
+};
+
+const notifyTaskCompletion = (notice: TaskCompletionNotice) => {
+  if (document.visibilityState === "hidden") {
+    pendingTaskCompletionNotices.set(notice.key, notice);
+    return;
+  }
+  showTaskCompletionNotification(notice);
+};
+
+const flushTaskCompletionNotifications = () => {
+  for (const notice of pendingTaskCompletionNotices.values()) {
+    showTaskCompletionNotification(notice);
+  }
+  pendingTaskCompletionNotices.clear();
+};
+
 const isInDraftMode = computed(() => !currentConversationKey.value);
 const currentConversationTitle = computed(() => {
   const conversation = getCurrentConversation();
@@ -528,6 +576,10 @@ const currentConversationMessages = computed<DefaultMessageInfo<XModelMessage>[]
   const conv = getCurrentConversation();
   return conv?.messages ?? [];
 });
+const currentQueuedMessages = computed<QueuedChatMessage[]>(
+  () => getCurrentConversation()?.queuedMessages ?? [],
+);
+const currentQueuePaused = computed(() => getCurrentConversation()?.queuePaused === true);
 
 /** Maps an assistant message id to the web-search sources attached to it. */
 const searchResultsByMessageId = computed<Record<string, WebSearchSourceItem[]>>(() => {
@@ -692,6 +744,9 @@ const pendingPermission = ref<PermissionRequest | null>(null);
 provider.onPermissionRequest = (request) => {
   pendingPermission.value = request;
 };
+provider.onChatError = () => {
+  if (activeRequestOutcome === "pending") activeRequestOutcome = "error";
+};
 provider.onProviderSession = ({ agentId, sessionId }) => {
   const conversation = getCurrentConversation();
   if (!conversation || (agentId && agentId !== activeAgentId.value)) return;
@@ -727,6 +782,7 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
   defaultMessages: getInitialMessages,
   requestFallback: (_, { error, errorInfo, messageInfo }) => {
     if (error.name === "AbortError") {
+      activeRequestOutcome = "abort";
       const existing =
         typeof messageInfo?.message?.content === "string" ? messageInfo.message.content : "";
       return {
@@ -734,6 +790,7 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
         role: "assistant",
       };
     }
+    activeRequestOutcome = "error";
     return {
       content: errorInfo?.error?.message || "请求失败，请重试！",
       role: "assistant",
@@ -744,13 +801,21 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
   requestPlaceholder: () => ({ content: "", role: "assistant" }),
 });
 
-/** 输入区忙碌态：本地请求进行中，或 Open Chat 网关中的会话在跑（多标签 / 刷新恢复）。 */
-const inputBusy = computed(
+/** 当前会话正在生成；输入仍可提交，但新消息会进入队列。 */
+const inputRunning = computed(
   () =>
     isRequesting.value ||
+    (activeRequestOutcome === "pending" &&
+      Boolean(activeRequestConversationKey.value) &&
+      activeRequestConversationKey.value === currentConversationKey.value) ||
     Boolean(currentOpenChatRun.value) ||
     (usesAcpProtocol.value && acpRunState.value?.state === "running"),
 );
+/** 初始化和配置切换期间无法可靠确定目标会话，此时才真正禁用输入。 */
+const inputUnavailable = computed(
+  () => isAcpAgent.value && (isHydrating.value || sessionStateLoading.value),
+);
+const inputBusy = computed(() => inputUnavailable.value || inputRunning.value);
 
 const sessionMatchesConversation = (
   session: OpenChatSessionView,
@@ -826,17 +891,12 @@ const {
  * from a provider response, so selecting a session can render its local snapshot
  * before the provider history arrives.
  */
-const syncProviderConversations = async (agentId: string, pollSequence?: number): Promise<void> => {
+const syncProviderConversations = async (agentId: string): Promise<void> => {
   const agent = agents.value.find((item) => item.id === agentId);
   if (!agent || agent.kind !== "acp" || !agent.available) return;
   try {
     const result = await loadAcpProviderSessions(agentId);
-    if (
-      pollSequence !== undefined &&
-      (pollSequence !== sessionPollSequence || agentId !== activeAgentId.value)
-    ) {
-      return;
-    }
+    if (agentId !== activeAgentId.value) return;
     if (!result.supported) return;
     let changed = false;
     for (const providerSession of result.sessions) {
@@ -886,17 +946,12 @@ const syncProviderConversations = async (agentId: string, pollSequence?: number)
   }
 };
 
-let sessionPollTimer: ReturnType<typeof setTimeout> | null = null;
-let sessionPollController: AbortController | null = null;
-let sessionPollSequence = 0;
+let sessionRefreshController: AbortController | null = null;
+let sessionRefreshSequence = 0;
 
-const stopSessionPolling = () => {
-  if (sessionPollTimer !== null) {
-    clearTimeout(sessionPollTimer);
-    sessionPollTimer = null;
-  }
-  sessionPollController?.abort();
-  sessionPollController = null;
+const stopSessionRefresh = () => {
+  sessionRefreshController?.abort();
+  sessionRefreshController = null;
 };
 
 const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
@@ -917,7 +972,7 @@ const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
             conversation.providerSessionId === session.sessionId),
       );
     if (existing) {
-      // Provider polling can discover a new provider id before the run-state
+      // A state refresh can discover a new provider id before the run-state
       // response arrives. Keep the gateway conversation key used by the run
       // registry and remove that temporary provider-only duplicate.
       if (exact && session.sessionId) {
@@ -964,40 +1019,57 @@ const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
   if (changed) schedulePersistState();
 };
 
-const scheduleSessionPoll = (delayMs: number) => {
-  if (sessionPollTimer !== null) clearTimeout(sessionPollTimer);
-  sessionPollTimer = setTimeout(() => {
-    sessionPollTimer = null;
-    void pollSessionLists();
-  }, delayMs);
-};
-
-const pollSessionLists = async () => {
+const refreshSessionState = async () => {
   if (isHydrating.value || document.visibilityState === "hidden") return;
+  stopSessionRefresh();
   const agent = activeAgent.value;
   if (agent.kind !== "acp" || !agent.available) {
     openChatSessions.value = [];
+    sessionStateLoading.value = false;
     return;
   }
 
-  const sequence = ++sessionPollSequence;
+  sessionStateLoading.value = true;
+  const sequence = ++sessionRefreshSequence;
   const agentId = agent.id;
   const controller = new AbortController();
-  sessionPollController = controller;
+  sessionRefreshController = controller;
   try {
-    // Provider-owned sessions are synchronized on startup, agent changes, and
-    // route restores. Do not repeat that expensive listing on every run-state
-    // poll; the run registry is enough to track an active turn.
+    const previouslyRunning = openChatSessions.value.filter(
+      (session) => session.agentId === agentId && session.running,
+    );
     const openChatResult = await loadOpenChatSessions(agentId, controller.signal)
       .then((sessions) => ({ status: "fulfilled" as const, value: sessions }))
       .catch((reason: unknown) => ({ status: "rejected" as const, reason }));
-    if (sequence !== sessionPollSequence || agentId !== activeAgentId.value) return;
+    if (sequence !== sessionRefreshSequence || agentId !== activeAgentId.value) return;
 
     if (openChatResult.status === "fulfilled") {
       const sessions = openChatResult.value;
       openChatSessions.value = sessions;
       reconcileRunningConversations(sessions);
+      const completedRuns = previouslyRunning.filter(
+        (previous) =>
+          !sessions.some(
+            (session) =>
+              session.running &&
+              session.agentId === previous.agentId &&
+              session.conversationId === previous.conversationId,
+          ),
+      );
+      for (const previous of completedRuns) {
+        notifyTaskCompletion({
+          key: `task:${previous.agentId}:${previous.conversationId}:${previous.startedAt ?? previous.createdAt}`,
+          agentId: previous.agentId,
+          conversationKey: previous.conversationId,
+        });
+      }
       const selectedConversation = getCurrentConversation();
+      if (
+        selectedConversation &&
+        completedRuns.some((session) => sessionMatchesConversation(session, selectedConversation))
+      ) {
+        void refreshAcpSession();
+      }
       const selectedRun = selectedConversation
         ? sessions.find(
             (session) =>
@@ -1008,32 +1080,34 @@ const pollSessionLists = async () => {
         acpRunState.value = selectedRun ? { state: "running" } : null;
       }
     } else if ((openChatResult.reason as Error)?.name !== "AbortError") {
-      console.error("Failed to poll Open Chat session state:", openChatResult.reason);
+      console.error("Failed to refresh Open Chat session state:", openChatResult.reason);
     }
   } catch (error) {
-    console.error("Failed to poll session lists:", error);
+    console.error("Failed to refresh session state:", error);
   } finally {
-    if (sequence === sessionPollSequence) {
-      sessionPollController = null;
-      const hasRunningSession = openChatSessions.value.some((session) => session.running);
-      // Idle pages need a one-shot refresh only. Keep polling while a gateway
-      // turn is active so a second tab can still receive its live transcript.
-      if (hasRunningSession || isRequesting.value) scheduleSessionPoll(2_000);
+    if (sequence === sessionRefreshSequence) {
+      sessionRefreshController = null;
+      sessionStateLoading.value = false;
     }
   }
 };
 
-const restartSessionPolling = () => {
-  stopSessionPolling();
-  sessionPollSequence += 1;
+const restartSessionRefresh = () => {
+  stopSessionRefresh();
+  sessionRefreshSequence += 1;
   if (!isHydrating.value && document.visibilityState !== "hidden") {
-    scheduleSessionPoll(0);
+    void refreshSessionState();
   }
 };
 
 const handleVisibilityChange = () => {
-  if (document.visibilityState === "hidden") stopSessionPolling();
-  else restartSessionPolling();
+  if (document.visibilityState === "hidden") {
+    stopSessionRefresh();
+    stopAcpLiveStream();
+    return;
+  }
+  flushTaskCompletionNotifications();
+  restartSessionRefresh();
 };
 
 /**
@@ -1131,14 +1205,20 @@ watch(isRequesting, (requesting) => {
   if (requesting) {
     requestStartedAt.value = Date.now();
     acpRunState.value = isAcpAgent.value ? { state: "running" } : null;
-    if (isAcpAgent.value) restartSessionPolling();
+    if (isAcpAgent.value) restartSessionRefresh();
     return;
   }
-  if (activeRequestConversationKey.value) {
-    // The request SSE closing is authoritative. Clear the cached poll result
+  const completedConversationKey = activeRequestConversationKey.value;
+  const completedRequestStartedAt = requestStartedAt.value;
+  const completedOutcome = activeRequestOutcome;
+  const manuallyStopped = completedConversationKey
+    ? manuallyStoppedConversationKeys.delete(completedConversationKey)
+    : false;
+  if (completedConversationKey) {
+    // The request SSE closing is authoritative. Clear the cached state result
     // before the live-stream watcher runs, otherwise it can subscribe to a run
     // that the server has just removed and produce a transient 404.
-    markConversationRunIdle(activeRequestConversationKey.value);
+    markConversationRunIdle(completedConversationKey);
   }
   attachPendingSearchSources();
   activeRequestConversationKey.value = "";
@@ -1147,7 +1227,30 @@ watch(isRequesting, (requesting) => {
   requestStartedAt.value = 0;
   // 请求结束：会话必然回到空闲，清掉过期的 ACP 运行状态
   acpRunState.value = null;
-  if (isAcpAgent.value) restartSessionPolling();
+  if (completedOutcome === "pending" && !manuallyStopped && completedConversationKey) {
+    notifyTaskCompletion({
+      key: `task:${activeAgentId.value}:${completedConversationKey}:${completedRequestStartedAt}`,
+      agentId: activeAgentId.value,
+      conversationKey: completedConversationKey,
+    });
+  }
+  activeRequestOutcome = null;
+  if (completedConversationKey) {
+    const conversation = conversationList.value.find(
+      (item) => String(item.key) === completedConversationKey,
+    );
+    if (conversation?.queuedMessages?.length) {
+      conversation.queuePaused = manuallyStopped || completedOutcome !== "pending";
+      schedulePersistState();
+      if (!manuallyStopped && completedOutcome === "pending") {
+        scheduleNextQueuedMessage(completedConversationKey);
+      }
+    } else if (conversation?.queuePaused) {
+      conversation.queuePaused = false;
+      schedulePersistState();
+    }
+  }
+  if (isAcpAgent.value) restartSessionRefresh();
 });
 
 // ============ 会话实时输出（Open Chat 任务事件总线） ============
@@ -1247,18 +1350,35 @@ const startAcpLiveStream = () => {
     conversationId,
     conversation.projectPath ?? projectPath.value,
     handleAcpStreamEvent,
-    () => {
+    (outcome) => {
       if (acpStreamController.value !== controller) return;
       acpStreamController.value = null;
       acpStreamConversationKey = "";
+      if (outcome === "disconnected") return;
       // End the cached run before refreshing. Otherwise a 204 caused by the
-      // run finishing between poll and subscribe immediately reopens the same
+      // run finishing between refresh and subscribe immediately reopens the same
       // stream and creates a tight request loop.
       markConversationRunIdle(conversationId);
       acpRunState.value = null;
-      // 回合结束：服务端历史已完整，以最终状态收尾并让列表轮询纠正运行态。
+      // 回合结束：服务端历史已完整，以最终状态收尾并刷新运行态。
       void refreshAcpSession();
-      restartSessionPolling();
+      const manuallyStopped = manuallyStoppedConversationKeys.delete(conversationId);
+      if (outcome === "completed" && !manuallyStopped) {
+        if (conversation.queuedMessages?.length) {
+          conversation.queuePaused = false;
+          schedulePersistState();
+          scheduleNextQueuedMessage(conversationId);
+        }
+        notifyTaskCompletion({
+          key: `task:${activeAgentId.value}:${conversationId}:${selectedRun?.startedAt ?? Date.now()}`,
+          agentId: activeAgentId.value,
+          conversationKey: conversationId,
+        });
+      } else if (conversation.queuedMessages?.length) {
+        conversation.queuePaused = true;
+        schedulePersistState();
+      }
+      restartSessionRefresh();
     },
   );
   acpStreamController.value = controller;
@@ -1284,7 +1404,7 @@ watch([activeAgentId, currentConversationKey, isHydrating], () => {
 });
 
 watch(activeAgentId, () => {
-  restartSessionPolling();
+  restartSessionRefresh();
 });
 
 watch(currentConversationKey, (key) => {
@@ -1396,7 +1516,7 @@ onMounted(async () => {
   // Release session/config watchers only after the final route conversation
   // is known. Releasing earlier creates a throwaway draft session request.
   isHydrating.value = false;
-  restartSessionPolling();
+  restartSessionRefresh();
 });
 
 onBeforeUnmount(() => {
@@ -1405,8 +1525,9 @@ onBeforeUnmount(() => {
   document.removeEventListener("visibilitychange", handleVisibilityChange);
   window.removeEventListener("mousemove", handleResizeMove);
   window.removeEventListener("mouseup", handleResizeEnd);
-  stopSessionPolling();
+  stopSessionRefresh();
   stopAcpLiveStream();
+  if (queuedMessageTimer) clearTimeout(queuedMessageTimer);
 });
 
 // ============ 面板拖拽调整宽度 ============
@@ -1443,13 +1564,13 @@ const bubbleItems = computed(() => {
     return baseItems;
   }
 
-  // Once useXChat has emitted the local user item, switch back to the store
-  // output so the optimistic row cannot be rendered twice.
+  // Once useXChat has emitted the local user item, only retire that optimistic
+  // row. The assistant fallback must stay until the SDK publishes its own
+  // loading/updating item, otherwise the request has a visible feedback gap.
   const storeHasPendingMessage = conversationMessages.some(
     (item) =>
       (item.extraInfo as { optimisticId?: unknown } | undefined)?.optimisticId === pending.id,
   );
-  if (storeHasPendingMessage) return baseItems;
 
   const pendingInfo: DefaultMessageInfo<XModelMessage> = {
     id: pending.id,
@@ -1462,10 +1583,16 @@ const bubbleItems = computed(() => {
       item.message.role === "assistant" &&
       (item.status === "loading" || item.status === "updating"),
   );
-  const optimisticItems = [...conversationMessages, pendingInfo];
+  const optimisticItems = storeHasPendingMessage
+    ? [...conversationMessages]
+    : [...conversationMessages, pendingInfo];
   // Keep the transition visually continuous even while the request store is
   // waiting to publish its placeholder row.
-  if (!hasStreamingAssistant) {
+  if (
+    isRequesting.value &&
+    activeRequestConversationKey.value === currentConversationKey.value &&
+    !hasStreamingAssistant
+  ) {
     optimisticItems.push({
       id: `${pending.id}:thinking`,
       // Render through AssistantMessageContent so the waiting phase uses the
@@ -1488,9 +1615,16 @@ const handlePromptClick = (info: { data: { key?: string; description?: string } 
 };
 
 const handleCancel = () => {
+  activeRequestOutcome = "abort";
+  const conversationId = activeRequestConversationKey.value || currentConversationKey.value;
+  if (conversationId) manuallyStoppedConversationKeys.add(conversationId);
+  const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
+  if (conversation?.queuedMessages?.length) {
+    conversation.queuePaused = true;
+    schedulePersistState();
+  }
   // ACP：断连不再自动取消回合，停止必须先调服务端取消接口
   if (isAcpAgent.value) {
-    const conversationId = activeRequestConversationKey.value || currentConversationKey.value;
     if (conversationId) void cancelAcpTurn(activeAgentId.value, conversationId);
   }
   abort();
@@ -1552,23 +1686,26 @@ const getRequestSystemPrompt = (baseSystemPrompt: string) => {
   );
 };
 
-const handleSubmit = (
+interface SubmitMessageOptions {
+  extraInfo?: Record<string, unknown>;
+  systemPrompt?: string;
+  /** 随消息发送的附件（已上传到网关，携带持久引用）。 */
+  attachments?: UploadedAttachment[];
+}
+
+const sendMessageNow = (
   nextContent: string,
-  options: {
-    extraInfo?: Record<string, unknown>;
-    systemPrompt?: string;
-    /** 随消息发送的附件（已上传到网关，携带持久引用）。 */
-    attachments?: UploadedAttachment[];
-  } = {},
-) => {
-  if ((!nextContent || !nextContent.trim()) && !options.attachments?.length) return;
-  if (inputBusy.value) return;
+  options: SubmitMessageOptions = {},
+  clearComposer = true,
+): boolean => {
+  if ((!nextContent || !nextContent.trim()) && !options.attachments?.length) return false;
+  if (inputUnavailable.value || inputRunning.value) return false;
   if (!activeAgent.value.available) {
     message.warning(
       activeAgent.value.adapterHint ||
         `${activeAgent.value.name} 当前不可用，请检查本地 CLI 安装与登录状态`,
     );
-    return;
+    return false;
   }
 
   // 草稿态首次发送时，才创建真实会话并写入侧栏
@@ -1593,12 +1730,14 @@ const handleSubmit = (
   }
 
   const conversation = getCurrentConversation();
-  if (!conversation) return;
+  if (!conversation) return false;
   if (options.systemPrompt !== undefined) {
     conversation.systemPrompt = options.systemPrompt.trim();
   }
   // 只有真正提交新消息才改变会话排序；读取、恢复和实时回放保持原顺序。
   conversation.updatedAt = Date.now();
+  manuallyStoppedConversationKeys.delete(String(conversation.key));
+  activeRequestOutcome = "pending";
   setMessages(currentConversationMessages.value);
   activeRequestConversationKey.value = currentConversationKey.value;
 
@@ -1622,38 +1761,179 @@ const handleSubmit = (
     };
   }
   const forwardProvider = getForwardProvider(currentModel.value);
-  onRequest(
-    {
-      messages: [
-        {
-          role: "user",
-          content: nextContent,
-          ...(options.attachments?.length ? { attachments: options.attachments } : {}),
-        },
-      ],
-      model: inputCurrentModel.value,
-      mode: workMode.value,
-      permission: effectivePermissionMode.value,
-      systemPrompt: getRequestSystemPrompt(conversation.systemPrompt ?? ""),
-      enable_thinking: thinkingEnabled.value,
-      thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
-      // 本地 opencode（服务端 AI）：按会话复用长会话，无需转发目标。
-      conversationId: String(conversation.key),
-      ...(isAcpAgent.value ? { acpAgentId: activeAgentId.value } : {}),
-      ...(isAcpAgent.value && conversation.providerSessionId
-        ? { providerSessionId: conversation.providerSessionId }
-        : {}),
-      ...(projectPath.value.trim() ? { projectPath: projectPath.value.trim() } : {}),
-      // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
-      ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
-    },
-    { extraInfo: requestExtraInfo },
-  );
-  // 清空输入框
-  setTimeout(() => {
-    content.value = "";
-  }, 0);
+  try {
+    onRequest(
+      {
+        messages: [
+          {
+            role: "user",
+            content: nextContent,
+            ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+          },
+        ],
+        model: inputCurrentModel.value,
+        mode: workMode.value,
+        permission: effectivePermissionMode.value,
+        systemPrompt: getRequestSystemPrompt(conversation.systemPrompt ?? ""),
+        enable_thinking: thinkingEnabled.value,
+        thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
+        // 本地 opencode（服务端 AI）：按会话复用长会话，无需转发目标。
+        conversationId: String(conversation.key),
+        ...(isAcpAgent.value ? { acpAgentId: activeAgentId.value } : {}),
+        ...(isAcpAgent.value && conversation.providerSessionId
+          ? { providerSessionId: conversation.providerSessionId }
+          : {}),
+        ...(projectPath.value.trim() ? { projectPath: projectPath.value.trim() } : {}),
+        // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
+        ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
+      },
+      { extraInfo: requestExtraInfo },
+    );
+  } catch (error) {
+    activeRequestOutcome = null;
+    activeRequestConversationKey.value = "";
+    optimisticMessage.value = null;
+    message.error(error instanceof Error ? error.message : "请求启动失败");
+    return false;
+  }
+  if (clearComposer) {
+    setTimeout(() => {
+      content.value = "";
+    }, 0);
+  }
+  return true;
 };
+
+let queuedMessageTimer: ReturnType<typeof setTimeout> | null = null;
+let queuedMessageTimerKey = "";
+
+const dispatchNextQueuedMessage = (conversationKey: string) => {
+  if (
+    conversationKey !== currentConversationKey.value ||
+    inputUnavailable.value ||
+    inputRunning.value
+  ) {
+    return;
+  }
+  const conversation = getCurrentConversation();
+  const queuedMessage = conversation?.queuedMessages?.[0];
+  if (!conversation || conversation.queuePaused || !queuedMessage) return;
+
+  conversation.queuedMessages = conversation.queuedMessages?.slice(1) ?? [];
+  conversation.queuePaused = false;
+  schedulePersistState();
+  const started = sendMessageNow(
+    queuedMessage.content,
+    { attachments: queuedMessage.attachments },
+    false,
+  );
+  if (!started) {
+    conversation.queuedMessages = [queuedMessage, ...(conversation.queuedMessages ?? [])];
+    conversation.queuePaused = true;
+    schedulePersistState();
+  }
+};
+
+scheduleNextQueuedMessage = (conversationKey: string) => {
+  if (!conversationKey || conversationKey !== currentConversationKey.value) return;
+  if (queuedMessageTimer && queuedMessageTimerKey === conversationKey) return;
+  if (queuedMessageTimer) clearTimeout(queuedMessageTimer);
+  queuedMessageTimerKey = conversationKey;
+  queuedMessageTimer = setTimeout(() => {
+    queuedMessageTimer = null;
+    queuedMessageTimerKey = "";
+    dispatchNextQueuedMessage(conversationKey);
+  }, 80);
+};
+
+const queueMessage = (
+  conversation: OpenChatConversation,
+  nextContent: string,
+  attachments?: UploadedAttachment[],
+) => {
+  const queuedMessage: QueuedChatMessage = {
+    id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    content: nextContent.trim(),
+    createdAt: Date.now(),
+    ...(attachments?.length ? { attachments: attachments.map((item) => ({ ...item })) } : {}),
+  };
+  conversation.queuedMessages = [...(conversation.queuedMessages ?? []), queuedMessage];
+  schedulePersistState();
+  content.value = "";
+};
+
+const handleSubmit = (nextContent: string, options: SubmitMessageOptions = {}) => {
+  if ((!nextContent || !nextContent.trim()) && !options.attachments?.length) return;
+  if (inputUnavailable.value) return;
+  if (!activeAgent.value.available) {
+    message.warning(
+      activeAgent.value.adapterHint ||
+        `${activeAgent.value.name} 当前不可用，请检查本地 CLI 安装与登录状态`,
+    );
+    return;
+  }
+
+  const conversation = getCurrentConversation();
+  if (inputRunning.value || conversation?.queuedMessages?.length) {
+    if (!conversation) return;
+    queueMessage(conversation, nextContent, options.attachments);
+    if (!inputRunning.value && !conversation.queuePaused) {
+      scheduleNextQueuedMessage(String(conversation.key));
+    }
+    return;
+  }
+
+  sendMessageNow(nextContent, options);
+};
+
+const handleQueuedMessageChange = (id: string, nextContent: string) => {
+  const conversation = getCurrentConversation();
+  if (!conversation) return;
+  const queuedMessage = conversation.queuedMessages?.find((item) => item.id === id);
+  if (!queuedMessage) return;
+  const content = nextContent.trim();
+  if (!content && !queuedMessage.attachments?.length) return;
+  queuedMessage.content = content;
+  schedulePersistState();
+};
+
+const handleQueuedMessageRemove = (id: string) => {
+  const conversation = getCurrentConversation();
+  if (!conversation) return;
+  conversation.queuedMessages = (conversation.queuedMessages ?? []).filter(
+    (item) => item.id !== id,
+  );
+  if (conversation.queuedMessages.length === 0) conversation.queuePaused = false;
+  schedulePersistState();
+};
+
+const handleQueuedMessageClear = () => {
+  const conversation = getCurrentConversation();
+  if (!conversation?.queuedMessages?.length) return;
+  if (!window.confirm("确定清空当前会话的待发送队列吗？")) return;
+  conversation.queuedMessages = [];
+  conversation.queuePaused = false;
+  schedulePersistState();
+};
+
+const handleQueuedMessageSend = () => {
+  const conversation = getCurrentConversation();
+  if (!conversation?.queuedMessages?.length || inputRunning.value || inputUnavailable.value) return;
+  conversation.queuePaused = false;
+  schedulePersistState();
+  scheduleNextQueuedMessage(String(conversation.key));
+};
+
+watch(
+  [currentConversationKey, inputRunning, inputUnavailable, isHydrating, currentQueuePaused],
+  () => {
+    const conversation = getCurrentConversation();
+    if (conversation?.queuedMessages?.length && !conversation.queuePaused) {
+      scheduleNextQueuedMessage(String(conversation.key));
+    }
+  },
+  { flush: "post" },
+);
 
 const handleProjectPathChange = (value: string) => {
   if (isRequesting.value) {
@@ -1833,6 +2113,7 @@ const handleReloadMessage = (messageId: string | number) => {
   activeRequestConversationKey.value = currentConversationKey.value;
   const baseSystemPrompt = currentConversation?.systemPrompt ?? "";
   const forwardProvider = getForwardProvider(currentModel.value);
+  activeRequestOutcome = "pending";
   onReload(messageId, {
     model: inputCurrentModel.value,
     mode: workMode.value,
@@ -2017,7 +2298,10 @@ const handleCommandPaletteSelectConversation = (key: string) => {
 
       <ChatInput
         v-model="content"
-        :loading="inputBusy"
+        :loading="inputRunning"
+        :disabled="inputUnavailable"
+        :queued-messages="currentQueuedMessages"
+        :queue-paused="currentQueuePaused"
         :run-state="acpRunState?.state ?? null"
         :current-model="inputCurrentModel"
         :current-model-label="inputCurrentModelLabel"
@@ -2037,6 +2321,10 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         @change="handleChange"
         @cancel="handleCancel"
         @submit="(value, attachments) => handleSubmit(value, { attachments })"
+        @queued-message-change="handleQueuedMessageChange"
+        @queued-message-remove="handleQueuedMessageRemove"
+        @queued-message-clear="handleQueuedMessageClear"
+        @queued-message-send="handleQueuedMessageSend"
         @model-change="handleModelChange"
         @thinking-change="handleThinkingChange"
         @mode-change="handleModeChange"
