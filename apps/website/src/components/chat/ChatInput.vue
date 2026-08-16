@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   ShieldQuestion,
   Square,
+  Trash2,
   X,
 } from "@lucide/vue";
 import { Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
@@ -24,6 +25,7 @@ import { computed, h, ref, watch, type Component } from "vue";
 import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import type { PermissionRequest } from "../../services/OpenChatProvider";
 import { aiService, type GitWorkspaceInfo, type UploadedAttachment } from "../../services/ai";
+import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../../utils/projectPath";
 import ModelIcon from "../Icons/ModelIcon.vue";
 
 interface Props {
@@ -62,6 +64,7 @@ interface Emits {
   (e: "thinkingChange", value: boolean): void;
   (e: "fileModeChange", value: boolean): void;
   (e: "projectPathChange", value: string): void;
+  (e: "projectPathRemove", value: string): void;
   (e: "modeChange", value: "build" | "plan"): void;
   (e: "permissionChange", value: "supervised" | "auto" | "full"): void;
   (e: "permissionResponse", value: "once" | "always" | "reject"): void;
@@ -87,21 +90,41 @@ const emit = defineEmits<Emits>();
 const projectPathPicking = ref(false);
 
 const pathName = (path: string): string => {
-  const normalized = path.trim().replace(/[\\/]+$/, "");
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || "";
+  const normalized = normalizeDirectoryPath(path);
+  return normalized.split(/[\\/]/).filter(Boolean).pop() || normalized;
 };
 
 const projectPathName = computed(() => pathName(String(props.projectPath || "")));
 
 const projectPathMenu = computed<MenuProps>(() => {
-  const paths = [...new Set(props.projectPathOptions.map((path) => String(path).trim()))].filter(
-    Boolean,
-  );
+  const paths = uniqueDirectoryPaths(props.projectPathOptions);
+  const currentPath = normalizeDirectoryPath(props.projectPath);
+  const currentIndex = paths.indexOf(currentPath);
   const items: NonNullable<MenuProps["items"]> = [
     { key: "__none__", label: "无文件目录", icon: h(Check) },
     ...paths.map((path, index) => ({
       key: `__path_${index}__`,
-      label: pathName(path) || "未命名目录",
+      label: h("div", { class: "project-path-menu-row", title: path }, [
+        h("span", { class: "project-path-menu-copy" }, [
+          h("span", { class: "project-path-menu-name" }, pathName(path) || "未命名目录"),
+          h("span", { class: "project-path-menu-location" }, path),
+        ]),
+        h(
+          "button",
+          {
+            type: "button",
+            class: "project-path-menu-remove",
+            title: "从列表移除",
+            "aria-label": `从列表移除 ${path}`,
+            onClick: (event: MouseEvent) => {
+              event.preventDefault();
+              event.stopPropagation();
+              emit("projectPathRemove", path);
+            },
+          },
+          [h(Trash2, { size: 14, "aria-hidden": "true" })],
+        ),
+      ]),
     })),
     { type: "divider" },
     { key: "__pick__", label: "选择其他目录", icon: h(FolderOpen) },
@@ -111,7 +134,7 @@ const projectPathMenu = computed<MenuProps>(() => {
     rootClass: "project-path-menu",
     items,
     selectable: true,
-    selectedKeys: [props.projectPath ? `__path_${paths.indexOf(props.projectPath)}__` : "__none__"],
+    selectedKeys: [currentIndex >= 0 ? `__path_${currentIndex}__` : "__none__"],
     onClick: ({ key }) => {
       if (key === "__none__") {
         emit("projectPathChange", "");
@@ -1366,10 +1389,10 @@ const chipClass = (active: boolean, disabled = false) => {
   margin: 4px 0;
 }
 
-/* 项目目录菜单只展示目录名；真实路径仍作为菜单项 key 对应的内部值。 */
+/* 项目目录菜单同时展示完整路径，便于区分不同位置的同名目录。 */
 :global(.project-path-menu) {
-  min-width: 180px;
-  max-width: min(300px, calc(100vw - 32px));
+  min-width: 260px;
+  max-width: min(380px, calc(100vw - 32px));
   max-height: min(360px, 60vh);
   overflow-y: auto;
   padding: 6px;
@@ -1388,9 +1411,55 @@ const chipClass = (active: boolean, disabled = false) => {
   white-space: nowrap;
 }
 :global(.project-path-menu .ant-dropdown-menu-item-content) {
+  min-width: 0;
+}
+:global(.project-path-menu-row) {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+:global(.project-path-menu-copy) {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+:global(.project-path-menu-name),
+:global(.project-path-menu-location) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+:global(.project-path-menu-name) {
+  color: var(--brand-foreground);
+  font-size: 12px;
+  line-height: 16px;
+}
+:global(.project-path-menu-location) {
+  color: var(--brand-muted-strong);
+  font-size: 10.5px;
+  line-height: 14px;
+}
+:global(.project-path-menu-remove) {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  background: transparent;
+  color: var(--brand-muted-strong);
+  cursor: pointer;
+}
+:global(.project-path-menu-remove:hover),
+:global(.project-path-menu-remove:focus-visible) {
+  background: var(--brand-danger-subtle);
+  color: var(--brand-danger);
+  outline: none;
 }
 :global(.project-path-menu .ant-dropdown-menu-item-divider) {
   margin: 4px 0;

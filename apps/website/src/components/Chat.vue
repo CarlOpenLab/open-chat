@@ -31,6 +31,7 @@ import {
   collectWorkspaceDiffStats,
   type EditableWorkspaceFile,
 } from "../utils/fileWorkspace";
+import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../utils/projectPath";
 import { FILE_WORKSPACE_SYSTEM_PROMPT } from "../prompts/fileWorkspace";
 import { loadChatState } from "../services/chatStorage";
 import {
@@ -310,10 +311,7 @@ const loadProjectPathHistory = () => {
     const normalized: Record<string, string[]> = {};
     for (const [agentId, paths] of Object.entries(stored)) {
       if (!Array.isArray(paths)) continue;
-      const unique = [...new Set(paths.filter((path): path is string => typeof path === "string"))]
-        .map((path) => path.trim())
-        .filter(Boolean)
-        .slice(0, 20);
+      const unique = uniqueDirectoryPaths(paths).slice(0, 20);
       if (unique.length) normalized[agentId] = unique;
     }
     projectPathHistory.value = normalized;
@@ -335,22 +333,35 @@ const rememberProjectPath = (value: string, agentId = activeAgentId.value) => {
   const path = normalizeProjectPath(value);
   if (!path) return;
   const previous = projectPathHistory.value[agentId] ?? [];
-  const paths = [path, ...previous.filter((item) => item !== path)].slice(0, 20);
+  const paths = uniqueDirectoryPaths([path, ...previous]).slice(0, 20);
   projectPathHistory.value = { ...projectPathHistory.value, [agentId]: paths };
   saveProjectPathHistory();
 };
 
+const forgetProjectPath = (value: string, agentId = activeAgentId.value) => {
+  const path = normalizeProjectPath(value);
+  if (!path) return;
+  const paths = uniqueDirectoryPaths(projectPathHistory.value[agentId] ?? []).filter(
+    (item) => item !== path,
+  );
+  const nextHistory = { ...projectPathHistory.value };
+  if (paths.length) nextHistory[agentId] = paths;
+  else delete nextHistory[agentId];
+  projectPathHistory.value = nextHistory;
+  saveProjectPathHistory();
+};
+
 const projectPathOptions = computed(() => {
-  const paths = (projectPathHistory.value[activeAgentId.value] ?? []).filter((path) =>
-    normalizeProjectPath(path),
+  const paths = uniqueDirectoryPaths(
+    (projectPathHistory.value[activeAgentId.value] ?? []).map(normalizeProjectPath),
   );
   const current = normalizeProjectPath(projectPath.value);
-  return current && !paths.includes(current) ? [current, ...paths] : paths;
+  return uniqueDirectoryPaths(current ? [current, ...paths] : paths);
 });
 
 const normalizeProjectPath = (value: string | undefined): string => {
-  const path = value?.trim() ?? "";
-  return path && path === defaultProjectPath.value ? "" : path;
+  const path = normalizeDirectoryPath(value);
+  return path && path === normalizeDirectoryPath(defaultProjectPath.value) ? "" : path;
 };
 
 const lastProjectPath = () => {
@@ -1357,7 +1368,7 @@ onMounted(async () => {
   if (loadedDefaultProjectPath) {
     projectPathHistory.value = Object.fromEntries(
       Object.entries(projectPathHistory.value)
-        .map(([agentId, paths]) => [agentId, paths.filter((path) => normalizeProjectPath(path))])
+        .map(([agentId, paths]) => [agentId, uniqueDirectoryPaths(paths.map(normalizeProjectPath))])
         .filter(([, paths]) => paths.length > 0),
     );
     saveProjectPathHistory();
@@ -1659,6 +1670,17 @@ const handleProjectPathChange = (value: string) => {
     schedulePersistState();
   }
   void refreshAcpSession();
+};
+
+const handleProjectPathRemove = (value: string) => {
+  if (isRequesting.value) {
+    message.warning("请先停止当前任务再删除项目目录");
+    return;
+  }
+  const removedPath = normalizeProjectPath(value);
+  if (!removedPath) return;
+  forgetProjectPath(removedPath);
+  if (normalizeProjectPath(projectPath.value) === removedPath) handleProjectPathChange("");
 };
 
 const handleA2UIAction = (payload: A2UIActionPayload) => {
@@ -2022,6 +2044,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         @permission-response="handlePermissionResponse"
         @file-mode-change="handleFileModeChange"
         @project-path-change="handleProjectPathChange"
+        @project-path-remove="handleProjectPathRemove"
       />
     </div>
 
