@@ -40,6 +40,7 @@ import { AgentManager } from "./agentManager";
 import { resolveExecutable } from "./commandEnv";
 import { pickProjectDirectory } from "./projectPicker";
 import { writeNativeEvent } from "./nativeEvents";
+import { readGitWorkspace, switchGitBranch } from "./gitWorkspace";
 
 /** 附件存储单例：落盘到 ~/.cc-hearts-open-code/attachments（OPEN_CHAT_DATA_DIR 可覆盖）。 */
 const attachments = new AttachmentStore();
@@ -184,6 +185,37 @@ export function createGatewayApp(runtime: GatewayRuntime, staticDir?: string): E
         res,
         GatewayError.upstream(err instanceof Error ? err.message : "系统目录选择器不可用"),
       );
+    }
+  });
+
+  app.get("/api/project-path/default", (req: Request, res: Response) => {
+    if (!isLoopbackRequest(req)) return sendGatewayError(res, GatewayError.unauthorized());
+    res.json({ path: defaultWorkspaceDir() });
+  });
+
+  app.get("/api/project-path/git", async (req: Request, res: Response) => {
+    try {
+      if (!isLoopbackRequest(req)) throw GatewayError.unauthorized();
+      const projectPath = parseProjectPath(requiredQuery(req, "path"));
+      if (!projectPath) throw GatewayError.invalidRequest("path 是必填项");
+      res.json(await readGitWorkspace(projectPath));
+    } catch (err) {
+      return sendRouteError(res, err, "Git 状态读取失败");
+    }
+  });
+
+  app.post("/api/project-path/git/switch", async (req: Request, res: Response) => {
+    try {
+      if (!isLoopbackRequest(req)) throw GatewayError.unauthorized();
+      const body = req.body as { path?: unknown; branch?: unknown };
+      const projectPath = parseProjectPath(body.path);
+      if (!projectPath) throw GatewayError.invalidRequest("path 是必填项");
+      if (typeof body.branch !== "string" || !body.branch.trim()) {
+        throw GatewayError.invalidRequest("branch 是必填项");
+      }
+      res.json(await switchGitBranch(projectPath, body.branch.trim()));
+    } catch (err) {
+      return sendRouteError(res, err, "Git 分支切换失败");
     }
   });
 
@@ -466,7 +498,12 @@ export async function startGateway(options: GatewayStartOptions): Promise<Gatewa
 }
 
 function createLocalChatManager(config: AppConfig): LocalChatManager | null {
-  if (config.local.enabled) return new LocalChatManager(config.local);
+  if (config.local.enabled) {
+    return new LocalChatManager({
+      ...config.local,
+      cwd: config.local.cwd || config.acp.cwd || defaultWorkspaceDir(),
+    });
+  }
 
   const openCode = config.acp.agents.find(
     (agent) => agent.transport === "opencode" && agent.enabled,
@@ -478,7 +515,7 @@ function createLocalChatManager(config: AppConfig): LocalChatManager | null {
     ...config.local,
     enabled: true,
     binary: executable,
-    cwd: openCode.cwd || config.acp.cwd || process.cwd(),
+    cwd: openCode.cwd || config.acp.cwd || defaultWorkspaceDir(),
   };
   return new LocalChatManager(localConfig);
 }

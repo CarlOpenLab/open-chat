@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Cpu,
   FolderOpen,
+  GitBranch,
   Hammer,
   ImagePlus,
   ListTodo,
@@ -22,7 +23,7 @@ import { Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, h, ref, watch, type Component } from "vue";
 import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import type { PermissionRequest } from "../../services/OpenChatProvider";
-import { aiService, type UploadedAttachment } from "../../services/ai";
+import { aiService, type GitWorkspaceInfo, type UploadedAttachment } from "../../services/ai";
 import ModelIcon from "../Icons/ModelIcon.vue";
 
 interface Props {
@@ -85,13 +86,12 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<Emits>();
 const projectPathPicking = ref(false);
 
-const projectPathName = computed(() => {
-  const normalized = String(props.projectPath || "")
-    .trim()
-    .replace(/[\\/]+$/, "");
-  const parts = normalized.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] || "";
-});
+const pathName = (path: string): string => {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  return normalized.split(/[\\/]/).filter(Boolean).pop() || "";
+};
+
+const projectPathName = computed(() => pathName(String(props.projectPath || "")));
 
 const projectPathMenu = computed<MenuProps>(() => {
   const paths = [...new Set(props.projectPathOptions.map((path) => String(path).trim()))].filter(
@@ -99,7 +99,10 @@ const projectPathMenu = computed<MenuProps>(() => {
   );
   const items: NonNullable<MenuProps["items"]> = [
     { key: "__none__", label: "无文件目录", icon: h(Check) },
-    ...paths.map((path, index) => ({ key: `__path_${index}__`, label: path })),
+    ...paths.map((path, index) => ({
+      key: `__path_${index}__`,
+      label: pathName(path) || "未命名目录",
+    })),
     { type: "divider" },
     { key: "__pick__", label: "选择其他目录", icon: h(FolderOpen) },
   ];
@@ -143,6 +146,85 @@ const pickProjectPath = async () => {
     projectPathPicking.value = false;
   }
 };
+
+const gitWorkspace = ref<GitWorkspaceInfo | null>(null);
+const gitWorkspacePath = ref("");
+const gitBranchSwitching = ref(false);
+let gitWorkspaceSequence = 0;
+
+const loadGitWorkspace = async (path = props.projectPath) => {
+  const projectPath = path.trim();
+  const sequence = ++gitWorkspaceSequence;
+  if (!projectPath) {
+    gitWorkspace.value = null;
+    gitWorkspacePath.value = "";
+    return;
+  }
+  if (gitWorkspacePath.value !== projectPath) gitWorkspace.value = null;
+  try {
+    const workspace = await aiService.getGitWorkspace(projectPath);
+    if (sequence === gitWorkspaceSequence && projectPath === props.projectPath.trim()) {
+      gitWorkspace.value = workspace;
+      gitWorkspacePath.value = projectPath;
+    }
+  } catch (error) {
+    if (sequence === gitWorkspaceSequence) {
+      message.error(error instanceof Error ? error.message : "Git 状态读取失败");
+    }
+  }
+};
+
+watch(
+  () => props.projectPath,
+  (path) => void loadGitWorkspace(path),
+  { immediate: true },
+);
+
+watch(
+  () => props.loading,
+  (loading, wasLoading) => {
+    if (wasLoading && !loading && props.projectPath.trim()) void loadGitWorkspace();
+  },
+);
+
+const handleGitMenuOpen = (open: boolean) => {
+  if (open && !props.loading && props.projectPath.trim()) void loadGitWorkspace();
+};
+
+const gitBranchLabel = computed(() => {
+  if (gitBranchSwitching.value) return "切换中...";
+  if (gitWorkspace.value?.currentBranch) {
+    return `${gitWorkspace.value.currentBranch}${gitWorkspace.value.dirty ? " *" : ""}`;
+  }
+  return gitWorkspace.value?.detached ? "detached HEAD" : "Git 分支";
+});
+
+const switchBranch = async (branch: string) => {
+  const projectPath = props.projectPath.trim();
+  if (!projectPath || gitBranchSwitching.value || branch === gitWorkspace.value?.currentBranch)
+    return;
+  gitBranchSwitching.value = true;
+  try {
+    gitWorkspace.value = await aiService.switchGitBranch(projectPath, branch);
+    message.success(`已切换到 ${branch}`);
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "Git 分支切换失败");
+  } finally {
+    gitBranchSwitching.value = false;
+  }
+};
+
+const gitBranchMenu = computed<MenuProps>(() => ({
+  rootClass: "git-branch-menu",
+  items: (gitWorkspace.value?.branches ?? []).map((branch) => ({
+    key: branch,
+    label: branch,
+    icon: branch === gitWorkspace.value?.currentBranch ? h(Check) : undefined,
+  })),
+  selectable: true,
+  selectedKeys: gitWorkspace.value?.currentBranch ? [gitWorkspace.value.currentBranch] : [],
+  onClick: ({ key }) => void switchBranch(String(key)),
+}));
 
 /** 让下拉菜单渲染在 .chat-app 内部，brand CSS 变量才能生效（antd 弹层默认挂到 body）。 */
 const popupIntoChat = (trigger: HTMLElement) => trigger.closest(".chat-app") ?? document.body;
@@ -647,9 +729,9 @@ const chipClass = (active: boolean, disabled = false) => {
     >
       <template #footer="{ defaultNode }">
         <div class="flex w-full flex-col gap-2">
-          <div class="flex min-h-[26px] w-full items-center justify-between gap-3">
+          <div class="sender-footer-row">
             <!-- composer 左排：附件、推理、工作模式和文件工作区 -->
-            <div class="flex min-w-0 items-center gap-[3px]">
+            <div class="sender-footer-primary">
               <Tooltip title="添加图片（支持粘贴 / 拖拽）">
                 <button
                   type="button"
@@ -738,50 +820,6 @@ const chipClass = (active: boolean, disabled = false) => {
                   <span>文件</span>
                 </button>
               </Tooltip>
-              <div
-                v-if="projectPathEnabled"
-                class="project-path-control"
-                :class="{ 'is-selected': Boolean(projectPath) }"
-              >
-                <Dropdown
-                  :menu="projectPathMenu"
-                  :trigger="['click']"
-                  placement="topLeft"
-                  :disabled="loading || projectPathPicking"
-                  :get-popup-container="popupIntoChat"
-                >
-                  <button
-                    type="button"
-                    :class="[
-                      chipClass(Boolean(projectPath), loading || projectPathPicking),
-                      { 'project-path-trigger-selected': Boolean(projectPath) },
-                    ]"
-                    :aria-pressed="Boolean(projectPath)"
-                    aria-label="项目工作目录"
-                    :title="projectPathPicking ? '等待系统目录选择器' : projectPath || '无文件目录'"
-                    :disabled="loading || projectPathPicking"
-                  >
-                    <FolderOpen
-                      class="!h-[12px] !w-[12px] flex-none"
-                      :class="projectPath ? 'text-brand-accent' : 'text-brand-muted-strong'"
-                    />
-                    <span class="project-path-chip-label" :title="projectPathName || '无文件目录'">
-                      {{ projectPathName || "无文件目录" }}
-                    </span>
-                  </button>
-                </Dropdown>
-                <Tooltip v-if="projectPath" title="清除项目目录">
-                  <button
-                    type="button"
-                    class="project-path-clear"
-                    aria-label="清除项目目录"
-                    :disabled="loading || projectPathPicking"
-                    @click="clearProjectPath"
-                  >
-                    <X class="!h-[11px] !w-[11px]" />
-                  </button>
-                </Tooltip>
-              </div>
               <span
                 v-if="runStateLabel"
                 class="ml-[6px] flex-none text-[11px] leading-[14px] text-brand-muted-strong"
@@ -790,7 +828,7 @@ const chipClass = (active: boolean, disabled = false) => {
             </div>
 
             <!-- composer 右排：模型选择 + 发送 / 停止 -->
-            <div class="flex min-w-0 flex-none items-center gap-[6px]">
+            <div class="sender-footer-secondary">
               <Dropdown
                 :menu="modelMenu"
                 v-model:open="modelMenuOpen"
@@ -845,6 +883,70 @@ const chipClass = (active: boolean, disabled = false) => {
         </div>
       </template>
     </Sender>
+    <div v-if="projectPathEnabled" class="sender-context-bar">
+      <div class="project-path-control" :class="{ 'is-selected': Boolean(projectPath) }">
+        <Dropdown
+          :menu="projectPathMenu"
+          :trigger="['click']"
+          placement="topLeft"
+          :disabled="loading || projectPathPicking"
+          :get-popup-container="popupIntoChat"
+        >
+          <button
+            type="button"
+            :class="[
+              chipClass(Boolean(projectPath), loading || projectPathPicking),
+              { 'project-path-trigger-selected': Boolean(projectPath) },
+            ]"
+            :aria-pressed="Boolean(projectPath)"
+            aria-label="项目工作目录"
+            :title="projectPathPicking ? '等待系统目录选择器' : projectPathName || '无文件目录'"
+            :disabled="loading || projectPathPicking"
+          >
+            <FolderOpen
+              class="!h-[12px] !w-[12px] flex-none"
+              :class="projectPath ? 'text-brand-accent' : 'text-brand-muted-strong'"
+            />
+            <span class="project-path-chip-label">
+              {{ projectPathName || "无文件目录" }}
+            </span>
+            <ChevronDown class="!h-3 !w-3 flex-none text-brand-muted-strong" />
+          </button>
+        </Dropdown>
+        <Tooltip v-if="projectPath" title="清除项目目录">
+          <button
+            type="button"
+            class="project-path-clear"
+            aria-label="清除项目目录"
+            :disabled="loading || projectPathPicking"
+            @click="clearProjectPath"
+          >
+            <X class="!h-[11px] !w-[11px]" />
+          </button>
+        </Tooltip>
+      </div>
+      <Dropdown
+        v-if="gitWorkspace?.isRepository"
+        :menu="gitBranchMenu"
+        :trigger="['click']"
+        placement="topLeft"
+        :disabled="loading || gitBranchSwitching"
+        :get-popup-container="popupIntoChat"
+        @open-change="handleGitMenuOpen"
+      >
+        <button
+          type="button"
+          :class="chipClass(true, loading || gitBranchSwitching)"
+          aria-label="Git 分支"
+          :title="gitBranchLabel"
+          :disabled="loading || gitBranchSwitching"
+        >
+          <GitBranch class="!h-[12px] !w-[12px] flex-none text-brand-accent" />
+          <span class="git-branch-chip-label">{{ gitBranchLabel }}</span>
+          <ChevronDown class="!h-3 !w-3 flex-none text-brand-muted-strong" />
+        </button>
+      </Dropdown>
+    </div>
     <div v-if="dragActive" class="drop-overlay">松开以添加图片</div>
   </section>
 </template>
@@ -952,6 +1054,16 @@ const chipClass = (active: boolean, disabled = false) => {
   align-items: center;
   gap: 1px;
 }
+.sender-context-bar {
+  display: flex;
+  width: 100%;
+  max-width: 760px;
+  min-height: 30px;
+  align-items: center;
+  gap: 4px;
+  margin: 4px auto 0;
+  padding: 0 2px;
+}
 .project-path-control.is-selected {
   border-radius: 6px;
   background: var(--brand-surface-subtle);
@@ -992,6 +1104,14 @@ const chipClass = (active: boolean, disabled = false) => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.git-branch-chip-label {
+  display: block;
+  min-width: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chat-footer :deep(.antd-sender-main:focus-within) {
   border-color: var(--brand-border-strong);
 }
@@ -1003,6 +1123,40 @@ const chipClass = (active: boolean, disabled = false) => {
 .chat-footer :deep(.antd-sender-footer) {
   min-height: 32px;
   padding: 0 10px 10px;
+}
+.sender-footer-row {
+  display: flex;
+  width: 100%;
+  min-height: 26px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.sender-footer-primary,
+.sender-footer-secondary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+.sender-footer-primary {
+  gap: 3px;
+}
+.sender-footer-secondary {
+  flex: none;
+  gap: 6px;
+}
+
+@media (max-width: 560px) {
+  .sender-footer-row {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+  .sender-footer-primary {
+    width: 100%;
+  }
+  .sender-footer-secondary {
+    margin-left: auto;
+  }
 }
 
 /* 附件预览行：输入框上方，仿 Waku composer 缩略图 chip */
@@ -1212,13 +1366,26 @@ const chipClass = (active: boolean, disabled = false) => {
   margin: 4px 0;
 }
 
-/* 项目目录菜单：路径通常较长，保持一行省略并限制弹层宽度。 */
+/* 项目目录菜单只展示目录名；真实路径仍作为菜单项 key 对应的内部值。 */
 :global(.project-path-menu) {
-  min-width: 220px;
-  max-width: min(420px, calc(100vw - 32px));
+  min-width: 180px;
+  max-width: min(300px, calc(100vw - 32px));
   max-height: min(360px, 60vh);
   overflow-y: auto;
   padding: 6px;
+}
+
+:global(.git-branch-menu) {
+  min-width: 180px;
+  max-width: min(320px, calc(100vw - 32px));
+  max-height: min(360px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+}
+:global(.git-branch-menu .ant-dropdown-menu-item-content) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 :global(.project-path-menu .ant-dropdown-menu-item-content) {
   overflow: hidden;

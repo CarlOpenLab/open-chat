@@ -40,6 +40,15 @@ export interface UploadedAttachment {
   path?: string;
 }
 
+export interface GitWorkspaceInfo {
+  isRepository: boolean;
+  root?: string;
+  currentBranch?: string;
+  branches: string[];
+  dirty: boolean;
+  detached: boolean;
+}
+
 /** 附件渲染 URL（历史消息图片按引用读取）。 */
 export function attachmentUrl(reference: string, name: string): string {
   return `${API_BASE_URL}/api/attachments/${encodeURIComponent(reference)}/${encodeURIComponent(name)}`;
@@ -114,6 +123,34 @@ export const aiService = {
     };
   },
 
+  async getDefaultProjectPath(): Promise<string> {
+    const response = await fetch(`${API_BASE_URL}/api/project-path/default`, {
+      headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
+    });
+    const data = (await response.json().catch(() => ({}))) as {
+      path?: unknown;
+      error?: { message?: string };
+    };
+    if (!response.ok) {
+      throw new Error(data.error?.message || `默认目录读取失败（HTTP ${response.status}）`);
+    }
+    return typeof data.path === "string" ? data.path.trim() : "";
+  },
+
+  async getGitWorkspace(path: string): Promise<GitWorkspaceInfo> {
+    return requestGitWorkspace(
+      `${API_BASE_URL}/api/project-path/git?${new URLSearchParams({ path })}`,
+    );
+  },
+
+  async switchGitBranch(path: string, branch: string): Promise<GitWorkspaceInfo> {
+    return requestGitWorkspace(`${API_BASE_URL}/api/project-path/git/switch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, branch }),
+    });
+  },
+
   /**
    * 上传附件（图片/文件）到网关，落盘 `~/.cc-hearts-open-code/attachments/`。
    * 返回持久引用，后续发送消息与历史渲染都只用引用，字节不再回传浏览器。
@@ -150,3 +187,28 @@ export const aiService = {
     };
   },
 };
+
+async function requestGitWorkspace(url: string, init: RequestInit = {}): Promise<GitWorkspaceInfo> {
+  const headers = new Headers(init.headers);
+  if (GATEWAY_API_KEY) headers.set("Authorization", `Bearer ${GATEWAY_API_KEY}`);
+  const response = await fetch(url, {
+    ...init,
+    headers,
+  });
+  const data = (await response.json().catch(() => ({}))) as Partial<GitWorkspaceInfo> & {
+    error?: { message?: string };
+  };
+  if (!response.ok) {
+    throw new Error(data.error?.message || `Git 操作失败（HTTP ${response.status}）`);
+  }
+  return {
+    isRepository: data.isRepository === true,
+    root: typeof data.root === "string" ? data.root : undefined,
+    currentBranch: typeof data.currentBranch === "string" ? data.currentBranch : undefined,
+    branches: Array.isArray(data.branches)
+      ? data.branches.filter((branch): branch is string => typeof branch === "string")
+      : [],
+    dirty: data.dirty === true,
+    detached: data.detached === true,
+  };
+}

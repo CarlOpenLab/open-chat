@@ -8,6 +8,7 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import {
   API_BASE_URL,
   GATEWAY_API_KEY,
+  aiService,
   type UploadedAttachment,
   type WebSearchSourceItem,
 } from "../services/ai";
@@ -105,6 +106,7 @@ const permissionMode = ref<"supervised" | "auto" | "full">("full");
 const fileModeEnabled = ref(false);
 const projectPath = ref("");
 const draftProjectPath = ref("");
+const defaultProjectPath = ref("");
 const PROJECT_PATH_HISTORY_KEY = "open-chat-project-paths-v1";
 const projectPathHistory = ref<Record<string, string[]>>({});
 const selectedWorkspacePath = ref<string[]>([]);
@@ -330,7 +332,7 @@ const saveProjectPathHistory = () => {
 };
 
 const rememberProjectPath = (value: string, agentId = activeAgentId.value) => {
-  const path = value.trim();
+  const path = normalizeProjectPath(value);
   if (!path) return;
   const previous = projectPathHistory.value[agentId] ?? [];
   const paths = [path, ...previous.filter((item) => item !== path)].slice(0, 20);
@@ -339,12 +341,22 @@ const rememberProjectPath = (value: string, agentId = activeAgentId.value) => {
 };
 
 const projectPathOptions = computed(() => {
-  const paths = projectPathHistory.value[activeAgentId.value] ?? [];
-  const current = projectPath.value.trim();
+  const paths = (projectPathHistory.value[activeAgentId.value] ?? []).filter((path) =>
+    normalizeProjectPath(path),
+  );
+  const current = normalizeProjectPath(projectPath.value);
   return current && !paths.includes(current) ? [current, ...paths] : paths;
 });
 
-const lastProjectPath = () => projectPathHistory.value[activeAgentId.value]?.[0] ?? "";
+const normalizeProjectPath = (value: string | undefined): string => {
+  const path = value?.trim() ?? "";
+  return path && path === defaultProjectPath.value ? "" : path;
+};
+
+const lastProjectPath = () => {
+  const paths = projectPathHistory.value[activeAgentId.value] ?? [];
+  return paths.map(normalizeProjectPath).find(Boolean) ?? "";
+};
 
 loadProjectPathHistory();
 
@@ -831,8 +843,9 @@ const syncProviderConversations = async (agentId: string, pollSequence?: number)
           existing.label = providerSession.title.trim();
           changed = true;
         }
-        if (existing.projectPath !== providerSession.cwd) {
-          existing.projectPath = providerSession.cwd;
+        const providerProjectPath = normalizeProjectPath(providerSession.cwd);
+        if (existing.projectPath !== providerProjectPath) {
+          existing.projectPath = providerProjectPath;
           changed = true;
         }
         if (Number.isFinite(updatedAt) && existing.updatedAt !== updatedAt) {
@@ -852,7 +865,7 @@ const syncProviderConversations = async (agentId: string, pollSequence?: number)
         systemPrompt: "",
         agentId,
         providerSessionId: providerSession.sessionId,
-        projectPath: providerSession.cwd,
+        projectPath: normalizeProjectPath(providerSession.cwd),
       });
       changed = true;
     }
@@ -913,8 +926,9 @@ const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
         existing.providerSessionId = session.sessionId;
         changed = true;
       }
-      if (session.projectPath && existing.projectPath !== session.projectPath) {
-        existing.projectPath = session.projectPath;
+      const sessionProjectPath = normalizeProjectPath(session.projectPath);
+      if (sessionProjectPath && existing.projectPath !== sessionProjectPath) {
+        existing.projectPath = sessionProjectPath;
         changed = true;
       }
       continue;
@@ -930,7 +944,9 @@ const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
       systemPrompt: "",
       agentId: session.agentId,
       providerSessionId: session.sessionId,
-      ...(session.projectPath ? { projectPath: session.projectPath } : {}),
+      ...(normalizeProjectPath(session.projectPath)
+        ? { projectPath: normalizeProjectPath(session.projectPath) }
+        : {}),
     });
     changed = true;
   }
@@ -1265,7 +1281,7 @@ watch(currentConversationKey, (key) => {
     projectPath.value = draftProjectPath.value;
     return;
   }
-  const conversationPath = getCurrentConversation()?.projectPath?.trim() ?? "";
+  const conversationPath = normalizeProjectPath(getCurrentConversation()?.projectPath);
   projectPath.value = conversationPath;
   if (conversationPath) rememberProjectPath(conversationPath);
 });
@@ -1329,13 +1345,23 @@ onMounted(async () => {
   }
 
   const initialChatPath = window.location.pathname;
-  const [persistedState, loadedAgents] = await Promise.all([
+  const [persistedState, loadedAgents, loadedDefaultProjectPath] = await Promise.all([
     loadChatState(),
     loadAcpAgents().catch((error) => {
       console.error("Failed to load local agents:", error);
       return [API_AGENT];
     }),
+    aiService.getDefaultProjectPath().catch(() => ""),
   ]);
+  defaultProjectPath.value = loadedDefaultProjectPath;
+  if (loadedDefaultProjectPath) {
+    projectPathHistory.value = Object.fromEntries(
+      Object.entries(projectPathHistory.value)
+        .map(([agentId, paths]) => [agentId, paths.filter((path) => normalizeProjectPath(path))])
+        .filter(([, paths]) => paths.length > 0),
+    );
+    saveProjectPathHistory();
+  }
   agents.value = loadedAgents;
   const storedAgentId = localStorage.getItem("open-chat-agent") || "";
   const storedAgent = loadedAgents.find((agent) => agent.id === storedAgentId);
@@ -1344,6 +1370,9 @@ onMounted(async () => {
 
   if (persistedState && persistedState.conversationList.length > 0) {
     applyPersistedState(persistedState);
+    for (const conversation of conversationList.value) {
+      conversation.projectPath = normalizeProjectPath(conversation.projectPath);
+    }
   } else {
     conversationList.value = [];
     currentConversationKey.value = "";
@@ -1620,7 +1649,7 @@ const handleProjectPathChange = (value: string) => {
     message.warning("请先停止当前任务再切换项目目录");
     return;
   }
-  const nextPath = value.trim();
+  const nextPath = normalizeProjectPath(value);
   projectPath.value = nextPath;
   if (!currentConversationKey.value) draftProjectPath.value = nextPath;
   if (nextPath) rememberProjectPath(nextPath);
