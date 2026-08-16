@@ -113,14 +113,19 @@ export function modelMessagesToBubbleItems(
   return messages
     .filter(({ message, extraInfo }) => !isA2UISubmissionContextMessage(message, extraInfo))
     .map(({ id, message, status, extraInfo }, index) => {
+      // Antdv's `loading` prop replaces the content renderer with its own
+      // skeleton. Keep assistant waiting rows in the same renderer as the
+      // streaming response so the existing "工作中" indicator is visible
+      // immediately after submission.
+      const assistantWaiting = message.role === "assistant" && status === "loading";
       const timing = extraInfo as
         | { turnStartedAtMs?: unknown; turnDurationMs?: unknown }
         | undefined;
       return {
         key: id ?? `message-${index}`,
         role: message.role,
-        status,
-        loading: status === "loading",
+        status: assistantWaiting ? "updating" : status,
+        loading: status === "loading" && !assistantWaiting,
         content: typeof message.content === "string" ? message.content : "",
         extraInfo: {
           reasoningContent:

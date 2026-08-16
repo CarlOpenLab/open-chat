@@ -718,7 +718,7 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
   },
   // Keep a visible assistant row mounted while the gateway is preparing the
   // first event, so the outgoing message transitions directly into feedback.
-  requestPlaceholder: () => ({ content: "正在思考…", role: "assistant" }),
+  requestPlaceholder: () => ({ content: "", role: "assistant" }),
 });
 
 /** 输入区忙碌态：本地请求进行中，或 Open Chat 网关中的会话在跑（多标签 / 刷新恢复）。 */
@@ -1428,8 +1428,10 @@ const bubbleItems = computed(() => {
   if (!hasStreamingAssistant) {
     optimisticItems.push({
       id: `${pending.id}:thinking`,
-      status: "loading",
-      message: { role: "assistant", content: "正在思考…" },
+      // Render through AssistantMessageContent so the waiting phase uses the
+      // same "工作中" indicator as the subsequent streamed response.
+      status: "updating",
+      message: { role: "assistant", content: "" },
     });
   }
   return modelMessagesToBubbleItems(optimisticItems);
