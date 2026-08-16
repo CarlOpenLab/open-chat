@@ -31,10 +31,8 @@ interface Props {
   currentKey: string;
   canGoBack?: boolean;
   canGoForward?: boolean;
-  /** 正在请求的会话 key，该条目显示「工作中」与已运行时长 */
-  busyKey?: string;
-  /** 当前请求开始时间，用于「工作中」条目的计时 */
-  busySince?: number;
+  /** 所有运行中会话；key 为本地会话 key，值包含任务开始时间。 */
+  busyStates?: Record<string, { startedAt: number }>;
   /** 当前是否深色主题，底栏的主题切换按钮据此换图标 */
   dark?: boolean;
   agents?: AgentView[];
@@ -60,8 +58,7 @@ interface Emits {
 const props = withDefaults(defineProps<Props>(), {
   canGoBack: false,
   canGoForward: false,
-  busyKey: "",
-  busySince: 0,
+  busyStates: () => ({}),
   dark: true,
   agents: () => [],
   activeAgentId: "api",
@@ -185,7 +182,8 @@ const conversationMeta = (conversation: OpenChatConversation): string => {
  */
 const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
   const conversation = item as OpenChatConversation;
-  const busy = Boolean(props.busyKey) && String(item.key) === props.busyKey;
+  const busyState = props.busyStates[String(item.key)];
+  const busy = Boolean(busyState);
   const title = String(conversation.label ?? "").trim() || "新对话";
   const metaText = conversationMeta(conversation);
 
@@ -203,7 +201,9 @@ const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
           "span",
           { class: busy ? "conversation-entry-time is-busy" : "conversation-entry-time" },
           busy
-            ? `工作中 · ${formatElapsedDuration(nowTick.value - (props.busySince || nowTick.value))}`
+            ? `工作中 · ${formatElapsedDuration(
+                nowTick.value - (busyState?.startedAt ?? nowTick.value),
+              )}`
             : formatRelativeTime(conversation.updatedAt as number | undefined, nowTick.value),
         ),
       ]),
@@ -278,7 +278,7 @@ const handleShortcut = (event: KeyboardEvent) => {
 };
 
 watch(
-  () => Boolean(props.busyKey),
+  () => Object.keys(props.busyStates).length > 0,
   (busy) => {
     nowTick.value = Date.now();
     startTick(busy ? 1000 : 30000);

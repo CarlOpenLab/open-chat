@@ -30,6 +30,9 @@ Reasoning, tool calls, plans, and file changes are activity data inside an assis
 Codex / Claude / Pi / OMP / OpenCode / ACP
                     │ provider protocol
                     ▼
+          SessionRunRegistry (Open Chat 任务)
+                    │ snapshot + replay + live SSE
+                    ▼
        transcript/adapters/<provider>.ts
                     │ TranscriptMessage / TranscriptStreamEvent
                     ▼
@@ -84,6 +87,16 @@ History uses camel-case JSON fields. OpenAI-compatible streaming keeps `content`
 | `transcript/stream.ts`     | Canonical event to SSE serialization                                |
 
 Managers may retain provider lifecycle state such as a process handle, current turn ID, or pending permission. Renderable content must cross the transcript adapter boundary before it leaves the server.
+
+## Open Chat Run Synchronization
+
+`SessionRunRegistry` tracks only turns started by the current Open Chat gateway. At the start of a turn, `AgentManager` stores the provider-neutral history snapshot plus the new user message. It then mirrors every SSE frame written by ACP and native CLI managers into a bounded per-turn buffer.
+
+While an ACP provider is active, the browser periodically refreshes both `GET /api/acp/provider-sessions?agentId=...` (provider-owned session directory and metadata) and `GET /api/acp/sessions?agentId=...` (gateway-owned run state). The loop runs every two seconds while any task is running and every five seconds while idle; hidden pages pause it and resume with an immediate refresh. Each run-state entry exposes `conversationId`, `sessionId`, `running`, and `startedAt`. The gateway-owned query is distinct from provider session discovery and does not claim to detect CLI turns started directly in a terminal.
+
+When a user opens a running session, `GET /api/acp/session/stream` returns the stored snapshot, replays frames already emitted for the active turn, then remains attached to live frames. The UI applies every frame through `OpenChatProvider` and the existing `useXChat` message state. On stream completion it reloads provider history as the final source of truth. Loading or switching a session is read-only from the sidebar's ordering perspective; `updatedAt` changes only when a new user turn is submitted.
+
+Disconnecting the originating browser tab does not cancel a gateway-owned task. Explicit cancellation calls `/api/acp/session/cancel`. The registry is in memory, so a gateway restart ends its tracking and cannot restore an in-flight run.
 
 ## Website Ownership
 

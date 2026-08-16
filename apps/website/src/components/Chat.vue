@@ -34,10 +34,12 @@ import {
   loadAcpAgents,
   loadAcpProviderSessions,
   loadAcpSession,
+  loadOpenChatSessions,
   setAcpSessionConfig,
   subscribeAcpSessionStream,
   type AcpSessionState,
   type AgentView,
+  type OpenChatSessionView,
 } from "../services/acp";
 import {
   appendTranscriptMessageToModelMessages,
@@ -199,6 +201,7 @@ const acpRunState = ref<AcpRunStateNotice | null>(null);
 /** 会话实时输出订阅（多标签 / 刷新恢复后观看运行中的回合）。 */
 const acpStreamController = ref<AbortController | null>(null);
 let acpStreamMessageSeq = 0;
+const openChatSessions = ref<OpenChatSessionView[]>([]);
 const draftConversationKey = ref("");
 
 // 面板尺寸（sidebar 180–420，right panel 280–1000）
@@ -395,6 +398,9 @@ const refreshAcpSession = async () => {
       }
       if (Array.isArray(session.history) && session.history.length > 0) {
         conversation.messages = transcriptHistoryToModelMessages(session.history);
+        if (String(conversation.key) === currentConversationKey.value && !isRequesting.value) {
+          setMessages(conversation.messages);
+        }
         showWelcome.value = false;
       }
       schedulePersistState();
@@ -482,7 +488,6 @@ const updateConversationMessages = (
   if (!conv) return;
 
   conv.messages = newMessages;
-  conv.updatedAt = Date.now();
 
   // 如果有消息，更新对话标题为首条用户消息摘要
   if (newMessages.length > 0 && conv.label === "新对话") {
@@ -562,7 +567,9 @@ const handleAgentChange = (agentId: string) => {
   if (!next.available) {
     message.warning(next.adapterHint || `${next.name} 当前不可用，请检查本地 CLI 安装与登录状态`);
   }
-  if (next.kind === "acp" && next.available) void syncProviderConversations(next.id);
+  if (next.kind === "acp" && next.available) {
+    void syncProviderConversations(next.id);
+  }
 };
 
 const closeSidebar = () => {
@@ -640,11 +647,49 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
   requestPlaceholder: () => ({ content: "", role: "assistant" }),
 });
 
-/** 输入区忙碌态：本地请求进行中，或 ACP 会话在跑（多标签 / 刷新恢复，可停止）。
- * native（pi/omp）会话只读观看，不显示停止按钮。 */
+/** 输入区忙碌态：本地请求进行中，或 Open Chat 网关中的会话在跑（多标签 / 刷新恢复）。 */
 const inputBusy = computed(
-  () => isRequesting.value || (usesAcpProtocol.value && acpRunState.value?.state === "running"),
+  () =>
+    isRequesting.value ||
+    Boolean(currentOpenChatRun.value) ||
+    (usesAcpProtocol.value && acpRunState.value?.state === "running"),
 );
+
+const sessionMatchesConversation = (
+  session: OpenChatSessionView,
+  conversation: OpenChatConversation,
+): boolean =>
+  session.agentId === (conversation.agentId || "api") &&
+  (session.conversationId === String(conversation.key) ||
+    Boolean(
+      conversation.providerSessionId &&
+      session.sessionId &&
+      conversation.providerSessionId === session.sessionId,
+    ));
+
+const currentOpenChatRun = computed(() => {
+  const conversation = getCurrentConversation();
+  if (!conversation) return undefined;
+  return openChatSessions.value.find(
+    (session) => session.running && sessionMatchesConversation(session, conversation),
+  );
+});
+
+const conversationBusyStates = computed<Record<string, { startedAt: number }>>(() => {
+  const states: Record<string, { startedAt: number }> = {};
+  for (const conversation of conversationList.value) {
+    const run = openChatSessions.value.find(
+      (session) => session.running && sessionMatchesConversation(session, conversation),
+    );
+    if (run) states[String(conversation.key)] = { startedAt: run.startedAt ?? run.lastUsed };
+  }
+  if (isRequesting.value && activeRequestConversationKey.value) {
+    states[activeRequestConversationKey.value] = {
+      startedAt: requestStartedAt.value || Date.now(),
+    };
+  }
+  return states;
+});
 
 // ============ 会话持久化 ============
 
@@ -668,23 +713,24 @@ const {
 });
 
 /**
- * Provider session listing is authoritative for provider-owned metadata. IndexedDB
- * keeps the stable UI key and cached transcript so selecting a provider session
- * can immediately render its last local snapshot while the provider is loaded.
+ * Provider session listing supplies provider-owned metadata. IndexedDB keeps the
+ * stable UI key and cached transcript, including sessions missing temporarily
+ * from a provider response, so selecting a session can render its local snapshot
+ * before the provider history arrives.
  */
-const syncProviderConversations = async (agentId: string): Promise<void> => {
+const syncProviderConversations = async (agentId: string, pollSequence?: number): Promise<void> => {
   const agent = agents.value.find((item) => item.id === agentId);
   if (!agent || agent.kind !== "acp" || !agent.available) return;
   try {
     const result = await loadAcpProviderSessions(agentId);
+    if (
+      pollSequence !== undefined &&
+      (pollSequence !== sessionPollSequence || agentId !== activeAgentId.value)
+    ) {
+      return;
+    }
     if (!result.supported) return;
-    const providerSessionIds = new Set(result.sessions.map((session) => session.sessionId));
-    conversationList.value = conversationList.value.filter(
-      (item) =>
-        item.agentId !== agentId ||
-        !item.providerSessionId ||
-        providerSessionIds.has(item.providerSessionId),
-    );
+    let changed = false;
     for (const providerSession of result.sessions) {
       const existing = conversationList.value.find(
         (item) => item.agentId === agentId && item.providerSessionId === providerSession.sessionId,
@@ -698,9 +744,16 @@ const syncProviderConversations = async (agentId: string): Promise<void> => {
           (!String(existing.label ?? "").trim() || existing.label === "新对话")
         ) {
           existing.label = providerSession.title.trim();
+          changed = true;
         }
-        existing.projectPath = providerSession.cwd;
-        if (Number.isFinite(updatedAt)) existing.updatedAt = updatedAt;
+        if (existing.projectPath !== providerSession.cwd) {
+          existing.projectPath = providerSession.cwd;
+          changed = true;
+        }
+        if (Number.isFinite(updatedAt) && existing.updatedAt !== updatedAt) {
+          existing.updatedAt = updatedAt;
+          changed = true;
+        }
         continue;
       }
       conversationList.value.push({
@@ -716,11 +769,159 @@ const syncProviderConversations = async (agentId: string): Promise<void> => {
         providerSessionId: providerSession.sessionId,
         projectPath: providerSession.cwd,
       });
+      changed = true;
     }
-    schedulePersistState();
+    if (changed) schedulePersistState();
   } catch (error) {
     console.error(`Failed to load ${agentId} provider sessions:`, error);
   }
+};
+
+let sessionPollTimer: ReturnType<typeof setTimeout> | null = null;
+let sessionPollController: AbortController | null = null;
+let sessionPollSequence = 0;
+
+const stopSessionPolling = () => {
+  if (sessionPollTimer !== null) {
+    clearTimeout(sessionPollTimer);
+    sessionPollTimer = null;
+  }
+  sessionPollController?.abort();
+  sessionPollController = null;
+};
+
+const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
+  let changed = false;
+  for (const session of sessions) {
+    if (!session.running) continue;
+    const exact = conversationList.value.find(
+      (conversation) =>
+        conversation.agentId === session.agentId &&
+        String(conversation.key) === session.conversationId,
+    );
+    const existing =
+      exact ??
+      conversationList.value.find(
+        (conversation) =>
+          sessionMatchesConversation(session, conversation) ||
+          (conversation.agentId === session.agentId &&
+            conversation.providerSessionId === session.sessionId),
+      );
+    if (existing) {
+      // Provider polling can discover a new provider id before the run-state
+      // response arrives. Keep the gateway conversation key used by the run
+      // registry and remove that temporary provider-only duplicate.
+      if (exact && session.sessionId) {
+        for (let index = conversationList.value.length - 1; index >= 0; index -= 1) {
+          const candidate = conversationList.value[index];
+          if (
+            candidate !== exact &&
+            candidate.agentId === session.agentId &&
+            candidate.providerSessionId === session.sessionId
+          ) {
+            conversationList.value.splice(index, 1);
+            changed = true;
+          }
+        }
+      }
+      if (session.sessionId && existing.providerSessionId !== session.sessionId) {
+        existing.providerSessionId = session.sessionId;
+        changed = true;
+      }
+      if (session.projectPath && existing.projectPath !== session.projectPath) {
+        existing.projectPath = session.projectPath;
+        changed = true;
+      }
+      continue;
+    }
+    conversationList.value.push({
+      key: session.conversationId,
+      label: "新对话",
+      group: "今天",
+      updatedAt: session.lastUsed,
+      messages: [],
+      a2uiSubmissions: [],
+      workspaceDrafts: [],
+      systemPrompt: "",
+      agentId: session.agentId,
+      providerSessionId: session.sessionId,
+      ...(session.projectPath ? { projectPath: session.projectPath } : {}),
+    });
+    changed = true;
+  }
+  if (changed) schedulePersistState();
+};
+
+const scheduleSessionPoll = (delayMs: number) => {
+  if (sessionPollTimer !== null) clearTimeout(sessionPollTimer);
+  sessionPollTimer = setTimeout(() => {
+    sessionPollTimer = null;
+    void pollSessionLists();
+  }, delayMs);
+};
+
+const pollSessionLists = async () => {
+  if (isHydrating.value || document.visibilityState === "hidden") return;
+  const agent = activeAgent.value;
+  if (agent.kind !== "acp" || !agent.available) {
+    openChatSessions.value = [];
+    scheduleSessionPoll(15_000);
+    return;
+  }
+
+  const sequence = ++sessionPollSequence;
+  const agentId = agent.id;
+  const controller = new AbortController();
+  sessionPollController = controller;
+  try {
+    const [providerResult, openChatResult] = await Promise.allSettled([
+      syncProviderConversations(agentId, sequence),
+      loadOpenChatSessions(agentId, controller.signal),
+    ]);
+    if (sequence !== sessionPollSequence || agentId !== activeAgentId.value) return;
+
+    if (openChatResult.status === "fulfilled") {
+      const sessions = openChatResult.value;
+      openChatSessions.value = sessions;
+      reconcileRunningConversations(sessions);
+      const selectedConversation = getCurrentConversation();
+      const selectedRun = selectedConversation
+        ? sessions.find(
+            (session) =>
+              session.running && sessionMatchesConversation(session, selectedConversation),
+          )
+        : undefined;
+      if (!isRequesting.value) {
+        acpRunState.value = selectedRun ? { state: "running" } : null;
+      }
+    } else if ((openChatResult.reason as Error)?.name !== "AbortError") {
+      console.error("Failed to poll Open Chat session state:", openChatResult.reason);
+    }
+    if (providerResult.status === "rejected") {
+      console.error("Failed to poll provider sessions:", providerResult.reason);
+    }
+  } catch (error) {
+    console.error("Failed to poll session lists:", error);
+  } finally {
+    if (sequence === sessionPollSequence) {
+      sessionPollController = null;
+      const hasRunningSession = openChatSessions.value.some((session) => session.running);
+      scheduleSessionPoll(hasRunningSession ? 2_000 : 5_000);
+    }
+  }
+};
+
+const restartSessionPolling = () => {
+  stopSessionPolling();
+  sessionPollSequence += 1;
+  if (!isHydrating.value && document.visibilityState !== "hidden") {
+    scheduleSessionPoll(0);
+  }
+};
+
+const handleVisibilityChange = () => {
+  if (document.visibilityState === "hidden") stopSessionPolling();
+  else restartSessionPolling();
 };
 
 /**
@@ -823,44 +1024,11 @@ watch(isRequesting, (requesting) => {
   acpRunState.value = null;
 });
 
-/** ACP 运行态轮询：会话在跑但不是本标签页发起的请求（刷新恢复 / 多标签页）时，
- * 定期查询服务端，回合结束后同步最终 history 并清除运行态。 */
-let acpRunPollTimer: ReturnType<typeof setInterval> | null = null;
-const pollAcpRunState = async () => {
-  if (!isAcpAgent.value || !activeAgent.value.available) return;
-  const conversationId = currentConversationKey.value || ensureDraftConversationKey();
-  const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
-  const sessionProjectPath = conversation?.projectPath ?? projectPath.value;
-  try {
-    const session = await loadAcpSession(
-      activeAgentId.value,
-      conversationId,
-      sessionProjectPath,
-      isAcpAgent.value ? conversation?.providerSessionId : "",
-    );
-    if (session.running) return;
-    acpRunState.value = null;
-    void refreshAcpSession();
-  } catch (error) {
-    // 轮询失败静默处理，下一轮或手动刷新兜底
-    console.error("Failed to poll ACP run state:", error);
-  }
-};
-watch([acpRunState, isRequesting], ([state, requesting]) => {
-  // 轮询只对 ACP 有意义（native 的 running 由事件活跃度推断）
-  const shouldPoll = usesAcpProtocol.value && state?.state === "running" && !requesting;
-  if (shouldPoll && acpRunPollTimer === null) {
-    acpRunPollTimer = setInterval(() => void pollAcpRunState(), 2000);
-  } else if (!shouldPoll && acpRunPollTimer !== null) {
-    clearInterval(acpRunPollTimer);
-    acpRunPollTimer = null;
-  }
-});
+// ============ 会话实时输出（Open Chat 任务事件总线） ============
 
-// ============ 会话实时输出（ACP 事件总线 / native 会话文件尾随） ============
-
-/** native（pi/omp）没有协议级 running 状态：用事件活跃度推断，5 秒无新事件视为空闲。 */
+/** 兼容旧的 native 文件尾随流：没有协议级状态时用事件活跃度推断。 */
 let nativeStreamIdleTimer: ReturnType<typeof setTimeout> | null = null;
+let acpStreamConversationKey = "";
 const touchNativeStreamActivity = () => {
   if (usesAcpProtocol.value) return;
   acpRunState.value = { state: "running" };
@@ -880,6 +1048,7 @@ const stopAcpLiveStream = () => {
     acpStreamController.value.abort();
     acpStreamController.value = null;
   }
+  acpStreamConversationKey = "";
 };
 
 /** 复用 OpenChatProvider.transformMessage 累积当前回合输出，与常规请求同一渲染管线。 */
@@ -933,18 +1102,18 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
 
 /** 订阅当前会话的实时输出：ACP 在会话运行且本页无本地请求时；native（pi/omp）打开会话即尾随文件。 */
 const startAcpLiveStream = () => {
-  stopAcpLiveStream();
   if (!isAcpAgent.value || !activeAgent.value.available) return;
   const conversationId = currentConversationKey.value || ensureDraftConversationKey();
   const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
   if (!conversation) return;
-  if (usesAcpProtocol.value) {
-    // ACP：会话在跑（服务端 activeRuns）且本页无本地请求
-    if (acpRunState.value?.state !== "running" || isRequesting.value) return;
-  } else {
-    // native（pi/omp）：CLI 会话随时可能写入，打开即订阅
-    if (!conversation.providerSessionId) return;
-  }
+  // 只订阅由 Open Chat 网关管理的运行中会话；外部 CLI 会话不在本轮范围内。
+  const selectedRun = currentOpenChatRun.value;
+  const isRunning = Boolean(selectedRun) || acpRunState.value?.state === "running";
+  if (!isRunning || isRequesting.value) return;
+  const streamKey = `${activeAgentId.value}:${conversationId}`;
+  if (acpStreamController.value && acpStreamConversationKey === streamKey) return;
+  stopAcpLiveStream();
+  acpStreamConversationKey = streamKey;
   const controller = subscribeAcpSessionStream(
     activeAgentId.value,
     conversationId,
@@ -953,33 +1122,36 @@ const startAcpLiveStream = () => {
     () => {
       if (acpStreamController.value !== controller) return;
       acpStreamController.value = null;
-      if (usesAcpProtocol.value) {
-        // ACP 回合结束：服务端历史已完整，以最终状态收尾
-        void refreshAcpSession();
-      }
+      acpStreamConversationKey = "";
+      // 回合结束：服务端历史已完整，以最终状态收尾并让列表轮询纠正运行态。
+      void refreshAcpSession();
+      restartSessionPolling();
     },
   );
   acpStreamController.value = controller;
 };
 
-watch([acpRunState, isRequesting, currentConversationKey, activeAgentId], () => {
-  if (isRequesting.value) {
-    stopAcpLiveStream();
-    return;
-  }
-  if (usesAcpProtocol.value) {
-    if (acpRunState.value?.state === "running") startAcpLiveStream();
-    else stopAcpLiveStream();
-    return;
-  }
-  const conversationId = currentConversationKey.value || ensureDraftConversationKey();
-  const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
-  if (conversation?.providerSessionId) startAcpLiveStream();
-  else stopAcpLiveStream();
-});
+watch(
+  [acpRunState, currentOpenChatRun, isRequesting, currentConversationKey, activeAgentId],
+  () => {
+    if (isRequesting.value) {
+      stopAcpLiveStream();
+      return;
+    }
+    if (currentOpenChatRun.value || acpRunState.value?.state === "running") {
+      startAcpLiveStream();
+    } else {
+      stopAcpLiveStream();
+    }
+  },
+);
 
 watch([activeAgentId, currentConversationKey, isHydrating], () => {
   void refreshAcpSession();
+});
+
+watch(activeAgentId, () => {
+  restartSessionPolling();
 });
 
 watch(currentConversationKey, (key) => {
@@ -1039,6 +1211,7 @@ const handleWorkspaceKeydown = (event: KeyboardEvent) => {
 onMounted(async () => {
   window.addEventListener("keydown", handleWorkspaceKeydown);
   window.addEventListener("popstate", handleRoutePopState);
+  document.addEventListener("visibilitychange", handleVisibilityChange);
   if (window.matchMedia("(max-width: 767px)").matches) {
     conversationsOpen.value = false;
     rightPanelOpen.value = false;
@@ -1070,17 +1243,16 @@ onMounted(async () => {
   await syncProviderConversations(activeAgentId.value);
   // URL 直达：打开复制的链接时恢复对应供应商与会话
   await restoreRouteConversation(initialChatPath);
+  restartSessionPolling();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleWorkspaceKeydown);
   window.removeEventListener("popstate", handleRoutePopState);
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
   window.removeEventListener("mousemove", handleResizeMove);
   window.removeEventListener("mouseup", handleResizeEnd);
-  if (acpRunPollTimer !== null) {
-    clearInterval(acpRunPollTimer);
-    acpRunPollTimer = null;
-  }
+  stopSessionPolling();
   stopAcpLiveStream();
 });
 
@@ -1115,7 +1287,7 @@ const bubbleItems = computed(() => modelMessagesToBubbleItems(currentConversatio
 
 const handlePromptClick = (info: { data: { key?: string; description?: string } }) => {
   const prompt = typeof info.data.description === "string" ? info.data.description : "";
-  if (isRequesting.value || !prompt) return;
+  if (inputBusy.value || !prompt) return;
 
   showWelcome.value = false;
   handleSubmit(prompt);
@@ -1194,7 +1366,7 @@ const handleSubmit = (
   } = {},
 ) => {
   if (!nextContent || !nextContent.trim()) return;
-  if (isRequesting.value) return;
+  if (inputBusy.value) return;
   if (!activeAgent.value.available) {
     message.warning(
       activeAgent.value.adapterHint ||
@@ -1229,6 +1401,8 @@ const handleSubmit = (
   if (options.systemPrompt !== undefined) {
     conversation.systemPrompt = options.systemPrompt.trim();
   }
+  // 只有真正提交新消息才改变会话排序；读取、恢复和实时回放保持原顺序。
+  conversation.updatedAt = Date.now();
   setMessages(currentConversationMessages.value);
   activeRequestConversationKey.value = currentConversationKey.value;
 
@@ -1541,8 +1715,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
             :current-key="currentConversationKey"
             :can-go-back="historyBack.length > 0"
             :can-go-forward="historyForward.length > 0"
-            :busy-key="isRequesting ? activeRequestConversationKey : ''"
-            :busy-since="requestStartedAt"
+            :busy-states="conversationBusyStates"
             :dark="dark"
             :agents="agents"
             :active-agent-id="activeAgentId"
