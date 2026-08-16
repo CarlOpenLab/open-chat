@@ -2,8 +2,8 @@ import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ServerResponse } from "node:http";
-import { createReadStream } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
+import { createReadStream, watch, type FSWatcher } from "node:fs";
+import { open, readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
@@ -218,6 +218,121 @@ export class NativeCliManager {
       }
       default:
         return { supported: false, sessions: [] };
+    }
+  }
+
+  /** 订阅 CLI（pi / omp）会话实时输出：先发历史快照，再尾随会话文件推送新增消息（只读，不写入文件）。
+   * 用于把终端里正在运行的会话实时渲染到 WEB UI。找不到会话或 transport 不支持时返回 false。 */
+  async subscribeSessionStream(
+    agentId: string,
+    conversationId: string,
+    res: ServerResponse,
+  ): Promise<boolean> {
+    const agent = this.requireAgent(agentId);
+    if (agent.transport !== "pi" && agent.transport !== "omp") return false;
+    const session = [...this.sessions.values()].find(
+      (entry) => entry.agentId === agentId && entry.conversationId === conversationId,
+    );
+    if (!session) return false;
+    const sessionId = session.sessionId;
+    if (!sessionId || sessionId === conversationId) return false;
+    const cwd = session.projectPath || agent.cwd || this.config.cwd || process.cwd();
+    const file = await findPiSessionPath(sessionId, cwd, agent.transport as NativeTransport);
+    if (!file) return false;
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    // 1) 快照：已有历史（CLI 会话此前的内容）
+    const history = await this.readProviderHistory(agent, sessionId, cwd, true);
+    res.write(`event: snapshot\ndata: ${JSON.stringify({ messages: history })}\n\n`);
+
+    // 2) 尾随文件：从当前末尾开始读新增行，转成 SSE 事件
+    const handle = await open(file, "r");
+    let position = (await handle.stat()).size;
+    let buffer = "";
+    let watcher: FSWatcher | null = null;
+    let timer: NodeJS.Timeout | null = null;
+    const cleanup = () => {
+      watcher?.close();
+      if (timer) clearInterval(timer);
+      void handle.close().catch(() => {});
+    };
+    res.on("close", cleanup);
+    const flush = async () => {
+      try {
+        const { size } = await handle.stat();
+        while (position < size) {
+          const chunk = Buffer.alloc(Math.min(size - position, 64 * 1024));
+          const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+          if (bytesRead <= 0) break;
+          position += bytesRead;
+          buffer += chunk.toString("utf8").slice(0, bytesRead);
+          let newline: number;
+          while ((newline = buffer.indexOf("\n")) !== -1) {
+            const line = buffer.slice(0, newline);
+            buffer = buffer.slice(newline + 1);
+            if (line.trim()) this.emitNativeTailLine(res, line);
+          }
+        }
+      } catch {
+        // 文件被删除/替换等：静默，下一次 flush 或 close 兜底
+      }
+    };
+    watcher = watch(file, () => void flush());
+    timer = setInterval(() => void flush(), 1000);
+    return true;
+  }
+
+  /** 把会话文件的一行增量事件转成 SSE 帧（复用前端 ACP stream 渲染管线）。 */
+  private emitNativeTailLine(res: ServerResponse, line: string): void {
+    let value: Record<string, unknown>;
+    try {
+      value = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    if (stringValue(value.type) !== "message") return;
+    const message = asRecord(value.message);
+    const role = stringValue(message?.role);
+    const content = message?.content;
+    const blocks = Array.isArray(content) ? content : [];
+    const text = messageContentText(content);
+    const reasoning = blocks
+      .map((block) => asRecord(block))
+      .filter((block) => stringValue(block?.type) === "thinking")
+      .map((block) => stringValue(block?.thinking))
+      .filter(Boolean)
+      .join("\n");
+    if (role === "user" || role === "assistant") {
+      if (!text && !reasoning) return;
+      res.write(
+        `event: native_message\ndata: ${JSON.stringify({
+          id: stringValue(value.id) || randomUUID(),
+          role,
+          content: text,
+          ...(reasoning ? { reasoningContent: reasoning } : {}),
+        })}\n\n`,
+      );
+      return;
+    }
+    if (role === "tool" || role === "toolResult") {
+      const isResult = role === "toolResult";
+      const toolCallId = stringValue(message?.toolCallId);
+      if (!toolCallId) return;
+      const toolOutput = contentText(content);
+      const tool: Record<string, unknown> = {
+        id: toolCallId,
+        name: stringValue(message?.toolName) || "tool",
+        status: isResult ? "completed" : "running",
+        ...(!isResult ? { input: content } : {}),
+        ...(isResult && toolOutput ? { output: toolOutput } : {}),
+      };
+      res.write(`event: tool_call\ndata: ${JSON.stringify(tool)}\n\n`);
+      return;
     }
   }
 
@@ -1625,7 +1740,7 @@ function convertPiHistory(lines: Array<Record<string, unknown>>): NativeSessionH
     const role = stringValue(message?.role);
     if (role !== "user" && role !== "assistant") continue;
     const content = message?.content;
-    const text = contentText(content);
+    const text = messageContentText(content);
     const blocks = Array.isArray(content) ? content : [];
     const reasoning = blocks
       .map((block) => asRecord(block))
@@ -1986,6 +2101,20 @@ function contentText(value: unknown): string {
       if (typeof part === "string") return part;
       const record = asRecord(part);
       return stringValue(record?.text) || stringValue(record?.thinking);
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** 消息正文：只取 type=text 的内容块；thinking 块由 reasoningContent 单独提取，避免与思考面板重复显示。 */
+function messageContentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value
+    .map((part) => {
+      if (typeof part === "string") return part;
+      const record = asRecord(part);
+      return stringValue(record?.type) === "thinking" ? "" : stringValue(record?.text);
     })
     .filter(Boolean)
     .join("\n");

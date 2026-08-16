@@ -193,11 +193,11 @@ export function createGatewayApp(runtime: GatewayRuntime, staticDir?: string): E
   });
 
   // 会话实时输出：SSE 订阅（多标签 / 刷新恢复后继续观看运行中的回合）
-  app.get("/api/acp/session/stream", (req: Request, res: Response) => {
+  app.get("/api/acp/session/stream", async (req: Request, res: Response) => {
     try {
       const agentId = requiredQuery(req, "agentId");
       const conversationId = requiredQuery(req, "conversationId");
-      if (!agentManager.subscribeSessionStream(agentId, conversationId, res)) {
+      if (!(await agentManager.subscribeSessionStream(agentId, conversationId, res))) {
         res.status(404).json({ error: "会话不存在，请先创建或恢复会话" });
         return;
       }

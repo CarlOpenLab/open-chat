@@ -378,7 +378,10 @@ const refreshAcpSession = async () => {
     if (sequence !== acpSessionLoadSequence) return;
     acpSession.value = session;
     // 以服务端 activeRuns 为准；若回合恰在本次加载后结束，轮询（pollAcpRunState）兜底纠正。
-    acpRunState.value = session.running ? { state: "running" } : null;
+    // native（pi/omp）的 running 由流事件活跃度推断（touchNativeStreamActivity），不在此设置。
+    if (usesAcpProtocol.value) {
+      acpRunState.value = session.running ? { state: "running" } : null;
+    }
     if (conversation && conversation.agentId === activeAgentId.value) {
       if (
         isAcpAgent.value &&
@@ -402,6 +405,8 @@ const refreshAcpSession = async () => {
       }
       schedulePersistState();
     }
+    // native（pi/omp）：服务端 entry 已就绪后再启动文件尾随流，避免 404 竞态
+    if (!usesAcpProtocol.value) startAcpLiveStream();
   } catch (error) {
     if (sequence !== acpSessionLoadSequence) return;
     acpSession.value = null;
@@ -641,8 +646,11 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
   requestPlaceholder: () => ({ content: "", role: "assistant" }),
 });
 
-/** 输入区忙碌态：本地请求进行中，或 ACP 会话在跑（多标签 / 刷新恢复，可停止）。 */
-const inputBusy = computed(() => isRequesting.value || acpRunState.value?.state === "running");
+/** 输入区忙碌态：本地请求进行中，或 ACP 会话在跑（多标签 / 刷新恢复，可停止）。
+ * native（pi/omp）会话只读观看，不显示停止按钮。 */
+const inputBusy = computed(
+  () => isRequesting.value || (usesAcpProtocol.value && acpRunState.value?.state === "running"),
+);
 
 // ============ 会话持久化 ============
 
@@ -845,7 +853,8 @@ const pollAcpRunState = async () => {
   }
 };
 watch([acpRunState, isRequesting], ([state, requesting]) => {
-  const shouldPoll = state?.state === "running" && !requesting;
+  // 轮询只对 ACP 有意义（native 的 running 由事件活跃度推断）
+  const shouldPoll = usesAcpProtocol.value && state?.state === "running" && !requesting;
   if (shouldPoll && acpRunPollTimer === null) {
     acpRunPollTimer = setInterval(() => void pollAcpRunState(), 2000);
   } else if (!shouldPoll && acpRunPollTimer !== null) {
@@ -854,9 +863,25 @@ watch([acpRunState, isRequesting], ([state, requesting]) => {
   }
 });
 
-// ============ ACP 会话实时输出（多标签 / 刷新恢复后观看运行中的回合） ============
+// ============ 会话实时输出（ACP 事件总线 / native 会话文件尾随） ============
+
+/** native（pi/omp）没有协议级 running 状态：用事件活跃度推断，5 秒无新事件视为空闲。 */
+let nativeStreamIdleTimer: ReturnType<typeof setTimeout> | null = null;
+const touchNativeStreamActivity = () => {
+  if (usesAcpProtocol.value) return;
+  acpRunState.value = { state: "running" };
+  if (nativeStreamIdleTimer) clearTimeout(nativeStreamIdleTimer);
+  nativeStreamIdleTimer = setTimeout(() => {
+    acpRunState.value = null;
+    nativeStreamIdleTimer = null;
+  }, 5000);
+};
 
 const stopAcpLiveStream = () => {
+  if (nativeStreamIdleTimer) {
+    clearTimeout(nativeStreamIdleTimer);
+    nativeStreamIdleTimer = null;
+  }
   if (acpStreamController.value) {
     acpStreamController.value.abort();
     acpStreamController.value = null;
@@ -890,6 +915,63 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
     }
     return;
   }
+  if (event === "native_message") {
+    try {
+      const parsed = JSON.parse(data) as {
+        id?: string;
+        role?: string;
+        content?: string;
+        reasoningContent?: string;
+      };
+      if (parsed.role === "user" || parsed.role === "assistant") {
+        touchNativeStreamActivity();
+        showWelcome.value = false;
+        const msgs = messages.value;
+        const last = msgs[msgs.length - 1];
+        const text = parsed.content ?? "";
+        const reasoning = parsed.reasoningContent ?? "";
+        const isAssistant = parsed.role === "assistant";
+        // 同一回合的连续 assistant 内容块合并进上一条消息；thinking 块持续标记"思考中"，
+        // 首个正文块到达后把 reasoningDone 置为完成。
+        if (isAssistant && last && last.message.role === "assistant") {
+          const prev = last.message;
+          const prevContent = typeof prev.content === "string" ? prev.content : "";
+          const prevReasoning =
+            typeof prev.reasoningContent === "string" ? prev.reasoningContent : "";
+          setMessages([
+            ...msgs.slice(0, -1),
+            {
+              ...last,
+              message: {
+                ...prev,
+                content: text ? `${prevContent}${text}` : prevContent,
+                ...(reasoning
+                  ? { reasoningContent: `${prevReasoning}${reasoning}`, reasoningDone: false }
+                  : {}),
+                ...(text && prevReasoning ? { reasoningDone: true } : {}),
+              },
+            },
+          ]);
+        } else {
+          setMessages([
+            ...msgs,
+            {
+              id: parsed.id ?? `native-stream-${++acpStreamMessageSeq}`,
+              status: "success",
+              message: {
+                role: parsed.role as "user" | "assistant",
+                content: text,
+                ...(reasoning ? { reasoningContent: reasoning, reasoningDone: false } : {}),
+              },
+            },
+          ]);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to parse native stream message:", err);
+    }
+    return;
+  }
   const msgs = messages.value;
   const last = msgs[msgs.length - 1];
   const accumulating = !!last && last.message.role === "assistant";
@@ -911,14 +993,20 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
   }
 };
 
-/** 订阅当前会话的实时输出（仅 ACP 会话在跑且本页无本地请求时）。 */
+/** 订阅当前会话的实时输出：ACP 在会话运行且本页无本地请求时；native（pi/omp）打开会话即尾随文件。 */
 const startAcpLiveStream = () => {
   stopAcpLiveStream();
   if (!isAcpAgent.value || !activeAgent.value.available) return;
-  if (acpRunState.value?.state !== "running" || isRequesting.value) return;
   const conversationId = currentConversationKey.value || ensureDraftConversationKey();
   const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
   if (!conversation) return;
+  if (usesAcpProtocol.value) {
+    // ACP：会话在跑（服务端 activeRuns）且本页无本地请求
+    if (acpRunState.value?.state !== "running" || isRequesting.value) return;
+  } else {
+    // native（pi/omp）：CLI 会话随时可能写入，打开即订阅
+    if (!conversation.providerSessionId) return;
+  }
   const controller = subscribeAcpSessionStream(
     activeAgentId.value,
     conversationId,
@@ -927,15 +1015,28 @@ const startAcpLiveStream = () => {
     () => {
       if (acpStreamController.value !== controller) return;
       acpStreamController.value = null;
-      // 回合结束：服务端历史已完整（含用户消息与工具调用），以最终状态收尾
-      void refreshAcpSession();
+      if (usesAcpProtocol.value) {
+        // ACP 回合结束：服务端历史已完整，以最终状态收尾
+        void refreshAcpSession();
+      }
     },
   );
   acpStreamController.value = controller;
 };
 
 watch([acpRunState, isRequesting, currentConversationKey, activeAgentId], () => {
-  if (acpRunState.value?.state === "running" && !isRequesting.value) startAcpLiveStream();
+  if (isRequesting.value) {
+    stopAcpLiveStream();
+    return;
+  }
+  if (usesAcpProtocol.value) {
+    if (acpRunState.value?.state === "running") startAcpLiveStream();
+    else stopAcpLiveStream();
+    return;
+  }
+  const conversationId = currentConversationKey.value || ensureDraftConversationKey();
+  const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
+  if (conversation?.providerSessionId) startAcpLiveStream();
   else stopAcpLiveStream();
 });
 

@@ -125,7 +125,7 @@ The gateway exposes provider-neutral endpoints for the workspace UI:
 - `GET /api/acp/agents` lists configured agents and their `installed` / `available` status.
 - `GET /api/acp/sessions?agentId=codex` lists active in-memory session mappings, each with a `running` flag reflecting whether a turn is in progress.
 - `GET /api/acp/session?agentId=codex&conversationId=...` creates or reuses a native or ACP session and returns its modes, configuration options, history, and `running` state.
-- `GET /api/acp/session/stream?agentId=codex&conversationId=...` subscribes to a running ACP session's live output over SSE (snapshot + replay + live frames), so other tabs or a refreshed page can keep watching the turn.
+- `GET /api/acp/session/stream?agentId=codex&conversationId=...` subscribes to a running session's live output over SSE (snapshot + replay + live frames), so other tabs or a refreshed page can keep watching the turn. For Pi / Oh My Pi sessions it tails the CLI's session file, streaming a CLI session that is still running in a terminal into the web UI (read-only view).
 - `POST /api/acp/session/cancel` stops a running ACP turn (e.g. an orphaned turn after the requesting tab disconnected).
 - `POST /api/acp/session/config` updates a session option, such as the selected model.
 - `POST /api/chat/completions` starts an OpenAI-compatible or local-agent request and can stream normalized events over SSE.
