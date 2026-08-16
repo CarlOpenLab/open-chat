@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { BubbleItemType, ConversationsProps } from "@antdv-next/x";
+import type { ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest, useXChat } from "@antdv-next/x-sdk";
@@ -18,7 +18,6 @@ import {
   appendA2UISurfaceIdContext,
   createA2UISubmission,
   formatA2UISubmissionAsUserMessage,
-  isA2UISubmissionContextMessage,
   type A2UIActionPayload,
 } from "../utils/a2ui";
 import {
@@ -37,10 +36,15 @@ import {
   loadAcpSession,
   setAcpSessionConfig,
   subscribeAcpSessionStream,
-  type AcpSessionHistoryMessage,
   type AcpSessionState,
   type AgentView,
 } from "../services/acp";
+import {
+  appendTranscriptMessageToModelMessages,
+  modelMessagesToBubbleItems,
+  transcriptHistoryToModelMessages,
+  type TranscriptMessage,
+} from "../services/transcript";
 import { useChatModels, type ModelCatalogEntry } from "../composables/useChatModels";
 import {
   getMessagePreview,
@@ -390,17 +394,7 @@ const refreshAcpSession = async () => {
         conversation.providerSessionId = session.sessionId;
       }
       if (Array.isArray(session.history) && session.history.length > 0) {
-        conversation.messages = session.history.map((item) => ({
-          id: item.id,
-          status: "success",
-          message: {
-            role: item.role,
-            content: item.content,
-            ...(item.reasoningContent ? { reasoningContent: item.reasoningContent } : {}),
-            ...(item.toolCalls ? { toolCalls: item.toolCalls } : {}),
-            ...(item.agentPlan ? { agentPlan: item.agentPlan } : {}),
-          },
-        }));
+        conversation.messages = transcriptHistoryToModelMessages(session.history);
         showWelcome.value = false;
       }
       schedulePersistState();
@@ -893,21 +887,9 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
   if (data === "[DONE]") return;
   if (event === "snapshot") {
     try {
-      const parsed = JSON.parse(data) as { messages?: AcpSessionHistoryMessage[] };
+      const parsed = JSON.parse(data) as { messages?: TranscriptMessage[] };
       if (Array.isArray(parsed.messages)) {
-        setMessages(
-          parsed.messages.map((item) => ({
-            id: item.id,
-            status: "success",
-            message: {
-              role: item.role,
-              content: item.content,
-              ...(item.reasoningContent ? { reasoningContent: item.reasoningContent } : {}),
-              ...(item.toolCalls ? { toolCalls: item.toolCalls } : {}),
-              ...(item.agentPlan ? { agentPlan: item.agentPlan } : {}),
-            },
-          })),
-        );
+        setMessages(transcriptHistoryToModelMessages(parsed.messages));
         showWelcome.value = false;
       }
     } catch (err) {
@@ -915,60 +897,16 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
     }
     return;
   }
-  if (event === "native_message") {
+  if (event === "transcript_message") {
     try {
-      const parsed = JSON.parse(data) as {
-        id?: string;
-        role?: string;
-        content?: string;
-        reasoningContent?: string;
-      };
+      const parsed = JSON.parse(data) as TranscriptMessage;
       if (parsed.role === "user" || parsed.role === "assistant") {
         touchNativeStreamActivity();
         showWelcome.value = false;
-        const msgs = messages.value;
-        const last = msgs[msgs.length - 1];
-        const text = parsed.content ?? "";
-        const reasoning = parsed.reasoningContent ?? "";
-        const isAssistant = parsed.role === "assistant";
-        // 同一回合的连续 assistant 内容块合并进上一条消息；thinking 块持续标记"思考中"，
-        // 首个正文块到达后把 reasoningDone 置为完成。
-        if (isAssistant && last && last.message.role === "assistant") {
-          const prev = last.message;
-          const prevContent = typeof prev.content === "string" ? prev.content : "";
-          const prevReasoning =
-            typeof prev.reasoningContent === "string" ? prev.reasoningContent : "";
-          setMessages([
-            ...msgs.slice(0, -1),
-            {
-              ...last,
-              message: {
-                ...prev,
-                content: text ? `${prevContent}${text}` : prevContent,
-                ...(reasoning
-                  ? { reasoningContent: `${prevReasoning}${reasoning}`, reasoningDone: false }
-                  : {}),
-                ...(text && prevReasoning ? { reasoningDone: true } : {}),
-              },
-            },
-          ]);
-        } else {
-          setMessages([
-            ...msgs,
-            {
-              id: parsed.id ?? `native-stream-${++acpStreamMessageSeq}`,
-              status: "success",
-              message: {
-                role: parsed.role as "user" | "assistant",
-                content: text,
-                ...(reasoning ? { reasoningContent: reasoning, reasoningDone: false } : {}),
-              },
-            },
-          ]);
-        }
+        setMessages(appendTranscriptMessageToModelMessages(messages.value, parsed));
       }
     } catch (err) {
-      console.error("Failed to parse native stream message:", err);
+      console.error("Failed to parse transcript stream message:", err);
     }
     return;
   }
@@ -1171,55 +1109,7 @@ const handleResizeEnd = () => {
 
 // ============ 消息转换 ============
 
-const bubbleItems = computed<BubbleItemType[]>(() => {
-  return currentConversationMessages.value
-    .filter(
-      ({ message: modelMessage, extraInfo }) =>
-        !isA2UISubmissionContextMessage(modelMessage, extraInfo),
-    )
-    .map(({ id, message: modelMessage, status, extraInfo }) => {
-      const persistedTiming = extraInfo as
-        | { turnStartedAtMs?: unknown; turnDurationMs?: unknown }
-        | undefined;
-
-      return {
-        key: id,
-        role: modelMessage.role,
-        status,
-        loading: status === "loading",
-        content: typeof modelMessage.content === "string" ? modelMessage.content : "",
-        // 工具调用 / 上游错误 / 重试提示：由 OpenChatProvider 累积在消息对象上。
-        extraInfo: {
-          reasoningContent:
-            typeof modelMessage.reasoningContent === "string"
-              ? modelMessage.reasoningContent
-              : undefined,
-          reasoningDone:
-            typeof modelMessage.reasoningDone === "boolean"
-              ? modelMessage.reasoningDone
-              : undefined,
-          toolCalls: Array.isArray(modelMessage.toolCalls) ? modelMessage.toolCalls : undefined,
-          chatError:
-            typeof modelMessage.chatError === "string" ? modelMessage.chatError : undefined,
-          chatNotices: Array.isArray(modelMessage.chatNotices)
-            ? modelMessage.chatNotices
-            : undefined,
-          agentPlan:
-            modelMessage.agentPlan && typeof modelMessage.agentPlan === "object"
-              ? modelMessage.agentPlan
-              : undefined,
-          turnStartedAtMs:
-            typeof persistedTiming?.turnStartedAtMs === "number"
-              ? persistedTiming.turnStartedAtMs
-              : undefined,
-          turnDurationMs:
-            typeof persistedTiming?.turnDurationMs === "number"
-              ? persistedTiming.turnDurationMs
-              : undefined,
-        },
-      };
-    });
-});
+const bubbleItems = computed(() => modelMessagesToBubbleItems(currentConversationMessages.value));
 
 // ============ 事件处理 ============
 

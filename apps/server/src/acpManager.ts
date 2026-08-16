@@ -10,7 +10,6 @@ import {
   type RequestPermissionResponse,
   type SessionConfigOption,
   type SessionNotification,
-  type SessionUpdate,
 } from "@agentclientprotocol/sdk";
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
@@ -19,6 +18,18 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AcpAgentConfig, AcpConfig } from "./config";
 import { cliProcessEnv, resolveExecutable } from "./commandEnv";
 import { GatewayError } from "./error";
+import {
+  collectAcpHistoryUpdate,
+  normalizeAcpActivity,
+  normalizeAcpPlan,
+} from "./transcript/adapters/acp";
+import { createTranscriptCollector } from "./transcript/core";
+import {
+  createTranscriptChunk,
+  writeTranscriptCustomEvent,
+  writeTranscriptData,
+} from "./transcript/stream";
+import type { TranscriptHistoryCollector, TranscriptMessage } from "./transcript/types";
 
 export interface AcpAgentView {
   id: string;
@@ -39,19 +50,10 @@ export interface AcpSessionStateView {
   sessionId: string;
   configOptions: SessionConfigOption[];
   modes: NewSessionResponse["modes"];
-  history: AcpSessionHistoryMessage[];
+  history: TranscriptMessage[];
   loadSupported: boolean;
   /** 该 ACP 会话当前是否正在运行（服务端 activeRuns，回合进行中为 true）。 */
   running: boolean;
-}
-
-export interface AcpSessionHistoryMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  reasoningContent?: string;
-  toolCalls?: Array<Record<string, unknown>>;
-  agentPlan?: Record<string, unknown>;
 }
 
 interface AcpProviderSessionView {
@@ -81,7 +83,7 @@ interface AcpSessionEntry {
   conversationId: string;
   sessionId: string;
   response: AcpSessionResponse;
-  history: AcpSessionHistoryMessage[];
+  history: TranscriptMessage[];
   createdAt: number;
   lastUsed: number;
 }
@@ -102,12 +104,6 @@ interface PendingPermission {
   timer: ReturnType<typeof setTimeout>;
 }
 
-interface AcpHistoryCollector {
-  messages: AcpSessionHistoryMessage[];
-  nextId: number;
-  activeRole: "user" | "assistant" | null;
-}
-
 /** 会话事件流缓冲条目（SSE 帧的序列化形态）。 */
 interface AcpBusEvent {
   /** SSE 事件名；null 表示普通 `data:` 帧。 */
@@ -126,7 +122,7 @@ export class AcpManager {
   private readonly sessions = new Map<string, AcpSessionEntry>();
   private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
-  private readonly historyCollectors = new Map<string, AcpHistoryCollector>();
+  private readonly historyCollectors = new Map<string, TranscriptHistoryCollector>();
   private readonly busBuffers = new Map<string, AcpBusEvent[]>();
   private readonly busSubscribers = new Map<string, Set<ServerResponse>>();
   /** 各会话当前回合开始时历史消息数（快照重放的分界点）。 */
@@ -420,7 +416,7 @@ export class AcpManager {
         throw GatewayError.invalidRequest(`${runtime.config.name} 不支持恢复历史 ACP 会话`);
       }
 
-      const collector: AcpHistoryCollector = { messages: [], nextId: 0, activeRole: null };
+      const collector = createTranscriptCollector();
       this.historyCollectors.set(normalizedProviderSessionId, collector);
       const response = await connection.loadSession({
         sessionId: normalizedProviderSessionId,
@@ -445,7 +441,7 @@ export class AcpManager {
     });
     // 常驻 collector：新会话也在生命周期内持续收集消息（含后续回合），
     // 供状态查询与订阅快照重建完整会话视图。
-    const collector: AcpHistoryCollector = { messages: [], nextId: 0, activeRole: null };
+    const collector = createTranscriptCollector();
     this.historyCollectors.set(response.sessionId, collector);
     const entry: AcpSessionEntry = {
       agentId: runtime.config.id,
@@ -556,7 +552,7 @@ export class AcpManager {
 
   private handleSessionUpdate(notification: SessionNotification): void {
     const collector = this.historyCollectors.get(notification.sessionId);
-    if (collector) collectHistoryUpdate(collector, notification.update);
+    if (collector) collectAcpHistoryUpdate(collector, notification.update);
     if (notification.update.sessionUpdate === "config_option_update") {
       const session = [...this.sessions.values()].find(
         (entry) => entry.sessionId === notification.sessionId,
@@ -589,11 +585,11 @@ export class AcpManager {
       }
       case "tool_call":
       case "tool_call_update":
-        this.emitCustom(notification.sessionId, res, "tool_call", normalizeToolCall(update));
+        this.emitCustom(notification.sessionId, res, "tool_call", normalizeAcpActivity(update));
         break;
       case "plan":
       case "plan_update":
-        this.emitCustom(notification.sessionId, res, "acp_plan", update);
+        this.emitCustom(notification.sessionId, res, "acp_plan", normalizeAcpPlan(update));
         break;
       case "available_commands_update":
       case "current_mode_update":
@@ -745,16 +741,10 @@ export class AcpManager {
     delta: Record<string, unknown>,
     finishReason: string | null = null,
   ): void {
-    const payload = {
-      id: `chatcmpl-${Date.now()}`,
-      object: "chat.completion.chunk",
-      created: Math.floor(Date.now() / 1000),
-      model,
-      choices: [{ index: 0, delta, finish_reason: finishReason }],
-    };
+    const payload = createTranscriptChunk(model, delta, { finishReason });
     this.publishToBus(sessionId, null, payload);
     if (res && !res.writableEnded && !res.destroyed) {
-      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      writeTranscriptData(res, payload);
     }
   }
 
@@ -767,7 +757,7 @@ export class AcpManager {
   ): void {
     this.publishToBus(sessionId, event, data);
     if (res && !res.writableEnded && !res.destroyed) {
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      writeTranscriptCustomEvent(res, event, data);
     }
   }
 }
@@ -787,64 +777,6 @@ function sessionStateView(
     loadSupported,
     running,
   };
-}
-
-function collectHistoryUpdate(collector: AcpHistoryCollector, update: SessionUpdate): void {
-  switch (update.sessionUpdate) {
-    case "user_message_chunk": {
-      const text = contentText(update.content);
-      if (text) historyMessageFor(collector, "user").content += text;
-      break;
-    }
-    case "agent_message_chunk": {
-      const text = contentText(update.content);
-      if (text) historyMessageFor(collector, "assistant").content += text;
-      break;
-    }
-    case "agent_thought_chunk": {
-      const text = contentText(update.content);
-      if (!text) break;
-      const message = historyMessageFor(collector, "assistant");
-      message.reasoningContent = `${message.reasoningContent ?? ""}${text}`;
-      break;
-    }
-    case "tool_call":
-    case "tool_call_update": {
-      const message = historyMessageFor(collector, "assistant");
-      const tool = normalizeToolCall(update);
-      const tools = message.toolCalls ?? [];
-      const index = tools.findIndex((item) => item.id === tool.id);
-      if (index === -1) tools.push(tool);
-      else tools[index] = { ...tools[index], ...tool };
-      message.toolCalls = tools;
-      break;
-    }
-    case "plan":
-    case "plan_update":
-      historyMessageFor(collector, "assistant").agentPlan = update as unknown as Record<
-        string,
-        unknown
-      >;
-      break;
-    default:
-      break;
-  }
-}
-
-function historyMessageFor(
-  collector: AcpHistoryCollector,
-  role: "user" | "assistant",
-): AcpSessionHistoryMessage {
-  const last = collector.messages[collector.messages.length - 1];
-  if (last && collector.activeRole === role) return last;
-  const message: AcpSessionHistoryMessage = {
-    id: `acp-history-${collector.nextId++}`,
-    role,
-    content: "",
-  };
-  collector.messages.push(message);
-  collector.activeRole = role;
-  return message;
 }
 
 function validateConfigValue(option: SessionConfigOption, value: string | boolean): void {
@@ -869,37 +801,4 @@ function contentText(content: unknown): string {
   if (!content || typeof content !== "object") return "";
   const block = content as { type?: unknown; text?: unknown };
   return block.type === "text" && typeof block.text === "string" ? block.text : "";
-}
-
-function normalizeToolCall(update: SessionUpdate): Record<string, unknown> {
-  if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
-    return {};
-  }
-  const rawStatus = update.status;
-  const status =
-    rawStatus === "completed"
-      ? "completed"
-      : rawStatus === "failed"
-        ? "error"
-        : rawStatus === "pending"
-          ? "pending"
-          : "running";
-  return {
-    id: update.toolCallId,
-    name: update.title || update.name || update.kind || "工具调用",
-    status,
-    input: update.rawInput,
-    output: stringifyToolOutput(update.rawOutput ?? update.content),
-    ...(rawStatus === "failed" ? { error: stringifyToolOutput(update.rawOutput) } : {}),
-  };
-}
-
-function stringifyToolOutput(value: unknown): string | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return "[无法序列化的工具输出]";
-  }
 }

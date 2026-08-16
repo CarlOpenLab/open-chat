@@ -43,6 +43,8 @@ The goal is simple: **make the chat surface open, while the agent remains yours.
 
 The gateway keeps provider-specific details at the edge. The website can therefore render a single workflow for conversations, streaming responses, tool activity, plans, files, model selection, and permissions.
 
+See [docs/architecture.md](docs/architecture.md) for the canonical transcript contract, UI composition, provider adapter boundaries, and extension rules.
+
 ## Supported connections
 
 | Connection            | Required command | Transport                         |
@@ -177,6 +179,8 @@ vp run @open-chat/cli#build
 ```text
 apps/website       Vue 3 + Antdv Next X workspace UI (built to dist/)
 apps/server        Express gateway, native CLI adapters, ACP manager, API proxy
+apps/server/src/transcript  canonical transcript contract, adapters, and SSE serialization
+docs               architecture and UI ownership documentation
 apps/server/src/app.ts      reusable gateway entry (createGatewayApp / startGateway)
 tools/open-chat    open-chat CLI: starts gateway + serves UI + opens browser
 ```

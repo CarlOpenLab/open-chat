@@ -1,4 +1,5 @@
 import { API_BASE_URL, GATEWAY_API_KEY } from "./ai";
+import type { TranscriptMessage } from "./transcript";
 
 export interface AcpAgentView {
   id: string;
@@ -53,19 +54,10 @@ export interface AcpSessionState {
   sessionId: string;
   configOptions: AcpConfigOption[];
   modes?: unknown;
-  history?: AcpSessionHistoryMessage[];
+  history?: TranscriptMessage[];
   loadSupported?: boolean;
   /** 该 ACP 会话当前是否正在运行（服务端 activeRuns，回合进行中为 true）。 */
   running?: boolean;
-}
-
-export interface AcpSessionHistoryMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  reasoningContent?: string;
-  toolCalls?: Array<Record<string, unknown>>;
-  agentPlan?: Record<string, unknown>;
 }
 
 interface AcpProviderSession {

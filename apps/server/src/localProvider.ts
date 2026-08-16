@@ -22,6 +22,9 @@ import type { ServerResponse } from "node:http";
 import { GatewayError } from "./error";
 import type { LocalConfig } from "./config";
 import { cliProcessEnv, resolveExecutable } from "./commandEnv";
+import { convertOpenCodeHistory } from "./transcript/adapters/opencode";
+import { writeTranscriptChunk, writeTranscriptCustomEvent } from "./transcript/stream";
+import type { TranscriptMessage } from "./transcript/types";
 
 export interface LocalModelInfo {
   /** 形如 `provider/model`，与 `opencode models` 输出一致。 */
@@ -69,13 +72,7 @@ interface LocalProviderSession {
   cwd: string;
   title?: string;
   updatedAt?: string;
-  history?: Array<{
-    id: string;
-    role: "user" | "assistant";
-    content: string;
-    reasoningContent?: string;
-    toolCalls?: Array<Record<string, unknown>>;
-  }>;
+  history?: TranscriptMessage[];
 }
 
 const DEFAULT_SERVER_START_TIMEOUT_MS = 15_000;
@@ -865,74 +862,16 @@ function splitModel(model: string): [string, string] {
   return [model.slice(0, index), model.slice(index + 1)];
 }
 
-function convertOpenCodeHistory(values: unknown[]): NonNullable<LocalProviderSession["history"]> {
-  const history: NonNullable<LocalProviderSession["history"]> = [];
-  for (const value of values) {
-    if (!value || typeof value !== "object") continue;
-    const message = value as Record<string, unknown>;
-    const info = (message.info ?? message.message ?? message) as Record<string, unknown>;
-    const role = info.role === "user" || info.role === "assistant" ? info.role : undefined;
-    if (!role) continue;
-    const parts = Array.isArray(message.parts)
-      ? message.parts
-      : Array.isArray(info.parts)
-        ? info.parts
-        : [];
-    let content = "";
-    let reasoningContent = "";
-    const toolCalls: Array<Record<string, unknown>> = [];
-    for (const partValue of parts) {
-      if (!partValue || typeof partValue !== "object") continue;
-      const part = partValue as Record<string, unknown>;
-      if (part.type === "text" && typeof part.text === "string") content += part.text;
-      if (
-        (part.type === "reasoning" || part.type === "thinking") &&
-        typeof part.text === "string"
-      ) {
-        reasoningContent += part.text;
-      }
-      if (part.type === "tool") toolCalls.push(part);
-    }
-    if (!content && typeof info.content === "string") content = info.content;
-    if (!content && !reasoningContent && toolCalls.length === 0) continue;
-    history.push({
-      id: typeof info.id === "string" ? info.id : `opencode-${history.length}`,
-      role,
-      content,
-      ...(reasoningContent ? { reasoningContent } : {}),
-      ...(toolCalls.length ? { toolCalls } : {}),
-    });
-  }
-  return history;
-}
-
 /** OpenAI 兼容 SSE chunk。 */
-function writeChunk(
+const writeChunk = (
   res: ServerResponse,
   model: string,
   delta: Record<string, unknown>,
   finishReason: string | null = null,
-): void {
-  const payload = {
-    id: "chatcmpl-local",
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [{ index: 0, delta, finish_reason: finishReason }],
-  };
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
-}
+): void => writeTranscriptChunk(res, model, delta, { id: "chatcmpl-local", finishReason });
 
 /** 自定义 SSE 事件帧（`event: xxx` + `data: json`），前端 XStream 解析为 `{event, data}`。 */
-function writeCustomEvent(res: ServerResponse, event: string, data: unknown): void {
-  if (res.writableEnded) return;
-  try {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  } catch {
-    // 响应已关闭
-  }
-}
+const writeCustomEvent = writeTranscriptCustomEvent;
 
 /** 把 OpenAI 格式消息列表中的内容提取为纯文本。 */
 export function extractTextFromMessage(message: unknown): string {

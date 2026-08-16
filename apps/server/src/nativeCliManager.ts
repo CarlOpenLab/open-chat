@@ -11,6 +11,12 @@ import type { AcpAgentConfig, AcpConfig, AgentTransport } from "./config";
 import { cliProcessEnv, resolveExecutable } from "./commandEnv";
 import { GatewayError } from "./error";
 import type { LocalChatManager, LocalModelInfo } from "./localProvider";
+import { convertClaudeHistory } from "./transcript/adapters/claude";
+import { convertCodexThreadHistory, normalizeCodexActivity } from "./transcript/adapters/codex";
+import { convertPiHistory, normalizePiStreamLine } from "./transcript/adapters/pi";
+import { writeTranscriptStreamEvent } from "./transcript/stream";
+import type { TranscriptMessage } from "./transcript/types";
+import { writeTranscriptChunk, writeTranscriptCustomEvent } from "./transcript/stream";
 
 type NativeTransport = Exclude<AgentTransport, "acp">;
 
@@ -33,16 +39,7 @@ export interface NativeSessionStateView {
   sessionId: string;
   configOptions: SessionConfigOption[];
   modes: null;
-  history?: NativeSessionHistoryMessage[];
-}
-
-interface NativeSessionHistoryMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  reasoningContent?: string;
-  toolCalls?: Array<Record<string, unknown>>;
-  agentPlan?: Record<string, unknown>;
+  history?: TranscriptMessage[];
 }
 
 interface NativeProviderSessionView {
@@ -295,44 +292,8 @@ export class NativeCliManager {
     } catch {
       return;
     }
-    if (stringValue(value.type) !== "message") return;
-    const message = asRecord(value.message);
-    const role = stringValue(message?.role);
-    const content = message?.content;
-    const blocks = Array.isArray(content) ? content : [];
-    const text = messageContentText(content);
-    const reasoning = blocks
-      .map((block) => asRecord(block))
-      .filter((block) => stringValue(block?.type) === "thinking")
-      .map((block) => stringValue(block?.thinking))
-      .filter(Boolean)
-      .join("\n");
-    if (role === "user" || role === "assistant") {
-      if (!text && !reasoning) return;
-      res.write(
-        `event: native_message\ndata: ${JSON.stringify({
-          id: stringValue(value.id) || randomUUID(),
-          role,
-          content: text,
-          ...(reasoning ? { reasoningContent: reasoning } : {}),
-        })}\n\n`,
-      );
-      return;
-    }
-    if (role === "tool" || role === "toolResult") {
-      const isResult = role === "toolResult";
-      const toolCallId = stringValue(message?.toolCallId);
-      if (!toolCallId) return;
-      const toolOutput = contentText(content);
-      const tool: Record<string, unknown> = {
-        id: toolCallId,
-        name: stringValue(message?.toolName) || "tool",
-        status: isResult ? "completed" : "running",
-        ...(!isResult ? { input: content } : {}),
-        ...(isResult && toolOutput ? { output: toolOutput } : {}),
-      };
-      res.write(`event: tool_call\ndata: ${JSON.stringify(tool)}\n\n`);
-      return;
+    for (const event of normalizePiStreamLine(value)) {
+      writeTranscriptStreamEvent(res, "pi", event);
     }
   }
 
@@ -566,7 +527,7 @@ export class NativeCliManager {
     sessionId: string,
     cwd: string,
     enabled: boolean,
-  ): Promise<NativeSessionHistoryMessage[]> {
+  ): Promise<TranscriptMessage[]> {
     if (!enabled) return [];
     try {
       switch (agent.transport) {
@@ -692,6 +653,7 @@ class CodexRuntime implements NativeRuntime {
   private active: ActiveNativeRun | null = null;
   private threadId = "";
   private turnId = "";
+  private agentMessagePhase: "commentary" | "final_answer" | "" = "";
   private model: string;
   private readonly toolCalls = new Map<string, { name: string; input?: unknown }>();
 
@@ -755,6 +717,7 @@ class CodexRuntime implements NativeRuntime {
   async runTurn(text: string, res: ServerResponse, signal: AbortSignal): Promise<void> {
     if (this.active) throw GatewayError.invalidRequest("该 Codex 会话仍在运行");
     this.toolCalls.clear();
+    this.agentMessagePhase = "";
     const done = new Promise<void>((resolve, reject) => {
       this.active = { res, resolve, reject, sawText: false, sawReasoning: false };
     });
@@ -825,8 +788,10 @@ class CodexRuntime implements NativeRuntime {
     if (method === "item/agentMessage/delta") {
       const delta = stringValue(params.delta);
       if (delta) {
-        this.active.sawText = true;
-        writeChunk(this.active.res, `codex/${this.model || "default"}`, { content: delta });
+        const field = this.agentMessagePhase === "commentary" ? "reasoning_content" : "content";
+        if (field === "reasoning_content") this.active.sawReasoning = true;
+        else this.active.sawText = true;
+        writeChunk(this.active.res, `codex/${this.model || "default"}`, { [field]: delta });
       }
       return;
     }
@@ -842,14 +807,22 @@ class CodexRuntime implements NativeRuntime {
     }
     if (method === "item/started" || method === "item/completed") {
       const item = asRecord(params.item);
+      if (item && stringValue(item.type) === "agentMessage") {
+        if (method === "item/started") {
+          const phase = stringValue(item.phase);
+          this.agentMessagePhase = phase === "commentary" || phase === "final_answer" ? phase : "";
+        } else {
+          this.agentMessagePhase = "";
+        }
+        return;
+      }
       if (
         item &&
-        stringValue(item.type) !== "agentMessage" &&
         stringValue(item.type) !== "reasoning" &&
         stringValue(item.type) !== "userMessage"
       ) {
         const complete = method === "item/completed";
-        const tool = nativeToolEvent(item, complete);
+        const tool = normalizeCodexActivity(item, complete);
         if (complete) {
           this.toolCalls.delete(tool.id);
         } else {
@@ -870,6 +843,7 @@ class CodexRuntime implements NativeRuntime {
       const active = this.active;
       this.finishToolCalls(active, status !== "completed", error || `Codex 回合结束：${status}`);
       this.turnId = "";
+      this.agentMessagePhase = "";
       this.active = null;
       if (status === "completed" || status === "interrupted") active.resolve();
       else active.reject(new Error(error || `Codex 回合结束：${status}`));
@@ -1648,7 +1622,7 @@ async function findPiSessionPath(
   return null;
 }
 
-async function readClaudeSessionHistory(sessionId: string): Promise<NativeSessionHistoryMessage[]> {
+async function readClaudeSessionHistory(sessionId: string): Promise<TranscriptMessage[]> {
   const root = join(homedir(), ".claude", "projects");
   const dirs = await readdir(root, { withFileTypes: true }).catch(() => []);
   for (const dir of dirs) {
@@ -1664,7 +1638,7 @@ async function readPiSessionHistory(
   sessionId: string,
   cwd: string,
   transport: NativeTransport,
-): Promise<NativeSessionHistoryMessage[]> {
+): Promise<TranscriptMessage[]> {
   const file = await findPiSessionPath(sessionId, cwd, transport);
   if (!file) return [];
   return convertPiHistory(await readJsonLines(file));
@@ -1694,69 +1668,6 @@ async function readJsonLines(
     input.destroy();
   }
   return values;
-}
-
-function convertClaudeHistory(
-  lines: Array<Record<string, unknown>>,
-): NativeSessionHistoryMessage[] {
-  const history: NativeSessionHistoryMessage[] = [];
-  for (const line of lines) {
-    const message = asRecord(line.message);
-    const role = stringValue(message?.role);
-    if (role !== "user" && role !== "assistant") continue;
-    const content = message?.content;
-    const text = contentText(content) || (typeof content === "string" ? content : "");
-    const blocks = Array.isArray(content) ? content : [];
-    const reasoning = blocks
-      .map((block) => asRecord(block))
-      .filter((block) => stringValue(block?.type) === "thinking")
-      .map((block) => stringValue(block?.thinking))
-      .filter(Boolean)
-      .join("\n");
-    const toolCalls = blocks
-      .filter((blockValue) => stringValue(asRecord(blockValue)?.type) === "tool_use")
-      .map((blockValue) => asRecord(blockValue)!)
-      .map((block) => ({
-        id: stringValue(block.id) || randomUUID(),
-        name: block.name,
-        input: block.input,
-      }));
-    if (!text && !reasoning && !toolCalls.length) continue;
-    history.push({
-      id: stringValue(line.uuid) || randomUUID(),
-      role,
-      content: text,
-      ...(reasoning ? { reasoningContent: reasoning } : {}),
-      ...(toolCalls.length ? { toolCalls } : {}),
-    });
-  }
-  return history;
-}
-
-function convertPiHistory(lines: Array<Record<string, unknown>>): NativeSessionHistoryMessage[] {
-  const history: NativeSessionHistoryMessage[] = [];
-  for (const line of lines) {
-    const message = asRecord(line.message);
-    const role = stringValue(message?.role);
-    if (role !== "user" && role !== "assistant") continue;
-    const content = message?.content;
-    const text = messageContentText(content);
-    const blocks = Array.isArray(content) ? content : [];
-    const reasoning = blocks
-      .map((block) => asRecord(block))
-      .filter((block) => stringValue(block?.type) === "thinking")
-      .map((block) => stringValue(block?.thinking))
-      .filter(Boolean)
-      .join("\n");
-    if (!text && !reasoning) continue;
-    history.push({
-      id: stringValue(line.id) || randomUUID(),
-      role,
-      content: text,
-      ...(reasoning ? { reasoningContent: reasoning } : {}),
-    });
-  }
-  return history;
 }
 
 function firstConversationText(lines: Array<Record<string, unknown>>, role: string): string {
@@ -1796,7 +1707,7 @@ async function readCodexSessionHistory(
   agent: AcpAgentConfig,
   threadId: string,
   cwd: string,
-): Promise<NativeSessionHistoryMessage[]> {
+): Promise<TranscriptMessage[]> {
   const executable = resolveExecutable(agent.command);
   if (!executable || !threadId) return [];
   let exited: Error | null = null;
@@ -1821,55 +1732,7 @@ async function readCodexSessionHistory(
     const turns = Array.isArray(asRecord(thread)?.turns)
       ? (asRecord(thread)?.turns as unknown[])
       : [];
-    const history: NativeSessionHistoryMessage[] = [];
-    for (const turnValue of turns) {
-      const turn = asRecord(turnValue);
-      const items = Array.isArray(turn?.items) ? turn.items : [];
-      let assistant: NativeSessionHistoryMessage | undefined;
-      for (const itemValue of items) {
-        const item = asRecord(itemValue);
-        if (!item) continue;
-        const type = stringValue(item.type);
-        const id = stringValue(item.id) || randomUUID();
-        if (type === "userMessage") {
-          const content = contentText(item.content);
-          if (content) history.push({ id, role: "user", content });
-          continue;
-        }
-        if (type === "agentMessage") {
-          const content = stringValue(item.text);
-          assistant = { id, role: "assistant", content };
-          history.push(assistant);
-          continue;
-        }
-        if (type === "reasoning") {
-          const reasoning = contentText(item.summary) || contentText(item.content);
-          if (!reasoning) continue;
-          assistant = assistant || { id: `${id}:assistant`, role: "assistant", content: "" };
-          if (!history.includes(assistant)) history.push(assistant);
-          assistant.reasoningContent = [assistant.reasoningContent, reasoning]
-            .filter(Boolean)
-            .join("\n");
-          continue;
-        }
-        if (type === "plan") {
-          assistant = assistant || { id: `${id}:assistant`, role: "assistant", content: "" };
-          if (!history.includes(assistant)) history.push(assistant);
-          assistant.agentPlan = { text: stringValue(item.text) || contentText(item.content) };
-          continue;
-        }
-        if (
-          assistant &&
-          ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"].includes(type)
-        ) {
-          assistant.toolCalls = [
-            ...(assistant.toolCalls ?? []),
-            { id, name: stringValue(item.name) || type, ...item },
-          ];
-        }
-      }
-    }
-    return history;
+    return convertCodexThreadHistory(turns);
   } catch (error) {
     console.error(`[${agent.id}] session history read failed:`, error);
     return [];
@@ -1944,7 +1807,7 @@ function fallbackNativeModels(transport: NativeTransport): NativeModel[] {
 
 function sessionView(
   session: NativeSession,
-  history: NativeSessionHistoryMessage[] = [],
+  history: TranscriptMessage[] = [],
 ): NativeSessionStateView {
   const configOptions: SessionConfigOption[] = session.models.length
     ? [
@@ -2002,27 +1865,6 @@ function nativeLaunchCommand(agent: AcpAgentConfig): string {
 
 function localModelView(model: LocalModelInfo): NativeModel {
   return { id: model.id, name: model.name };
-}
-
-function nativeToolEvent(item: Record<string, unknown>, complete: boolean) {
-  const id =
-    stringValue(item.id) ||
-    stringValue(item.callId) ||
-    stringValue(item.toolCallId) ||
-    randomUUID();
-  const name =
-    stringValue(item.name) || stringValue(item.title) || stringValue(item.type) || "工具调用";
-  const rawStatus = stringValue(item.status);
-  const failed = rawStatus === "failed" || rawStatus === "declined";
-  return {
-    id,
-    name,
-    status: complete ? (failed ? "error" : "completed") : "running",
-    input: item.arguments ?? item.command ?? item.input,
-    output: stringifyValue(item.aggregatedOutput ?? item.output ?? item.result),
-    durationMs: typeof item.durationMs === "number" ? item.durationMs : undefined,
-    ...(failed ? { error: stringifyValue(item.error ?? item.output) } : {}),
-  };
 }
 
 function splitModel(model: string): [string, string] {
@@ -2106,36 +1948,11 @@ function contentText(value: unknown): string {
     .join("\n");
 }
 
-/** 消息正文：只取 type=text 的内容块；thinking 块由 reasoningContent 单独提取，避免与思考面板重复显示。 */
-function messageContentText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (!Array.isArray(value)) return "";
-  return value
-    .map((part) => {
-      if (typeof part === "string") return part;
-      const record = asRecord(part);
-      return stringValue(record?.type) === "thinking" ? "" : stringValue(record?.text);
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function writeChunk(
+const writeChunk = (
   res: ServerResponse,
   model: string,
   delta: Record<string, unknown>,
   finishReason: string | null = null,
-) {
-  const payload = {
-    id: `chatcmpl-${Date.now()}`,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [{ index: 0, delta, finish_reason: finishReason }],
-  };
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
-}
+): void => writeTranscriptChunk(res, model, delta, { finishReason });
 
-function writeCustomEvent(res: ServerResponse, event: string, data: unknown) {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-}
+const writeCustomEvent = writeTranscriptCustomEvent;

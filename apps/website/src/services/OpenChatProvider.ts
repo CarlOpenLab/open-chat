@@ -7,21 +7,14 @@ import type {
 } from "@antdv-next/x-sdk";
 import { DeepSeekChatProvider } from "@antdv-next/x-sdk";
 import type { WebSearchSourceItem } from "./ai";
+import type { TranscriptActivity } from "./transcript";
 
 /** Transient placeholder shown in the assistant bubble while the gateway runs
  * a web search round. Replaced by real text/reasoning as soon as it arrives. */
 export const WEB_SEARCHING_MARKER = "🔍 正在联网搜索…";
 
 /** 本地 opencode 工具调用（由网关 `tool_call` SSE 事件驱动，供 ThoughtChain 渲染）。 */
-export interface ToolCallItem {
-  id: string;
-  name: string;
-  status: "pending" | "running" | "completed" | "error";
-  input?: unknown;
-  output?: string;
-  error?: string;
-  durationMs?: number;
-}
+export type ToolCallItem = TranscriptActivity;
 
 /** opencode 权限询问（由网关 `chat_permission` SSE 事件驱动，供前端弹窗批准）。 */
 export interface PermissionRequest {
