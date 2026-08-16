@@ -1177,6 +1177,7 @@ class PiRuntime implements NativeRuntime {
   private model: string;
   private providerSessionId = "";
   private readonly agentId: string;
+  private readonly completionEvent: "agent_settled" | "turn_end";
   private readonly rpc: PiRpcProcess;
   private readonly tools = new Map<string, { name: string; input: unknown }>();
 
@@ -1189,6 +1190,7 @@ class PiRuntime implements NativeRuntime {
   ) {
     this.agentId = agent.id;
     this.model = model;
+    this.completionEvent = agent.transport === "pi" ? "agent_settled" : "turn_end";
     this.rpc = new PiRpcProcess(
       executable,
       [
@@ -1339,9 +1341,10 @@ class PiRuntime implements NativeRuntime {
       if (complete) this.tools.delete(id);
       return;
     }
-    // 回合结束：pi 发 agent_settled（在 turn_end 之后），omp 只发 turn_end。
-    // 两者都以 turn_end 为完成标志，agent_settled 仅作兼容兜底。
-    if (type === "turn_end" || type === "agent_settled") {
+    // Pi can emit several turn_end events while continuing after tool calls;
+    // agent_settled is the session-level completion signal. OMP currently
+    // exposes turn_end only, so it keeps the transport-specific fallback.
+    if (type === this.completionEvent) {
       this.active = null;
       active.resolve();
     }
