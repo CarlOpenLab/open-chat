@@ -82,6 +82,9 @@ const timeline = computed<TranscriptTimelineItem[]>(() => {
   const value = props.item.extraInfo?.timeline;
   return Array.isArray(value) ? (value as TranscriptTimelineItem[]) : [];
 });
+const hasTimelineContent = computed(() =>
+  timeline.value.some((entry) => entry.kind === "content" && entry.content.trim()),
+);
 const visibleTimeline = computed(() =>
   timeline.value.filter(
     (entry) => props.streaming || props.foldExpanded || entry.kind === "content",
@@ -200,7 +203,7 @@ const onFaviconError = (url: string) => {
     </template>
 
     <XMarkdown
-      v-if="!timeline.length && answerContent.trim()"
+      v-if="!hasTimelineContent && answerContent.trim()"
       :content="answerContent"
       :components="markdownComponents"
       :streaming="markdownStreaming"
