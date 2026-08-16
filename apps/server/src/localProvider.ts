@@ -67,6 +67,13 @@ interface OpenCodeSessionEntry {
   server: OpenCodeServer;
 }
 
+type OpenCodePermissionVersion = "v1" | "v2";
+
+interface PendingOpenCodePermission {
+  entry: OpenCodeSessionEntry;
+  version: OpenCodePermissionVersion;
+}
+
 interface LocalProviderSession {
   sessionId: string;
   cwd: string;
@@ -293,6 +300,9 @@ export class LocalChatManager {
   private readonly server: OpenCodeServer;
   private readonly sessions = new Map<string, OpenCodeSessionEntry>();
   private readonly latestSessions = new Map<string, OpenCodeSessionEntry>();
+  /** Permission ids are globally unique in OpenCode. Keep their owning entry
+   * so a reply still works when the UI has switched conversations meanwhile. */
+  private readonly pendingPermissions = new Map<string, PendingOpenCodePermission>();
   private modelsCache: { models: LocalModelInfo[]; at: number } | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
 
@@ -742,11 +752,17 @@ export class LocalChatManager {
               // opencode 需要权限才能执行工具（bash / edit / webfetch 等）。
               // 会话会暂停等待前端回复，这里转发给客户端展示「允许/拒绝」弹窗。
               permissionPendingAt = Date.now();
-              if (typeof props.id === "string" && props.id) {
-                forwardedPermissions.set(
-                  props.id,
-                  type as "permission.asked" | "permission.v2.asked",
-                );
+              {
+                const permissionId = typeof props.id === "string" ? props.id.trim() : "";
+                const version: OpenCodePermissionVersion =
+                  type === "permission.v2.asked" ? "v2" : "v1";
+                if (permissionId) {
+                  forwardedPermissions.set(
+                    permissionId,
+                    type as "permission.asked" | "permission.v2.asked",
+                  );
+                  this.pendingPermissions.set(permissionId, { entry, version });
+                }
               }
               flushReasoning();
               writeCustomEvent(res, "chat_permission", {
@@ -772,8 +788,10 @@ export class LocalChatManager {
               permissionPendingAt = null;
               if (typeof props.requestID === "string" && props.requestID) {
                 forwardedPermissions.delete(props.requestID);
+                this.pendingPermissions.delete(props.requestID);
               } else if (typeof props.id === "string" && props.id) {
                 forwardedPermissions.delete(props.id);
+                this.pendingPermissions.delete(props.id);
               }
               break;
             case "session.idle":
@@ -812,6 +830,9 @@ export class LocalChatManager {
     } finally {
       signal.removeEventListener("abort", cancel);
       reader.cancel().catch(() => {});
+      for (const [permissionId, pending] of this.pendingPermissions) {
+        if (pending.entry === entry) this.pendingPermissions.delete(permissionId);
+      }
     }
   }
 
@@ -823,21 +844,46 @@ export class LocalChatManager {
     key: string,
     permissionId: string,
     response: "once" | "always" | "reject",
-    version: "v1" | "v2",
+    version: OpenCodePermissionVersion,
   ): Promise<void> {
-    const entry = this.latestSessions.get(key);
+    const pending = this.pendingPermissions.get(permissionId);
+    const entry = pending?.entry ?? this.latestSessions.get(key);
     if (!entry) {
       throw GatewayError.invalidRequest("会话不存在或已失效，请刷新页面重试");
     }
-    if (version === "v2") {
-      await entry.server.request("POST", `/permission/${permissionId}/reply`, { reply: response });
-    } else {
-      await entry.server.request(
-        "POST",
-        `/session/${entry.opencodeId}/permissions/${permissionId}`,
-        { response },
-      );
+    // Prefer the protocol reported by OpenCode. The browser can carry a stale
+    // version after a build/reload, and native OpenCode prefixes its internal
+    // session key with the agent id, so the pending request wins when present.
+    const preferred = pending?.version ?? version;
+    const fallback = preferred === "v2" ? "v1" : "v2";
+    try {
+      await this.replyPermissionVia(entry, permissionId, response, preferred);
+    } catch (error) {
+      // OpenCode releases have briefly exposed both permission APIs with
+      // different event/version combinations. Retry the alternate endpoint
+      // only for an HTTP compatibility failure; preserve other errors.
+      if (!isPermissionCompatibilityError(error)) throw error;
+      await this.replyPermissionVia(entry, permissionId, response, fallback);
     }
+    this.pendingPermissions.delete(permissionId);
+  }
+
+  private replyPermissionVia(
+    entry: OpenCodeSessionEntry,
+    permissionId: string,
+    response: "once" | "always" | "reject",
+    version: OpenCodePermissionVersion,
+  ): Promise<void> {
+    if (version === "v2") {
+      return entry.server
+        .request("POST", `/permission/${permissionId}/reply`, { reply: response })
+        .then(() => undefined);
+    }
+    return entry.server
+      .request("POST", `/session/${entry.opencodeId}/permissions/${permissionId}`, {
+        response,
+      })
+      .then(() => undefined);
   }
 
   /** 会话缓存淘汰：超过上限时淘汰最久未使用的；空闲超时的会话定期回收。 */
@@ -898,6 +944,10 @@ function splitModel(model: string): [string, string] {
     throw GatewayError.unsupportedModel(model);
   }
   return [model.slice(0, index), model.slice(index + 1)];
+}
+
+function isPermissionCompatibilityError(error: unknown): boolean {
+  return error instanceof Error && /HTTP (?:400|404)\b/.test(error.message);
 }
 
 /** Native CLI event stream. Local OpenCode is treated like the other agents. */

@@ -604,6 +604,7 @@ class CodexRuntime implements NativeRuntime {
   private threadId = "";
   private turnId = "";
   private model: string;
+  private readonly streamedAgentMessages = new Set<string>();
   private readonly toolCalls = new Map<string, { name: string; input?: unknown }>();
 
   private constructor(
@@ -665,6 +666,7 @@ class CodexRuntime implements NativeRuntime {
 
   async runTurn(text: string, res: ServerResponse, signal: AbortSignal): Promise<void> {
     if (this.active) throw GatewayError.invalidRequest("该 Codex 会话仍在运行");
+    this.streamedAgentMessages.clear();
     this.toolCalls.clear();
     const done = new Promise<void>((resolve, reject) => {
       this.active = { res, resolve, reject, sawText: false, sawReasoning: false };
@@ -736,6 +738,8 @@ class CodexRuntime implements NativeRuntime {
     if (method === "item/agentMessage/delta") {
       const delta = stringValue(params.delta);
       if (delta) {
+        const itemId = stringValue(params.itemId);
+        if (itemId) this.streamedAgentMessages.add(itemId);
         // Codex commentary is visible assistant text, not hidden reasoning.
         // Hidden reasoning arrives through item/reasoning/*Delta below.
         this.active.sawText = true;
@@ -756,6 +760,21 @@ class CodexRuntime implements NativeRuntime {
     if (method === "item/started" || method === "item/completed") {
       const item = asRecord(params.item);
       if (item && stringValue(item.type) === "agentMessage") {
+        if (method === "item/completed") {
+          const itemId = stringValue(item.id);
+          const alreadyStreamed = itemId
+            ? this.streamedAgentMessages.delete(itemId)
+            : this.active.sawText;
+          if (!alreadyStreamed) {
+            const text = stringValue(item.text) || contentText(item.content);
+            if (text) {
+              this.active.sawText = true;
+              writeNativeDelta(this.active.res, `codex/${this.model || "default"}`, {
+                content: text,
+              });
+            }
+          }
+        }
         return;
       }
       if (
@@ -775,8 +794,12 @@ class CodexRuntime implements NativeRuntime {
       return;
     }
     if (method === "error") {
-      const message = stringValue(params.message);
-      if (message) this.failActive(new Error(message));
+      const message = stringValue(params.message) || stringAt(params, "error", "message");
+      if (message && params.willRetry === true) {
+        writeCustomEvent(this.active.res, "chat_notice", { message });
+      } else if (message) {
+        this.failActive(new Error(message));
+      }
       return;
     }
     if (method === "turn/completed") {
@@ -812,6 +835,7 @@ class CodexRuntime implements NativeRuntime {
   private failActive(error: Error) {
     const active = this.active;
     this.finishToolCalls(active, true, error.message);
+    this.streamedAgentMessages.clear();
     this.active = null;
     active?.reject(error);
   }
@@ -1177,7 +1201,7 @@ class PiRuntime implements NativeRuntime {
   private model: string;
   private providerSessionId = "";
   private readonly agentId: string;
-  private readonly completionEvent: "agent_settled" | "turn_end";
+  private readonly completionEvent: "agent_settled" | "agent_end";
   private readonly rpc: PiRpcProcess;
   private readonly tools = new Map<string, { name: string; input: unknown }>();
 
@@ -1190,7 +1214,7 @@ class PiRuntime implements NativeRuntime {
   ) {
     this.agentId = agent.id;
     this.model = model;
-    this.completionEvent = agent.transport === "pi" ? "agent_settled" : "turn_end";
+    this.completionEvent = agent.transport === "pi" ? "agent_settled" : "agent_end";
     this.rpc = new PiRpcProcess(
       executable,
       [
@@ -1341,9 +1365,8 @@ class PiRuntime implements NativeRuntime {
       if (complete) this.tools.delete(id);
       return;
     }
-    // Pi can emit several turn_end events while continuing after tool calls;
-    // agent_settled is the session-level completion signal. OMP currently
-    // exposes turn_end only, so it keeps the transport-specific fallback.
+    // Both transports emit turn_end for each model/tool loop. Their terminal
+    // events differ: Pi uses agent_settled, while OMP uses agent_end.
     if (type === this.completionEvent) {
       this.active = null;
       active.resolve();

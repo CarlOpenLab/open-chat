@@ -51,13 +51,14 @@ function userMessageAttachments(item: {
 }): UploadedAttachment[] {
   const list = item.extraInfo?.attachments;
   if (!Array.isArray(list)) return [];
+  const imageNamePattern = /\.(?:png|jpe?g|gif|webp|bmp|svg|tiff?|ico|pn[mg]|pbm|pgm|ppm)$/i;
   return list.filter((entry): entry is UploadedAttachment => {
     if (typeof entry !== "object" || entry === null) return false;
     const candidate = entry as UploadedAttachment;
     return (
       typeof candidate.reference === "string" &&
       typeof candidate.name === "string" &&
-      candidate.isImage === true
+      (candidate.isImage === true || imageNamePattern.test(candidate.name))
     );
   });
 }

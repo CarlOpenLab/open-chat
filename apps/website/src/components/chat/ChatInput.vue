@@ -5,6 +5,8 @@ import {
   BrainCircuit,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Cpu,
   FolderOpen,
   Hammer,
@@ -35,6 +37,7 @@ interface Props {
   thinkingEnabled: boolean;
   fileModeEnabled: boolean;
   projectPath?: string;
+  projectPathOptions?: string[];
   projectPathEnabled?: boolean;
   agentMode?: boolean;
   agentAvailable?: boolean;
@@ -76,6 +79,7 @@ const props = withDefaults(defineProps<Props>(), {
   permissionLocked: false,
   pendingPermission: null,
   projectPath: "",
+  projectPathOptions: () => [],
   projectPathEnabled: false,
 });
 const emit = defineEmits<Emits>();
@@ -87,6 +91,38 @@ const projectPathName = computed(() => {
     .replace(/[\\/]+$/, "");
   const parts = normalized.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] || "";
+});
+
+const projectPathMenu = computed<MenuProps>(() => {
+  const paths = [...new Set(props.projectPathOptions.map((path) => String(path).trim()))].filter(
+    Boolean,
+  );
+  const items: NonNullable<MenuProps["items"]> = [
+    { key: "__none__", label: "无文件目录", icon: h(Check) },
+    ...paths.map((path, index) => ({ key: `__path_${index}__`, label: path })),
+    { type: "divider" },
+    { key: "__pick__", label: "选择其他目录", icon: h(FolderOpen) },
+  ];
+
+  return {
+    rootClass: "project-path-menu",
+    items,
+    selectable: true,
+    selectedKeys: [props.projectPath ? `__path_${paths.indexOf(props.projectPath)}__` : "__none__"],
+    onClick: ({ key }) => {
+      if (key === "__none__") {
+        emit("projectPathChange", "");
+        return;
+      }
+      if (key === "__pick__") {
+        void pickProjectPath();
+        return;
+      }
+      const match = String(key).match(/^__path_(\d+)__$/);
+      const selected = match ? paths[Number(match[1])] : undefined;
+      if (selected) emit("projectPathChange", selected);
+    },
+  };
 });
 
 const clearProjectPath = () => {
@@ -357,6 +393,25 @@ interface StagedAttachment extends UploadedAttachment {
 const stagedAttachments = ref<StagedAttachment[]>([]);
 const dragActive = ref(false);
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const attachmentsPanelOpen = ref(false);
+type SenderHeaderPanel = "attachments" | "permission";
+const activeHeaderPanel = ref<SenderHeaderPanel>("attachments");
+const hasAttachments = computed(() => stagedAttachments.value.length > 0);
+const hasAttachmentPanel = computed(() => attachmentsPanelOpen.value || hasAttachments.value);
+const hasPendingPermission = computed(() => Boolean(props.pendingPermission));
+const hasHeaderNavigation = computed(() => hasAttachmentPanel.value && hasPendingPermission.value);
+const visibleHeaderPanel = computed<SenderHeaderPanel>(() => {
+  if (activeHeaderPanel.value === "permission" && hasPendingPermission.value) return "permission";
+  if (activeHeaderPanel.value === "attachments" && hasAttachmentPanel.value) return "attachments";
+  return hasPendingPermission.value ? "permission" : "attachments";
+});
+
+const switchHeaderPanel = (direction: -1 | 1) => {
+  if (!hasHeaderNavigation.value) return;
+  const panels: SenderHeaderPanel[] = ["attachments", "permission"];
+  const currentIndex = panels.indexOf(activeHeaderPanel.value);
+  activeHeaderPanel.value = panels[(currentIndex + direction + panels.length) % panels.length];
+};
 
 /** 把 File 列表上传到网关并加入预览行；非图片忽略。 */
 const stageFiles = async (files: File[]) => {
@@ -378,17 +433,24 @@ const stageFiles = async (files: File[]) => {
       const uploaded = await aiService.uploadAttachment(file);
       entry.reference = uploaded.reference;
       entry.name = uploaded.name;
-      entry.isImage = uploaded.isImage;
+      // The input only accepts image MIME types. Keep the client-side image
+      // flag even when a filename has no extension and the gateway cannot
+      // infer it from the name alone.
+      entry.isImage = true;
       entry.uploading = false;
+      stagedAttachments.value = [...stagedAttachments.value];
     } catch (error) {
       entry.uploading = false;
       entry.error = error instanceof Error ? error.message : "上传失败";
+      stagedAttachments.value = [...stagedAttachments.value];
     }
   }
 };
 
 /** Sender 的 onPasteFile：粘贴文件（含截图）时加入附件。 */
 const handlePasteFile = (files: FileList) => {
+  attachmentsPanelOpen.value = true;
+  activeHeaderPanel.value = "attachments";
   void stageFiles(Array.from(files));
 };
 
@@ -406,6 +468,8 @@ const handleDrop = (event: DragEvent) => {
   const files = event.dataTransfer?.files;
   if (files?.length) {
     event.preventDefault();
+    attachmentsPanelOpen.value = true;
+    activeHeaderPanel.value = "attachments";
     void stageFiles(Array.from(files));
   }
 };
@@ -431,12 +495,18 @@ const handleSubmit = (value: string) => {
   emit(
     "submit",
     prompt,
-    ready.map(({ reference, name, isImage }) => ({ reference, name, isImage })),
+    ready.map(({ reference, name }) => ({ reference, name, isImage: true })),
   );
   for (const entry of stagedAttachments.value) {
     if (entry.previewUrl.startsWith("blob:")) URL.revokeObjectURL(entry.previewUrl);
   }
   stagedAttachments.value = [];
+  attachmentsPanelOpen.value = false;
+};
+
+const toggleAttachmentsPanel = () => {
+  attachmentsPanelOpen.value = !attachmentsPanelOpen.value;
+  if (attachmentsPanelOpen.value) activeHeaderPanel.value = "attachments";
 };
 
 const chipClass = (active: boolean, disabled = false) => {
@@ -461,61 +531,60 @@ const chipClass = (active: boolean, disabled = false) => {
     @dragleave="handleDragLeave"
     @drop="handleDrop"
   >
-    <Sender
-      :value="modelValue"
-      :loading="loading"
-      placeholder="做什么都可以..."
-      :on-cancel="() => emit('cancel')"
-      :on-change="handleChange"
-      :on-submit="handleSubmit"
-      :on-paste-file="handlePasteFile"
-      :suffix="false"
-      :disabled="agentMode && (!agentAvailable || agentConfiguring)"
-    >
-      <template #header>
-        <div v-if="stagedAttachments.length" class="attachment-preview-row">
-          <div
-            v-for="(attachment, index) in stagedAttachments"
-            :key="attachment.sourceKey"
-            class="attachment-tile"
-            :class="{
-              'is-uploading': attachment.uploading,
-              'has-error': Boolean(attachment.error),
-            }"
-          >
-            <img
-              v-if="attachment.isImage"
-              :src="attachment.previewUrl"
-              class="attachment-image"
-              alt=""
-            />
-            <button
-              type="button"
-              class="attachment-remove"
-              aria-label="移除附件"
-              @click="removeAttachment(index)"
+    <!-- 由 Sender 外部承载，避免附件上传状态被 Sender slot 的渲染节奏延迟。 -->
+    <Transition name="sender-header">
+      <div
+        v-if="hasAttachmentPanel || pendingPermission"
+        class="sender-header-card"
+        :class="{
+          'has-permission': Boolean(pendingPermission),
+          'has-navigation': hasHeaderNavigation,
+        }"
+      >
+        <button
+          v-if="hasHeaderNavigation"
+          type="button"
+          class="sender-header-nav sender-header-nav-left"
+          aria-label="切换到上一个面板"
+          title="上一个面板"
+          @click="switchHeaderPanel(-1)"
+        >
+          <ChevronLeft class="!h-4 !w-4" />
+        </button>
+        <div class="sender-header-panel">
+          <div v-if="visibleHeaderPanel === 'attachments'" class="attachment-preview-row">
+            <div
+              v-for="(attachment, index) in stagedAttachments"
+              :key="attachment.sourceKey"
+              class="attachment-tile"
+              :class="{
+                'is-uploading': attachment.uploading,
+                'has-error': Boolean(attachment.error),
+              }"
             >
-              <X class="!h-[10px] !w-[10px]" />
+              <img
+                v-if="attachment.isImage"
+                :src="attachment.previewUrl"
+                class="attachment-image"
+                alt=""
+              />
+              <button
+                type="button"
+                class="attachment-remove"
+                aria-label="移除附件"
+                title="删除图片"
+                @click.stop.prevent="removeAttachment(index)"
+              >
+                <X class="!h-[10px] !w-[10px]" />
+              </button>
+              <div v-if="attachment.uploading" class="attachment-overlay">上传中…</div>
+              <div v-else-if="attachment.error" class="attachment-overlay">上传失败</div>
+            </div>
+            <button type="button" class="attachment-add" aria-label="添加图片" @click="pickFiles">
+              <ImagePlus class="!h-[14px] !w-[14px]" />
             </button>
-            <div v-if="attachment.uploading" class="attachment-overlay">上传中…</div>
-            <div v-else-if="attachment.error" class="attachment-overlay">上传失败</div>
           </div>
-          <button type="button" class="attachment-add" aria-label="添加图片" @click="pickFiles">
-            <ImagePlus class="!h-[14px] !w-[14px]" />
-          </button>
-          <input
-            ref="fileInputRef"
-            type="file"
-            accept="image/*"
-            multiple
-            hidden
-            @change="handleFileInputChange"
-          />
-        </div>
-      </template>
-      <template #footer="{ defaultNode }">
-        <div class="flex w-full flex-col gap-2">
-          <div v-if="pendingPermission" class="permission-request-inline">
+          <div v-else-if="pendingPermission" class="permission-request-inline">
             <div class="permission-request-title">
               <AlertTriangle
                 class="!h-[14px] !w-[14px] flex-none text-[color:var(--brand-warning,#b7791f)]"
@@ -543,6 +612,41 @@ const chipClass = (active: boolean, disabled = false) => {
               </button>
             </div>
           </div>
+        </div>
+        <button
+          v-if="hasHeaderNavigation"
+          type="button"
+          class="sender-header-nav sender-header-nav-right"
+          aria-label="切换到下一个面板"
+          title="下一个面板"
+          @click="switchHeaderPanel(1)"
+        >
+          <ChevronRight class="!h-4 !w-4" />
+        </button>
+      </div>
+    </Transition>
+    <!-- 常驻挂载，初次点击“添加图片”时也能正常打开文件选择器。 -->
+    <input
+      ref="fileInputRef"
+      type="file"
+      accept="image/*"
+      multiple
+      hidden
+      @change="handleFileInputChange"
+    />
+    <Sender
+      :value="modelValue"
+      :loading="loading"
+      placeholder="做什么都可以..."
+      :on-cancel="() => emit('cancel')"
+      :on-change="handleChange"
+      :on-submit="handleSubmit"
+      :on-paste-file="handlePasteFile"
+      :suffix="false"
+      :disabled="agentMode && (!agentAvailable || agentConfiguring)"
+    >
+      <template #footer="{ defaultNode }">
+        <div class="flex w-full flex-col gap-2">
           <div class="flex min-h-[26px] w-full items-center justify-between gap-3">
             <!-- composer 左排：附件、推理、工作模式和文件工作区 -->
             <div class="flex min-w-0 items-center gap-[3px]">
@@ -551,7 +655,8 @@ const chipClass = (active: boolean, disabled = false) => {
                   type="button"
                   :class="chipClass(false)"
                   aria-label="添加图片"
-                  @click="pickFiles"
+                  :aria-expanded="attachmentsPanelOpen"
+                  @click="toggleAttachmentsPanel"
                 >
                   <ImagePlus
                     class="!h-[12px] !w-[12px] flex-none"
@@ -638,31 +743,33 @@ const chipClass = (active: boolean, disabled = false) => {
                 class="project-path-control"
                 :class="{ 'is-selected': Boolean(projectPath) }"
               >
-                <button
-                  type="button"
-                  :class="[
-                    chipClass(Boolean(projectPath), loading || projectPathPicking),
-                    { 'project-path-trigger-selected': Boolean(projectPath) },
-                  ]"
-                  :aria-pressed="Boolean(projectPath)"
-                  aria-label="项目工作目录"
-                  :title="
-                    projectPathPicking ? '等待系统目录选择器' : projectPath || '选择项目工作目录'
-                  "
+                <Dropdown
+                  :menu="projectPathMenu"
+                  :trigger="['click']"
+                  placement="topLeft"
                   :disabled="loading || projectPathPicking"
-                  @click="pickProjectPath"
+                  :get-popup-container="popupIntoChat"
                 >
-                  <FolderOpen
-                    class="!h-[12px] !w-[12px] flex-none"
-                    :class="projectPath ? 'text-brand-accent' : 'text-brand-muted-strong'"
-                  />
-                  <span
-                    class="project-path-chip-label"
-                    :title="projectPathName || '选择项目工作目录'"
+                  <button
+                    type="button"
+                    :class="[
+                      chipClass(Boolean(projectPath), loading || projectPathPicking),
+                      { 'project-path-trigger-selected': Boolean(projectPath) },
+                    ]"
+                    :aria-pressed="Boolean(projectPath)"
+                    aria-label="项目工作目录"
+                    :title="projectPathPicking ? '等待系统目录选择器' : projectPath || '无文件目录'"
+                    :disabled="loading || projectPathPicking"
                   >
-                    {{ projectPathName || "目录" }}
-                  </span>
-                </button>
+                    <FolderOpen
+                      class="!h-[12px] !w-[12px] flex-none"
+                      :class="projectPath ? 'text-brand-accent' : 'text-brand-muted-strong'"
+                    />
+                    <span class="project-path-chip-label" :title="projectPathName || '无文件目录'">
+                      {{ projectPathName || "无文件目录" }}
+                    </span>
+                  </button>
+                </Dropdown>
                 <Tooltip v-if="projectPath" title="清除项目目录">
                   <button
                     type="button"
@@ -744,12 +851,90 @@ const chipClass = (active: boolean, disabled = false) => {
 
 <style scoped>
 /* 保留原因：以下均为 :deep() 覆盖 antd / antd-x 内部类，按迁移规范保留在 scoped CSS 中 */
+.sender-header-card {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto -28px;
+  border: 1px solid var(--brand-border);
+  border-radius: 16px;
+  background: var(--brand-composer);
+  padding: 8px 8px 36px;
+  box-shadow: var(--brand-shadow-float);
+}
+.sender-header-enter-active,
+.sender-header-leave-active {
+  max-height: 420px;
+  overflow: hidden;
+  transition:
+    max-height 180ms ease,
+    margin-bottom 180ms ease,
+    opacity 180ms ease,
+    transform 180ms ease,
+    padding 180ms ease;
+  transform-origin: bottom center;
+}
+.sender-header-enter-from,
+.sender-header-leave-to {
+  max-height: 0;
+  margin-bottom: 0;
+  border-color: transparent;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  transform: translateY(10px) scale(0.985);
+}
+.sender-header-card.has-permission {
+  border-color: color-mix(in srgb, var(--brand-warning, #b7791f) 55%, var(--brand-border));
+}
+.sender-header-panel {
+  min-width: 0;
+}
+.sender-header-card.has-navigation {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sender-header-nav {
+  display: grid;
+  width: 26px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--brand-muted-strong);
+  cursor: pointer;
+}
+.sender-header-nav:hover {
+  background: var(--brand-surface-subtle);
+  color: var(--brand-foreground);
+}
+.sender-header-card:not(.has-navigation) .sender-header-panel {
+  width: 100%;
+}
+.sender-header-card.has-navigation .sender-header-panel {
+  flex: 1;
+  min-width: 0;
+}
+.sender-header-card .attachment-preview-row {
+  padding: 0;
+}
+.sender-header-card .permission-request-inline {
+  margin-top: 8px;
+}
 .chat-footer :deep(.antd-sender) {
+  position: relative;
+  z-index: 3;
   width: 100%;
   max-width: 760px;
   margin: 0 auto;
 }
 .chat-footer :deep(.antd-sender-main) {
+  position: relative;
+  z-index: 3;
   min-height: 96px;
   padding: 0;
   /* composer 卡片：圆角 13px，border，composer 底色，无重阴影 */
@@ -858,11 +1043,11 @@ const chipClass = (active: boolean, disabled = false) => {
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   cursor: pointer;
-  opacity: 0;
+  opacity: 1;
   transition: opacity 140ms ease;
 }
 .attachment-tile:hover .attachment-remove {
-  opacity: 1;
+  opacity: 0.92;
 }
 .attachment-overlay {
   position: absolute;
@@ -1024,6 +1209,23 @@ const chipClass = (active: boolean, disabled = false) => {
   background-color: transparent;
 }
 :global(.chat-model-menu .ant-dropdown-menu-item-divider) {
+  margin: 4px 0;
+}
+
+/* 项目目录菜单：路径通常较长，保持一行省略并限制弹层宽度。 */
+:global(.project-path-menu) {
+  min-width: 220px;
+  max-width: min(420px, calc(100vw - 32px));
+  max-height: min(360px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+}
+:global(.project-path-menu .ant-dropdown-menu-item-content) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:global(.project-path-menu .ant-dropdown-menu-item-divider) {
   margin: 4px 0;
 }
 

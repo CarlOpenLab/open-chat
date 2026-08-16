@@ -4,15 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "ready": "./node_modules/.bin/vp fmt && ./node_modules/.bin/vp lint && vp run server#build && vp run website#build && vp run @open-chat/cli#build",
+    "ready": "./node_modules/.bin/vp fmt && ./node_modules/.bin/vp lint && vp run server#build && vp run website#build && vp run @cc-hearts/open-chat#build",
     "dev": "vp run dev:all",
     "dev:all": "concurrently \"vp run server#dev\" \"vp run website#dev\"",
     "dev:website": "vp run website#dev",
     "dev:server": "vp run server#dev",
     "open-chat": "node tools/open-chat/bin/open-chat.mjs",
-    "open-chat:dev": "vp run @open-chat/cli#dev",
+    "open-chat:dev": "vp run @cc-hearts/open-chat#dev",
     "build": "pnpm open-chat --build",
-    "build:cli": "vp run @open-chat/cli#build",
+    "build:cli": "vp run @cc-hearts/open-chat#build",
+    "build:package": "vp run website#build && vp run @cc-hearts/open-chat#build && node tools/open-chat/scripts/stage-package.mjs",
     "prepare": "vp config"
   },
   "dependencies": {

@@ -98,11 +98,18 @@ pnpm open-chat --port 0         # auto-assign an available port
 pnpm open-chat --host 0.0.0.0   # listen on all interfaces
 ```
 
-To expose `open-chat` as a global command (macOS/Linux):
+To expose `open-chat` as a global command from the source checkout (macOS/Linux):
 
 ```bash
 pnpm build
 cd tools/open-chat && pnpm link
+open-chat
+```
+
+For an npm installation that works without the source checkout:
+
+```bash
+npm install -g @cc-hearts/open-chat
 open-chat
 ```
 
@@ -180,7 +187,7 @@ vp run server#dev       # gateway only
 vp check                # format, lint, and type checks
 vp run server#build
 vp run website#build
-vp run @open-chat/cli#build
+vp run @cc-hearts/open-chat#build
 ```
 
 ## Repository layout

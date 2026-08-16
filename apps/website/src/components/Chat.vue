@@ -84,15 +84,29 @@ const emit = defineEmits<Emits>();
 // ============ 响应式状态 ============
 
 const content = ref("");
+/**
+ * Render the outgoing message before the XChat store has emitted its first
+ * snapshot. The store remains the source of truth; this is only a short-lived
+ * visual bridge and is de-duplicated by optimisticId once the real item lands.
+ */
+const optimisticMessage = ref<{
+  conversationKey: string;
+  id: string;
+  message: XModelMessage;
+  extraInfo: Record<string, unknown>;
+} | null>(null);
 const conversationsOpen = ref(true);
 const rightPanelOpen = ref(false);
 const deleteOpen = ref(false);
 const currentConversationKey = ref<string>("");
 const thinkingEnabled = ref(true);
 const workMode = ref<"build" | "plan">("build");
-const permissionMode = ref<"supervised" | "auto" | "full">("supervised");
+const permissionMode = ref<"supervised" | "auto" | "full">("full");
 const fileModeEnabled = ref(false);
 const projectPath = ref("");
+const draftProjectPath = ref("");
+const PROJECT_PATH_HISTORY_KEY = "open-chat-project-paths-v1";
+const projectPathHistory = ref<Record<string, string[]>>({});
 const selectedWorkspacePath = ref<string[]>([]);
 const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const pendingA2UISurfaceId = ref("");
@@ -285,6 +299,58 @@ const isPiAgent = computed(() => {
   return id === "pi" || id === "omp" || name === "pi" || name === "oh my pi";
 });
 const effectivePermissionMode = computed(() => (isPiAgent.value ? "full" : permissionMode.value));
+
+const loadProjectPathHistory = () => {
+  if (typeof window === "undefined") return;
+  try {
+    const stored = JSON.parse(localStorage.getItem(PROJECT_PATH_HISTORY_KEY) || "null") as unknown;
+    if (!stored || typeof stored !== "object") return;
+    const normalized: Record<string, string[]> = {};
+    for (const [agentId, paths] of Object.entries(stored)) {
+      if (!Array.isArray(paths)) continue;
+      const unique = [...new Set(paths.filter((path): path is string => typeof path === "string"))]
+        .map((path) => path.trim())
+        .filter(Boolean)
+        .slice(0, 20);
+      if (unique.length) normalized[agentId] = unique;
+    }
+    projectPathHistory.value = normalized;
+  } catch {
+    projectPathHistory.value = {};
+  }
+};
+
+const saveProjectPathHistory = () => {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(PROJECT_PATH_HISTORY_KEY, JSON.stringify(projectPathHistory.value));
+  } catch {
+    // Local storage may be unavailable in private browsing; the in-memory list still works.
+  }
+};
+
+const rememberProjectPath = (value: string, agentId = activeAgentId.value) => {
+  const path = value.trim();
+  if (!path) return;
+  const previous = projectPathHistory.value[agentId] ?? [];
+  const paths = [path, ...previous.filter((item) => item !== path)].slice(0, 20);
+  projectPathHistory.value = { ...projectPathHistory.value, [agentId]: paths };
+  saveProjectPathHistory();
+};
+
+const projectPathOptions = computed(() => {
+  const paths = projectPathHistory.value[activeAgentId.value] ?? [];
+  const current = projectPath.value.trim();
+  return current && !paths.includes(current) ? [current, ...paths] : paths;
+});
+
+const lastProjectPath = () => projectPathHistory.value[activeAgentId.value]?.[0] ?? "";
+
+loadProjectPathHistory();
+
+const resetPermissionForAgentSwitch = () => {
+  permissionMode.value = "full";
+};
 
 // ============ 模型加载 ============
 
@@ -517,8 +583,9 @@ const handleNewConversation = () => {
     return;
   }
 
+  draftProjectPath.value = lastProjectPath();
   currentConversationKey.value = "";
-  projectPath.value = "";
+  projectPath.value = draftProjectPath.value;
   syncConversationRoute("replace");
   showWelcome.value = true;
   historyBack.value = [];
@@ -558,8 +625,10 @@ const handleAgentChange = (agentId: string) => {
   }
   const next = agents.value.find((agent) => agent.id === agentId);
   if (!next) return;
+  resetPermissionForAgentSwitch();
   draftConversationKey.value = "";
   acpSession.value = null;
+  draftProjectPath.value = "";
   activeAgentId.value = next.id;
   localStorage.setItem("open-chat-agent", next.id);
   currentConversationKey.value = "";
@@ -647,9 +716,9 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
       role: "assistant",
     };
   },
-  // Keep the assistant row mounted while the gateway is preparing the first
-  // event. The message renderer owns the animated status treatment.
-  requestPlaceholder: () => ({ content: "", role: "assistant" }),
+  // Keep a visible assistant row mounted while the gateway is preparing the
+  // first event, so the outgoing message transitions directly into feedback.
+  requestPlaceholder: () => ({ content: "正在思考…", role: "assistant" }),
 });
 
 /** 输入区忙碌态：本地请求进行中，或 Open Chat 网关中的会话在跑（多标签 / 刷新恢复）。 */
@@ -963,8 +1032,10 @@ const restoreRouteConversation = async (
     API_AGENT;
 
   if (targetAgent.id !== activeAgentId.value) {
+    resetPermissionForAgentSwitch();
     acpSession.value = null;
     draftConversationKey.value = "";
+    draftProjectPath.value = "";
     activeAgentId.value = targetAgent.id;
     localStorage.setItem("open-chat-agent", targetAgent.id);
     if (targetAgent.kind === "acp" && targetAgent.available) {
@@ -975,6 +1046,7 @@ const restoreRouteConversation = async (
 
   // 2) 会话：精确 key → ACP 重建 key → providerSessionId 匹配；找不到则落到草稿
   if (!routeSessionId) {
+    draftProjectPath.value = "";
     currentConversationKey.value = "";
     setMessages([]);
     showWelcome.value = true;
@@ -990,7 +1062,9 @@ const restoreRouteConversation = async (
   );
   if (conversation) {
     if (conversation.agentId && conversation.agentId !== activeAgentId.value) {
+      resetPermissionForAgentSwitch();
       acpSession.value = null;
+      draftProjectPath.value = "";
       activeAgentId.value = conversation.agentId;
       localStorage.setItem("open-chat-agent", conversation.agentId);
     }
@@ -999,6 +1073,7 @@ const restoreRouteConversation = async (
     return true;
   }
   // 本地找不到：落到目标供应商的草稿态（ACP 会话会在下次 syncProviderConversations 后出现）
+  draftProjectPath.value = "";
   currentConversationKey.value = "";
   setMessages([]);
   showWelcome.value = true;
@@ -1186,8 +1261,13 @@ watch(activeAgentId, () => {
 });
 
 watch(currentConversationKey, (key) => {
-  projectPath.value = getCurrentConversation()?.projectPath ?? "";
-  if (!key) projectPath.value = "";
+  if (!key) {
+    projectPath.value = draftProjectPath.value;
+    return;
+  }
+  const conversationPath = getCurrentConversation()?.projectPath?.trim() ?? "";
+  projectPath.value = conversationPath;
+  if (conversationPath) rememberProjectPath(conversationPath);
 });
 
 // 监听消息变化，同步到对话列表
@@ -1314,7 +1394,46 @@ const handleResizeEnd = () => {
 
 // ============ 消息转换 ============
 
-const bubbleItems = computed(() => modelMessagesToBubbleItems(currentConversationMessages.value));
+const bubbleItems = computed(() => {
+  const conversationMessages = currentConversationMessages.value;
+  const pending = optimisticMessage.value;
+  const baseItems = modelMessagesToBubbleItems(conversationMessages);
+
+  if (!pending || pending.conversationKey !== currentConversationKey.value) {
+    return baseItems;
+  }
+
+  // Once useXChat has emitted the local user item, switch back to the store
+  // output so the optimistic row cannot be rendered twice.
+  const storeHasPendingMessage = conversationMessages.some(
+    (item) =>
+      (item.extraInfo as { optimisticId?: unknown } | undefined)?.optimisticId === pending.id,
+  );
+  if (storeHasPendingMessage) return baseItems;
+
+  const pendingInfo: DefaultMessageInfo<XModelMessage> = {
+    id: pending.id,
+    status: "local",
+    message: pending.message,
+    extraInfo: pending.extraInfo,
+  };
+  const hasStreamingAssistant = conversationMessages.some(
+    (item) =>
+      item.message.role === "assistant" &&
+      (item.status === "loading" || item.status === "updating"),
+  );
+  const optimisticItems = [...conversationMessages, pendingInfo];
+  // Keep the transition visually continuous even while the request store is
+  // waiting to publish its placeholder row.
+  if (!hasStreamingAssistant) {
+    optimisticItems.push({
+      id: `${pending.id}:thinking`,
+      status: "loading",
+      message: { role: "assistant", content: "正在思考…" },
+    });
+  }
+  return modelMessagesToBubbleItems(optimisticItems);
+});
 
 // ============ 事件处理 ============
 
@@ -1400,7 +1519,7 @@ const handleSubmit = (
     attachments?: UploadedAttachment[];
   } = {},
 ) => {
-  if (!nextContent || !nextContent.trim()) return;
+  if ((!nextContent || !nextContent.trim()) && !options.attachments?.length) return;
   if (inputBusy.value) return;
   if (!activeAgent.value.available) {
     message.warning(
@@ -1442,6 +1561,24 @@ const handleSubmit = (
   activeRequestConversationKey.value = currentConversationKey.value;
 
   showWelcome.value = false;
+  const isHiddenRequest = options.extraInfo?.hidden === true;
+  const optimisticId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const requestExtraInfo: Record<string, unknown> = {
+    ...options.extraInfo,
+    ...(isHiddenRequest ? {} : { optimisticId }),
+  };
+  if (!isHiddenRequest) {
+    optimisticMessage.value = {
+      conversationKey: currentConversationKey.value,
+      id: optimisticId,
+      message: {
+        role: "user",
+        content: nextContent,
+        ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+      },
+      extraInfo: requestExtraInfo,
+    };
+  }
   const forwardProvider = getForwardProvider(currentModel.value);
   onRequest(
     {
@@ -1468,7 +1605,7 @@ const handleSubmit = (
       // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
       ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
     },
-    options.extraInfo ? { extraInfo: options.extraInfo } : undefined,
+    { extraInfo: requestExtraInfo },
   );
   // 清空输入框
   setTimeout(() => {
@@ -1481,7 +1618,10 @@ const handleProjectPathChange = (value: string) => {
     message.warning("请先停止当前任务再切换项目目录");
     return;
   }
-  projectPath.value = value.trim();
+  const nextPath = value.trim();
+  projectPath.value = nextPath;
+  if (!currentConversationKey.value) draftProjectPath.value = nextPath;
+  if (nextPath) rememberProjectPath(nextPath);
   const conversation = getCurrentConversation();
   if (conversation) {
     conversation.projectPath = projectPath.value;
@@ -1836,6 +1976,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :pending-permission="pendingPermission"
         :file-mode-enabled="fileModeEnabled"
         :project-path="projectPath"
+        :project-path-options="projectPathOptions"
         :project-path-enabled="projectPathEnabled"
         :agent-mode="isAcpAgent"
         :agent-available="activeAgent.available"

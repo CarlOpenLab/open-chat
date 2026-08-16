@@ -20,10 +20,9 @@ const CLI_DIR =
   typeof __dirname !== "undefined" ? __dirname : dirname(fileURLToPath(import.meta.url));
 
 /**
- * 仓库根目录。dist/cli.cjs（打包）与 src/cli.ts（tsx）深度不同，
- * 不能写死相对层级，向上查找以 pnpm-workspace.yaml 为锚点。
+ * 源码仓库根目录。npm 包没有仓库根目录，因此这里只把它作为开发/构建能力使用。
  */
-function findRepoRoot(start: string): string {
+function findRepoRoot(start: string): string | undefined {
   let dir = start;
   for (let i = 0; i < 12; i += 1) {
     if (existsSync(join(dir, "pnpm-workspace.yaml")) && existsSync(join(dir, "apps", "server"))) {
@@ -33,11 +32,14 @@ function findRepoRoot(start: string): string {
     if (parent === dir) break;
     dir = parent;
   }
-  throw new Error("无法定位 Open Chat 仓库根目录（未找到 pnpm-workspace.yaml）");
+  return undefined;
 }
 
 const REPO_ROOT = findRepoRoot(CLI_DIR);
-const WEBSITE_DIST = join(REPO_ROOT, "apps", "website", "dist");
+const PACKAGE_ROOT = resolve(CLI_DIR, "..");
+const WEBSITE_DIST = REPO_ROOT
+  ? join(REPO_ROOT, "apps", "website", "dist")
+  : join(PACKAGE_ROOT, "website-dist");
 const DEV_URL = "http://localhost:3000";
 
 interface CliOptions {
@@ -63,7 +65,7 @@ const HELP = `open-chat — 本地启动 Open Chat 工作区（网关 + Web UI�
 选项:
   --port <port>        网关端口（默认 8082，0 = 自动分配）
   --host <host>        网关监听地址（默认 127.0.0.1）
-  --website-dir <dir>  静态站点目录（默认 apps/website/dist）
+  --website-dir <dir>  静态站点目录（默认使用内置网站资源）
   --dev                启动 Vite 开发服务器并打开 http://localhost:3000
   --build              构建网站与 CLI 后退出（open-chat build）
   --no-open            不自动打开浏览器
@@ -175,11 +177,16 @@ function runProcess(command: string, args: string[], cwd: string): Promise<void>
 }
 
 async function buildAll(): Promise<void> {
+  if (!REPO_ROOT) {
+    throw new Error(
+      "npm 安装版不支持构建，请在 Open Chat 源码仓库中运行 `pnpm open-chat --build`。",
+    );
+  }
   const pnpm = resolvePnpm();
   console.log("构建网站…");
   await runProcess(pnpm, ["--filter", "website", "run", "build"], REPO_ROOT);
   console.log("构建 CLI…");
-  await runProcess(pnpm, ["--filter", "@open-chat/cli", "run", "build"], REPO_ROOT);
+  await runProcess(pnpm, ["--filter", "@cc-hearts/open-chat", "run", "build"], REPO_ROOT);
   console.log("构建完成。运行 `open-chat` 启动。");
 }
 
@@ -272,6 +279,11 @@ async function main(): Promise<void> {
 
   try {
     if (opts.dev) {
+      if (!REPO_ROOT) {
+        throw new Error(
+          "npm 安装版不支持开发模式，请在 Open Chat 源码仓库中运行 `open-chat --dev`。",
+        );
+      }
       devChild = spawn(resolvePnpm(), ["--filter", "website", "run", "dev"], {
         cwd: REPO_ROOT,
         stdio: ["ignore", "inherit", "inherit"],
