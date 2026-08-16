@@ -493,8 +493,23 @@ export class LocalChatManager {
     if (systemPrompt.trim()) body.system = systemPrompt.trim();
     await entry.server.request("POST", `/session/${entry.opencodeId}/prompt_async`, body);
 
-    const stream = await entry.server.openEventStream(signal);
-    if (!stream) throw new Error("opencode 事件流不可用");
+    const cancel = () => {
+      void entry.server.request("POST", `/session/${entry.opencodeId}/abort`, {}).catch(() => {});
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    if (signal.aborted) cancel();
+
+    let stream: ReadableStream<Uint8Array> | null;
+    try {
+      stream = await entry.server.openEventStream(signal);
+    } catch (error) {
+      signal.removeEventListener("abort", cancel);
+      throw error;
+    }
+    if (!stream) {
+      signal.removeEventListener("abort", cancel);
+      throw new Error("opencode 事件流不可用");
+    }
 
     const reader = stream.getReader();
     const decoder = new TextDecoder();
@@ -795,6 +810,7 @@ export class LocalChatManager {
       }
       finalize();
     } finally {
+      signal.removeEventListener("abort", cancel);
       reader.cancel().catch(() => {});
     }
   }

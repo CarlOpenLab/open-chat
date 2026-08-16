@@ -294,8 +294,10 @@ export class AcpManager {
     };
     this.activeRuns.set(session.sessionId, run);
     session.lastUsed = Date.now();
+    let rejectPromptAbort: ((reason: unknown) => void) | null = null;
     const cancel = () => {
       void connection.cancel({ sessionId: session.sessionId }).catch(() => {});
+      rejectPromptAbort?.(createAbortError());
     };
     signal.addEventListener("abort", cancel, { once: true });
 
@@ -317,10 +319,22 @@ export class AcpManager {
     }
 
     try {
-      const response = await connection.prompt({
+      // ACP providers are allowed to acknowledge cancellation asynchronously,
+      // and some keep `prompt()` pending until the underlying process exits.
+      // Race the protocol call with the gateway abort so the run registry and
+      // session state are always released when the user presses Stop.
+      const promptAborted = new Promise<never>((_resolve, reject) => {
+        rejectPromptAbort = reject;
+      });
+      if (signal.aborted) {
+        cancel();
+        throw createAbortError();
+      }
+      const promptResponse = connection.prompt({
         sessionId: session.sessionId,
         prompt: [{ type: "text", text }],
       });
+      const response = await Promise.race([promptResponse, promptAborted]);
       this.emitCustom(session.sessionId, res, "acp_turn", {
         agentId,
         sessionId: session.sessionId,
@@ -337,6 +351,7 @@ export class AcpManager {
       }
     } finally {
       signal.removeEventListener("abort", cancel);
+      rejectPromptAbort = null;
       this.activeRuns.delete(session.sessionId);
       this.turnHistoryStart.delete(session.sessionId);
       this.cancelPermissionsForSession(session.sessionId);
@@ -798,6 +813,12 @@ function validateConfigValue(option: SessionConfigOption, value: string | boolea
   if (!values.includes(value)) {
     throw GatewayError.invalidRequest(`${option.name} 不支持选项：${value}`);
   }
+}
+
+function createAbortError(): Error {
+  const error = new Error("ACP 回合已取消");
+  error.name = "AbortError";
+  return error;
 }
 
 function contentText(content: unknown): string {

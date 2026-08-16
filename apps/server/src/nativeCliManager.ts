@@ -276,7 +276,10 @@ export class NativeCliManager {
       );
       session.sessionId = entry.opencodeId;
       writeCustomEvent(res, "provider_session", { agentId, sessionId: session.sessionId });
-      await this.localChat.runTurn(entry, text, session.model, "", res, signal);
+      await abortableRun(
+        () => this.localChat!.runTurn(entry, text, session.model, "", res, signal),
+        signal,
+      );
       return;
     }
 
@@ -292,7 +295,8 @@ export class NativeCliManager {
       }
     }
     try {
-      await session.runtime.runTurn(text, res, signal);
+      const runtime = session.runtime;
+      await abortableRun(() => runtime.runTurn(text, res, signal), signal);
       writeNativeDelta(res, `${agent.transport}/${session.model || agent.id}`, {}, "stop");
       res.write("data: [DONE]\n\n");
       res.end();
@@ -569,6 +573,30 @@ class JsonRpcProcess {
     this.pending.clear();
     this.onExit(error);
   }
+}
+
+async function abortableRun<T>(start: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw createAbortError();
+
+  let rejectAbort: ((reason: unknown) => void) | null = null;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () => rejectAbort?.(createAbortError());
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    if (signal.aborted) onAbort();
+    return await Promise.race([start(), aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    rejectAbort = null;
+  }
+}
+
+function createAbortError(): Error {
+  const error = new Error("Agent 回合已取消");
+  error.name = "AbortError";
+  return error;
 }
 
 class CodexRuntime implements NativeRuntime {

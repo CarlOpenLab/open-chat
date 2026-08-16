@@ -672,6 +672,17 @@ const sessionMatchesConversation = (
       conversation.providerSessionId === session.sessionId,
     ));
 
+const markConversationRunIdle = (conversationKey: string) => {
+  const conversation = conversationList.value.find((item) => String(item.key) === conversationKey);
+  openChatSessions.value = openChatSessions.value.map((session) =>
+    session.running &&
+    (session.conversationId === conversationKey ||
+      (conversation != null && sessionMatchesConversation(session, conversation)))
+      ? { ...session, running: false }
+      : session,
+  );
+};
+
 const currentOpenChatRun = computed(() => {
   const conversation = getCurrentConversation();
   if (!conversation) return undefined;
@@ -870,7 +881,6 @@ const pollSessionLists = async () => {
   const agent = activeAgent.value;
   if (agent.kind !== "acp" || !agent.available) {
     openChatSessions.value = [];
-    scheduleSessionPoll(15_000);
     return;
   }
 
@@ -879,10 +889,12 @@ const pollSessionLists = async () => {
   const controller = new AbortController();
   sessionPollController = controller;
   try {
-    const [providerResult, openChatResult] = await Promise.allSettled([
-      syncProviderConversations(agentId, sequence),
-      loadOpenChatSessions(agentId, controller.signal),
-    ]);
+    // Provider-owned sessions are synchronized on startup, agent changes, and
+    // route restores. Do not repeat that expensive listing on every run-state
+    // poll; the run registry is enough to track an active turn.
+    const openChatResult = await loadOpenChatSessions(agentId, controller.signal)
+      .then((sessions) => ({ status: "fulfilled" as const, value: sessions }))
+      .catch((reason: unknown) => ({ status: "rejected" as const, reason }));
     if (sequence !== sessionPollSequence || agentId !== activeAgentId.value) return;
 
     if (openChatResult.status === "fulfilled") {
@@ -902,16 +914,15 @@ const pollSessionLists = async () => {
     } else if ((openChatResult.reason as Error)?.name !== "AbortError") {
       console.error("Failed to poll Open Chat session state:", openChatResult.reason);
     }
-    if (providerResult.status === "rejected") {
-      console.error("Failed to poll provider sessions:", providerResult.reason);
-    }
   } catch (error) {
     console.error("Failed to poll session lists:", error);
   } finally {
     if (sequence === sessionPollSequence) {
       sessionPollController = null;
       const hasRunningSession = openChatSessions.value.some((session) => session.running);
-      scheduleSessionPoll(hasRunningSession ? 2_000 : 5_000);
+      // Idle pages need a one-shot refresh only. Keep polling while a gateway
+      // turn is active so a second tab can still receive its live transcript.
+      if (hasRunningSession || isRequesting.value) scheduleSessionPoll(2_000);
     }
   }
 };
@@ -1018,7 +1029,14 @@ watch(isRequesting, (requesting) => {
   if (requesting) {
     requestStartedAt.value = Date.now();
     acpRunState.value = isAcpAgent.value ? { state: "running" } : null;
+    if (isAcpAgent.value) restartSessionPolling();
     return;
+  }
+  if (activeRequestConversationKey.value) {
+    // The request SSE closing is authoritative. Clear the cached poll result
+    // before the live-stream watcher runs, otherwise it can subscribe to a run
+    // that the server has just removed and produce a transient 404.
+    markConversationRunIdle(activeRequestConversationKey.value);
   }
   attachPendingSearchSources();
   activeRequestConversationKey.value = "";
@@ -1027,6 +1045,7 @@ watch(isRequesting, (requesting) => {
   requestStartedAt.value = 0;
   // 请求结束：会话必然回到空闲，清掉过期的 ACP 运行状态
   acpRunState.value = null;
+  if (isAcpAgent.value) restartSessionPolling();
 });
 
 // ============ 会话实时输出（Open Chat 任务事件总线） ============
@@ -1130,6 +1149,11 @@ const startAcpLiveStream = () => {
       if (acpStreamController.value !== controller) return;
       acpStreamController.value = null;
       acpStreamConversationKey = "";
+      // End the cached run before refreshing. Otherwise a 204 caused by the
+      // run finishing between poll and subscribe immediately reopens the same
+      // stream and creates a tight request loop.
+      markConversationRunIdle(conversationId);
+      acpRunState.value = null;
       // 回合结束：服务端历史已完整，以最终状态收尾并让列表轮询纠正运行态。
       void refreshAcpSession();
       restartSessionPolling();
@@ -1246,10 +1270,12 @@ onMounted(async () => {
     showWelcome.value = true;
   }
 
-  isHydrating.value = false;
   await syncProviderConversations(activeAgentId.value);
   // URL 直达：打开复制的链接时恢复对应供应商与会话
   await restoreRouteConversation(initialChatPath);
+  // Release session/config watchers only after the final route conversation
+  // is known. Releasing earlier creates a throwaway draft session request.
+  isHydrating.value = false;
   restartSessionPolling();
 });
 
@@ -1611,6 +1637,7 @@ const handleReloadMessage = (messageId: string | number) => {
 
   setMessages(currentConversationMessages.value);
   const currentConversation = getCurrentConversation();
+  activeRequestConversationKey.value = currentConversationKey.value;
   const baseSystemPrompt = currentConversation?.systemPrompt ?? "";
   const forwardProvider = getForwardProvider(currentModel.value);
   onReload(messageId, {

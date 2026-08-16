@@ -182,7 +182,12 @@ export function subscribeAcpSessionStream(
         headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
         signal: controller.signal,
       });
-      if (!response.ok || !response.body) return;
+      if (response.status === 204) return;
+      if (!response.ok) {
+        console.error(`Agent session stream failed (HTTP ${response.status})`);
+        return;
+      }
+      if (!response.body) return;
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -220,7 +225,7 @@ export function subscribeAcpSessionStream(
 /** 取消运行中的 ACP 回合（多标签 / 刷新恢复场景下停止孤儿回合）。 */
 export async function cancelAcpTurn(agentId: string, conversationId: string): Promise<void> {
   try {
-    await fetch(`${API_BASE_URL}/api/acp/session/cancel`, {
+    const response = await fetch(`${API_BASE_URL}/api/acp/session/cancel`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -228,6 +233,9 @@ export async function cancelAcpTurn(agentId: string, conversationId: string): Pr
       },
       body: JSON.stringify({ agentId, conversationId }),
     });
+    if (!response.ok) {
+      throw new Error(`Agent turn cancellation failed (HTTP ${response.status})`);
+    }
   } catch (error) {
     console.error("Failed to cancel ACP turn:", error);
   }

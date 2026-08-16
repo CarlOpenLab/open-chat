@@ -252,7 +252,9 @@ export function createGatewayApp(runtime: GatewayRuntime, staticDir?: string): E
       const agentId = requiredQuery(req, "agentId");
       const conversationId = requiredQuery(req, "conversationId");
       if (!(await agentManager.subscribeSessionStream(agentId, conversationId, res))) {
-        res.status(404).json({ error: "会话不存在，请先创建或恢复会话" });
+        // The run may finish between the sessions poll and this subscription.
+        // No active stream is a normal race, not a missing API resource.
+        res.status(204).end();
         return;
       }
       // SSE 心跳：长时间无输出时防止代理/浏览器超时断连
@@ -523,7 +525,7 @@ async function handleAgentChat(
       abort.signal,
     );
   } catch (err) {
-    if (abort.signal.aborted) return;
+    if (abort.signal.aborted || (err instanceof Error && err.name === "AbortError")) return;
     console.error(`Agent ${agentId} error:`, err);
     if (!res.headersSent) {
       if (err instanceof GatewayError) return sendGatewayError(res, err);

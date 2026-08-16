@@ -167,7 +167,10 @@ export class AgentManager {
       }
       this.runs.finish(agentId, conversationId);
     } catch (error) {
-      this.runs.finish(agentId, conversationId, error);
+      // A user cancellation is a terminal state, not a failed turn. The
+      // registry still emits [DONE] and removes the run, but does not publish a
+      // misleading turn.failed event to other tabs subscribed to this session.
+      this.runs.finish(agentId, conversationId, tracked.signal.aborted ? undefined : error);
       throw error;
     } finally {
       signal.removeEventListener("abort", cancel);

@@ -72,7 +72,8 @@ export interface WebSearchSourceItem {
  * requests go through the Vite proxy (`/api` -> http://localhost:8082) and avoid
  * CORS. Set `VITE_API_URL` to target the gateway directly when needed.
  */
-export const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+const configuredApiBaseUrl = import.meta.env.VITE_API_URL || "";
+export const API_BASE_URL = configuredApiBaseUrl.replace(/\/+$/, "");
 
 /** Optional gateway bearer token (only required when the gateway enables auth). */
 export const GATEWAY_API_KEY = import.meta.env.VITE_GATEWAY_API_KEY || "";
@@ -84,7 +85,9 @@ export const aiService = {
    * 由 useChatModels 合并展示。
    */
   async getModels(): Promise<ModelsResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/models`);
+    const response = await fetch(`${API_BASE_URL}/api/models`, {
+      headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
+    });
     if (!response.ok) {
       throw new Error("Failed to fetch models");
     }
