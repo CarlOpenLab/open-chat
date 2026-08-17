@@ -109,7 +109,7 @@ open-chat
 For an npm installation that works without the source checkout:
 
 ```bash
-npm install -g @cc-hearts/open-chat
+npm install -g @cc-heart/open-chat
 open-chat
 ```
 
@@ -187,7 +187,7 @@ vp run server#dev       # gateway only
 vp check                # format, lint, and type checks
 vp run server#build
 vp run website#build
-vp run @cc-hearts/open-chat#build
+vp run @cc-heart/open-chat#build
 ```
 
 ## Repository layout

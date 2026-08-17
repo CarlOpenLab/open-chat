@@ -186,7 +186,7 @@ async function buildAll(): Promise<void> {
   console.log("构建网站…");
   await runProcess(pnpm, ["--filter", "website", "run", "build"], REPO_ROOT);
   console.log("构建 CLI…");
-  await runProcess(pnpm, ["--filter", "@cc-hearts/open-chat", "run", "build"], REPO_ROOT);
+  await runProcess(pnpm, ["--filter", "@cc-heart/open-chat", "run", "build"], REPO_ROOT);
   console.log("构建完成。运行 `open-chat` 启动。");
 }
 
