@@ -348,14 +348,14 @@ onBeforeUnmount(() => {
         <SquarePen class="!h-[14px] !w-[14px] flex-none text-brand-accent" />
         <span class="min-w-0 flex-1 truncate">新任务</span>
       </button>
-      <button type="button" :class="actionRowClass" @click="emit('openSearch')">
-        <Search class="!h-[15px] !w-[15px] flex-none" />
-        <span class="min-w-0 flex-1 truncate">搜索</span>
-        <kbd
-          class="flex h-[18px] flex-none items-center rounded-[4px] border border-solid border-brand-border bg-transparent px-[5px] text-[10px] tracking-[0.5px] text-brand-muted-strong [font-family:inherit]"
-          >⌘K</kbd
-        >
-      </button>
+      <!-- <button type="button" :class="actionRowClass" @click="emit('openSearch')"> -->
+      <!--   <Search class="!h-[15px] !w-[15px] flex-none" /> -->
+      <!--   <span class="min-w-0 flex-1 truncate">搜索</span> -->
+      <!--   <kbd -->
+      <!--     class="flex h-[18px] flex-none items-center rounded-[4px] border border-solid border-brand-border bg-transparent px-[5px] text-[10px] tracking-[0.5px] text-brand-muted-strong [font-family:inherit]" -->
+      <!--     >⌘K</kbd -->
+      <!--   > -->
+      <!-- </button> -->
     </div>
 
     <!-- 会话列表（按日期分组） -->
@@ -623,6 +623,11 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   flex-direction: column;
   gap: 4px;
+  padding-right: 0;
+}
+
+.chat-sidebar :deep(.antd-conversations-item:hover .conversation-entry-body) {
+  padding-right: 28px;
 }
 .chat-sidebar :deep(.conversation-entry-head) {
   display: flex;
