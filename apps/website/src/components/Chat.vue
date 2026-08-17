@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import { Notification as XNotification } from "@antdv-next/x";
 import type { ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest, useXChat } from "@antdv-next/x-sdk";
-import { message, notification } from "antdv-next";
+import { message } from "antdv-next";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import {
   API_BASE_URL,
@@ -115,7 +116,6 @@ const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const pendingA2UISurfaceId = ref("");
 const showWelcome = ref(true);
 const isHydrating = ref(true);
-const sessionStateLoading = ref(true);
 const activeRequestConversationKey = ref<string>("");
 /** 请求开始时间，供侧栏「工作中」条目计时 */
 const requestStartedAt = ref(0);
@@ -218,6 +218,80 @@ const persistMessageTimings = (
 };
 const commandPaletteOpen = ref(false);
 const settingsOpen = ref(false);
+const TASK_COMPLETION_NOTIFICATIONS_KEY = "open-chat-task-completion-notifications";
+const browserNotificationsSupported =
+  typeof window !== "undefined" && typeof window.Notification !== "undefined";
+
+const readTaskCompletionNotificationsEnabled = () => {
+  if (!browserNotificationsSupported) return false;
+  try {
+    return (
+      localStorage.getItem(TASK_COMPLETION_NOTIFICATIONS_KEY) === "true" &&
+      XNotification.permission === "granted"
+    );
+  } catch {
+    return false;
+  }
+};
+
+const taskCompletionNotificationsEnabled = ref(readTaskCompletionNotificationsEnabled());
+
+const persistTaskCompletionNotificationsEnabled = (enabled: boolean) => {
+  try {
+    localStorage.setItem(TASK_COMPLETION_NOTIFICATIONS_KEY, String(enabled));
+  } catch {
+    // Local storage may be unavailable in private browsing; keep the current session setting.
+  }
+};
+
+const handleTaskCompletionNotificationsChange = async (enabled: boolean) => {
+  if (!enabled) {
+    taskCompletionNotificationsEnabled.value = false;
+    persistTaskCompletionNotificationsEnabled(false);
+    return;
+  }
+
+  if (!browserNotificationsSupported) {
+    message.warning("当前浏览器不支持系统通知");
+    return;
+  }
+
+  try {
+    const permission = await XNotification.requestPermission();
+    const granted = permission === "granted";
+    taskCompletionNotificationsEnabled.value = granted;
+    persistTaskCompletionNotificationsEnabled(granted);
+    if (granted) {
+      message.success("已开启任务完成通知");
+    } else {
+      message.warning("浏览器未允许通知，请在网站权限设置中开启");
+    }
+  } catch (error) {
+    console.error("Failed to request browser notification permission:", error);
+    taskCompletionNotificationsEnabled.value = false;
+    persistTaskCompletionNotificationsEnabled(false);
+    message.warning("无法请求浏览器通知权限");
+  }
+};
+
+const handleTestTaskCompletionNotification = () => {
+  if (
+    !taskCompletionNotificationsEnabled.value ||
+    !browserNotificationsSupported ||
+    XNotification.permission !== "granted"
+  ) {
+    message.warning("请先开启任务完成通知并允许浏览器通知权限");
+    return;
+  }
+
+  XNotification.open({
+    title: "Open Chat · 测试通知",
+    body: "如果你能看到这条系统通知，任务完成提醒已可以正常使用。",
+    tag: "open-chat-task-completion-test",
+    duration: 8,
+    onClick: () => window.focus(),
+  });
+};
 const agents = ref<AgentView[]>([API_AGENT]);
 const activeAgentId = ref("api");
 const acpSession = ref<AcpSessionState | null>(null);
@@ -529,40 +603,33 @@ interface TaskCompletionNotice {
   conversationKey: string;
 }
 
-const pendingTaskCompletionNotices = new Map<string, TaskCompletionNotice>();
-
 const showTaskCompletionNotification = (notice: TaskCompletionNotice) => {
+  if (
+    !taskCompletionNotificationsEnabled.value ||
+    !browserNotificationsSupported ||
+    XNotification.permission !== "granted"
+  ) {
+    return;
+  }
   const conversation = conversationList.value.find(
     (item) =>
       (item.agentId || "api") === notice.agentId && String(item.key) === notice.conversationKey,
   );
   const conversationTitle = String(conversation?.label ?? "").trim();
-  notification.success({
-    key: notice.key,
-    title: "任务已完成",
-    description:
+  XNotification.open({
+    title: "Open Chat · 任务已完成",
+    body:
       conversationTitle && conversationTitle !== "新对话"
         ? `${conversationTitle} 已完成，可以查看结果。`
         : "Agent 任务已完成，可以查看结果。",
-    placement: "bottomRight",
-    pauseOnHover: true,
-    showProgress: true,
+    tag: notice.key,
+    duration: 8,
+    onClick: () => window.focus(),
   });
 };
 
 const notifyTaskCompletion = (notice: TaskCompletionNotice) => {
-  if (document.visibilityState === "hidden") {
-    pendingTaskCompletionNotices.set(notice.key, notice);
-    return;
-  }
   showTaskCompletionNotification(notice);
-};
-
-const flushTaskCompletionNotifications = () => {
-  for (const notice of pendingTaskCompletionNotices.values()) {
-    showTaskCompletionNotification(notice);
-  }
-  pendingTaskCompletionNotices.clear();
 };
 
 const isInDraftMode = computed(() => !currentConversationKey.value);
@@ -811,10 +878,8 @@ const inputRunning = computed(
     Boolean(currentOpenChatRun.value) ||
     (usesAcpProtocol.value && acpRunState.value?.state === "running"),
 );
-/** 初始化和配置切换期间无法可靠确定目标会话，此时才真正禁用输入。 */
-const inputUnavailable = computed(
-  () => isAcpAgent.value && (isHydrating.value || sessionStateLoading.value),
-);
+/** 初始化期间无法可靠确定目标会话，此时才真正禁用输入。后台 sessions 轮询不能影响输入焦点。 */
+const inputUnavailable = computed(() => isAcpAgent.value && isHydrating.value);
 const inputBusy = computed(() => inputUnavailable.value || inputRunning.value);
 
 const sessionMatchesConversation = (
@@ -863,6 +928,13 @@ const conversationBusyStates = computed<Record<string, { startedAt: number }>>((
   }
   return states;
 });
+
+/** 当前会话的运行起点；聊天区与侧栏共用这一份服务端时间。 */
+const currentConversationBusyState = computed(() =>
+  currentConversationKey.value
+    ? conversationBusyStates.value[currentConversationKey.value]
+    : undefined,
+);
 
 // ============ 会话持久化 ============
 
@@ -948,8 +1020,19 @@ const syncProviderConversations = async (agentId: string): Promise<void> => {
 
 let sessionRefreshController: AbortController | null = null;
 let sessionRefreshSequence = 0;
+let sessionRefreshFrame: number | null = null;
+let sessionRefreshInFlight = false;
+let sessionRefreshGeneration = 0;
+
+const SESSION_REFRESH_RUNNING_MS = 2_000;
+const SESSION_REFRESH_IDLE_MS = 5_000;
 
 const stopSessionRefresh = () => {
+  sessionRefreshGeneration += 1;
+  if (sessionRefreshFrame !== null) {
+    window.cancelAnimationFrame(sessionRefreshFrame);
+    sessionRefreshFrame = null;
+  }
   sessionRefreshController?.abort();
   sessionRefreshController = null;
 };
@@ -1021,15 +1104,15 @@ const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
 
 const refreshSessionState = async () => {
   if (isHydrating.value || document.visibilityState === "hidden") return;
-  stopSessionRefresh();
+  if (sessionRefreshInFlight) return;
+  sessionRefreshInFlight = true;
   const agent = activeAgent.value;
   if (agent.kind !== "acp" || !agent.available) {
     openChatSessions.value = [];
-    sessionStateLoading.value = false;
+    sessionRefreshInFlight = false;
     return;
   }
 
-  sessionStateLoading.value = true;
   const sequence = ++sessionRefreshSequence;
   const agentId = agent.id;
   const controller = new AbortController();
@@ -1078,6 +1161,12 @@ const refreshSessionState = async () => {
         : undefined;
       if (!isRequesting.value) {
         acpRunState.value = selectedRun ? { state: "running" } : null;
+        // The SSE replay is the fast path. If it is unavailable (for example
+        // after a transient disconnect), pull the collector-backed history on
+        // the next refresh so the visible conversation still advances.
+        if (selectedRun && !acpStreamController.value) {
+          void refreshAcpSession();
+        }
       }
     } else if ((openChatResult.reason as Error)?.name !== "AbortError") {
       console.error("Failed to refresh Open Chat session state:", openChatResult.reason);
@@ -1087,16 +1176,53 @@ const refreshSessionState = async () => {
   } finally {
     if (sequence === sessionRefreshSequence) {
       sessionRefreshController = null;
-      sessionStateLoading.value = false;
+    }
+    sessionRefreshInFlight = false;
+    if (sequence === sessionRefreshSequence && document.visibilityState !== "hidden") {
+      const hasRunningSession = openChatSessions.value.some((session) => session.running);
+      scheduleSessionRefresh(
+        hasRunningSession || isRequesting.value
+          ? SESSION_REFRESH_RUNNING_MS
+          : SESSION_REFRESH_IDLE_MS,
+      );
     }
   }
+};
+
+const scheduleSessionRefresh = (delayMs = 0) => {
+  if (sessionRefreshFrame !== null || isHydrating.value || document.visibilityState === "hidden") {
+    return;
+  }
+  const generation = sessionRefreshGeneration;
+  const dueAt = performance.now() + Math.max(0, delayMs);
+  const tick = (now: number) => {
+    if (
+      generation !== sessionRefreshGeneration ||
+      isHydrating.value ||
+      document.visibilityState === "hidden"
+    ) {
+      sessionRefreshFrame = null;
+      return;
+    }
+    if (now < dueAt) {
+      sessionRefreshFrame = window.requestAnimationFrame(tick);
+      return;
+    }
+    sessionRefreshFrame = null;
+    if (sessionRefreshInFlight) {
+      scheduleSessionRefresh(100);
+      return;
+    }
+    void refreshSessionState();
+  };
+  sessionRefreshFrame = window.requestAnimationFrame(tick);
 };
 
 const restartSessionRefresh = () => {
   stopSessionRefresh();
   sessionRefreshSequence += 1;
   if (!isHydrating.value && document.visibilityState !== "hidden") {
-    void refreshSessionState();
+    scheduleSessionRefresh();
   }
 };
 
@@ -1106,7 +1232,6 @@ const handleVisibilityChange = () => {
     stopAcpLiveStream();
     return;
   }
-  flushTaskCompletionNotifications();
   restartSessionRefresh();
 };
 
@@ -1280,6 +1405,16 @@ const stopAcpLiveStream = () => {
   acpStreamConversationKey = "";
 };
 
+const finalizeAcpStreamMessages = () => {
+  setMessages((current) =>
+    current.map((item) =>
+      item.status === "loading" || item.status === "updating"
+        ? { ...item, status: "success" as const }
+        : item,
+    ),
+  );
+};
+
 /** 复用 OpenChatProvider.transformMessage 累积当前回合输出，与常规请求同一渲染管线。 */
 const handleAcpStreamEvent = (event: string | null, data: string) => {
   if (data === "[DONE]") return;
@@ -1341,13 +1476,18 @@ const startAcpLiveStream = () => {
   const selectedRun = currentOpenChatRun.value;
   const isRunning = Boolean(selectedRun) || acpRunState.value?.state === "running";
   if (!isRunning || isRequesting.value) return;
-  const streamKey = `${activeAgentId.value}:${conversationId}`;
+  // The UI key can be a provider-session-derived key after a page refresh.
+  // The live-run registry is indexed by its gateway conversation id, so use
+  // the matched run id for the subscription while keeping the UI key for
+  // message updates and queue state.
+  const streamConversationId = selectedRun?.conversationId || conversationId;
+  const streamKey = `${activeAgentId.value}:${streamConversationId}`;
   if (acpStreamController.value && acpStreamConversationKey === streamKey) return;
   stopAcpLiveStream();
   acpStreamConversationKey = streamKey;
   const controller = subscribeAcpSessionStream(
     activeAgentId.value,
-    conversationId,
+    streamConversationId,
     conversation.projectPath ?? projectPath.value,
     handleAcpStreamEvent,
     (outcome) => {
@@ -1355,6 +1495,7 @@ const startAcpLiveStream = () => {
       acpStreamController.value = null;
       acpStreamConversationKey = "";
       if (outcome === "disconnected") return;
+      finalizeAcpStreamMessages();
       // End the cached run before refreshing. Otherwise a 204 caused by the
       // run finishing between refresh and subscribe immediately reopens the same
       // stream and creates a tight request loop.
@@ -1560,8 +1701,32 @@ const bubbleItems = computed(() => {
   const pending = optimisticMessage.value;
   const baseItems = modelMessagesToBubbleItems(conversationMessages);
 
+  /** 刷新后服务端仍在运行，但本地消息快照可能暂时没有 assistant 气泡。 */
+  const withRunningPlaceholder = (items: ReturnType<typeof modelMessagesToBubbleItems>) => {
+    if (!currentConversationBusyState.value) return items;
+    if (
+      items.some(
+        (item) =>
+          item.role === "assistant" && (item.status === "loading" || item.status === "updating"),
+      )
+    ) {
+      return items;
+    }
+    return [
+      ...items,
+      {
+        key: `${currentConversationKey.value}:running`,
+        role: "assistant" as const,
+        status: "updating" as const,
+        loading: false,
+        content: "",
+        extraInfo: {},
+      },
+    ];
+  };
+
   if (!pending || pending.conversationKey !== currentConversationKey.value) {
-    return baseItems;
+    return withRunningPlaceholder(baseItems);
   }
 
   // Once useXChat has emitted the local user item, only retire that optimistic
@@ -1601,7 +1766,7 @@ const bubbleItems = computed(() => {
       message: { role: "assistant", content: "" },
     });
   }
-  return modelMessagesToBubbleItems(optimisticItems);
+  return withRunningPlaceholder(modelMessagesToBubbleItems(optimisticItems));
 });
 
 // ============ 事件处理 ============
@@ -2283,13 +2448,16 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       <!-- 消息区 -->
       <div class="relative min-h-0 flex-1 overflow-hidden">
         <ChatMessages
-          :show-welcome="showWelcome && currentConversationMessages.length === 0"
+          :show-welcome="
+            showWelcome && currentConversationMessages.length === 0 && !currentConversationBusyState
+          "
           :bubble-items="bubbleItems"
           :dark="dark"
           :conversation-key="currentConversationKey"
           :a2ui-pending-surface-id="pendingA2UISurfaceId"
           :a2ui-submissions="currentA2UISubmissions"
           :search-results-by-message-id="searchResultsByMessageId"
+          :working-started-at-ms="currentConversationBusyState?.startedAt"
           @a2ui-action="handleA2UIAction"
           @reload="handleReloadMessage"
           @prompt-click="handlePromptClick"
@@ -2389,8 +2557,12 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       :open="settingsOpen"
       :dark="dark"
       :theme-mode="themeMode"
+      :task-completion-notifications-enabled="taskCompletionNotificationsEnabled"
+      :browser-notifications-supported="browserNotificationsSupported"
       @update:open="settingsOpen = $event"
       @theme-mode-change="emit('themeModeChange', $event)"
+      @task-completion-notifications-change="handleTaskCompletionNotificationsChange"
+      @test-task-completion-notification="handleTestTaskCompletionNotification"
       @export-history="handleExportLocalHistory"
       @import-history="handleImportLocalHistory"
       @clear-history="handleClearLocalHistory"

@@ -900,7 +900,7 @@ const chipClass = (active: boolean, disabled = false) => {
       :on-submit="handleSubmit"
       :on-paste-file="handlePasteFile"
       :suffix="false"
-      :disabled="disabled || (agentMode && (!agentAvailable || agentConfiguring))"
+      :disabled="disabled || (agentMode && !agentAvailable)"
     >
       <template #footer="{ defaultNode }">
         <div class="flex w-full flex-col gap-2">

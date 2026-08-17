@@ -25,6 +25,8 @@ interface Props {
   a2uiPendingSurfaceId?: string;
   a2uiSubmissions?: A2UISubmission[];
   searchResultsByMessageId?: Record<string, WebSearchSourceItem[]>;
+  /** 当前会话服务端运行起点，刷新恢复时与侧栏计时保持一致。 */
+  workingStartedAtMs?: number;
 }
 
 interface Emits {
@@ -67,6 +69,7 @@ const props = withDefaults(defineProps<Props>(), {
   a2uiPendingSurfaceId: "",
   a2uiSubmissions: () => [],
   searchResultsByMessageId: () => ({}),
+  workingStartedAtMs: undefined,
 });
 const emit = defineEmits<Emits>();
 const messagesRoot = ref<HTMLElement | null>(null);
@@ -415,8 +418,8 @@ const buildMessageActions = (item: BubbleItemType): ItemType[] => {
 };
 
 watch(
-  displayItems,
-  (items) => {
+  [displayItems, () => props.workingStartedAtMs],
+  ([items]) => {
     const now = Date.now();
     const nextFold = { ...foldExpandedMap.value };
     const nextSummary = { ...summaryExpandedMap.value };
@@ -434,7 +437,12 @@ watch(
 
       // 回合计时：首次出现 / 重新生成时记录起点；结束时记录耗时。
       if (streaming) {
-        if (!prevStreaming) messageStartMap.value[key] = now;
+        if (!prevStreaming) {
+          messageStartMap.value[key] = props.workingStartedAtMs ?? now;
+        } else if (props.workingStartedAtMs) {
+          // 运行态可能在消息快照之后才从服务端返回，及时纠正刷新时的临时起点。
+          messageStartMap.value[key] = props.workingStartedAtMs;
+        }
         if (turnDurationMap.value[key]) {
           delete turnDurationMap.value[key];
           delete reasoningDurationMap.value[key];
@@ -521,7 +529,7 @@ onBeforeUnmount(() => {
           :item-expanded-ids="isItemExpandedIds(item)"
           :turn-duration-ms="turnDurationMap[getThinkKey(item.key)]"
           :reasoning-duration-ms="reasoningDurationMap[getThinkKey(item.key)]"
-          :started-at-ms="messageStartMap[getThinkKey(item.key)]"
+          :started-at-ms="props.workingStartedAtMs ?? messageStartMap[getThinkKey(item.key)]"
           :a2ui-action-pending="
             item.extraInfo?.parsedA2UI
               ? isA2UIActionPending(item.extraInfo.parsedA2UI.commands)

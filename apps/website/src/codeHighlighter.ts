@@ -5,6 +5,7 @@ import { setupCodeHighlighter } from "@antdv-next/x";
 const languageAliases: Record<string, string> = {
   rb: "ruby",
   rs: "rust",
+  ts: "typescript",
   sh: "bash",
   shell: "bash",
   zsh: "bash",

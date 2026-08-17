@@ -125,6 +125,18 @@ export class OpenChatProvider extends DeepSeekChatProvider<
 
   override transformMessage(info: TransformMessage<XModelMessage, XModelResponse>): XModelMessage {
     const chunk = info.chunk as { event?: string; data?: string } | undefined;
+    const chunkData = typeof chunk?.data === "string" ? chunk.data : "";
+    let parsedChunk: Record<string, unknown> | undefined;
+    if (chunkData && chunkData !== "[DONE]") {
+      try {
+        const parsed = JSON.parse(chunkData) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          parsedChunk = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // The regular OpenAI branch below owns malformed payload reporting.
+      }
+    }
 
     // useXChat calls transformMessage with no chunk when the stream succeeds.
     // Preserve the accumulated message, including a search marker when the
@@ -146,11 +158,23 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       });
     }
 
-    if (chunk?.event === "native_event" && chunk.data && chunk.data !== "[DONE]") {
+    // Native events normally carry the `native_event` SSE name. Accept the
+    // normalized event payload when an intermediary drops the SSE event name.
+    // This keeps Codex/ACP output renderable even when only `data:` survives.
+    const nativeType = typeof parsedChunk?.type === "string" ? parsedChunk.type : "";
+    const isNativeEvent =
+      chunk?.event === "native_event" ||
+      nativeType === "content.delta" ||
+      nativeType === "reasoning.delta" ||
+      nativeType === "activity.upsert" ||
+      nativeType === "plan.updated" ||
+      nativeType === "turn.completed" ||
+      nativeType === "turn.failed";
+    if (isNativeEvent && parsedChunk) {
       try {
         return this.applyNativeEvent(
           info.originMessage ?? { role: "assistant", content: "" },
-          JSON.parse(chunk.data) as NativeCliEvent,
+          parsedChunk as NativeCliEvent,
         );
       } catch (err) {
         console.error("Failed to parse native CLI event:", err);
@@ -158,10 +182,9 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       return info.originMessage ?? { role: "assistant", content: "" };
     }
 
-    if (chunk?.event === "chat_error" && chunk.data && chunk.data !== "[DONE]") {
+    if (chunk?.event === "chat_error" && parsedChunk) {
       try {
-        const parsed = JSON.parse(chunk.data) as { message?: string };
-        const message = parsed.message || "请求失败";
+        const message = typeof parsedChunk.message === "string" ? parsedChunk.message : "请求失败";
         this.onChatError?.(message);
         const origin = info.originMessage ?? { content: "", role: "assistant" };
         return { ...origin, chatError: message };
@@ -171,10 +194,9 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       return info.originMessage ?? { content: "", role: "assistant" };
     }
 
-    if (chunk?.event === "chat_notice" && chunk.data && chunk.data !== "[DONE]") {
+    if (chunk?.event === "chat_notice" && parsedChunk) {
       try {
-        const parsed = JSON.parse(chunk.data) as { message?: string };
-        const notice = parsed.message || "";
+        const notice = typeof parsedChunk.message === "string" ? parsedChunk.message : "";
         this.onChatNotice?.(notice);
         const origin = info.originMessage ?? { content: "", role: "assistant" };
         const notices = Array.isArray(origin.chatNotices) ? origin.chatNotices : [];
@@ -187,9 +209,9 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       return info.originMessage ?? { content: "", role: "assistant" };
     }
 
-    if (chunk?.event === "chat_permission" && chunk.data && chunk.data !== "[DONE]") {
+    if (chunk?.event === "chat_permission" && parsedChunk) {
       try {
-        const permission = JSON.parse(chunk.data) as PermissionRequest;
+        const permission = parsedChunk as unknown as PermissionRequest;
         this.onPermissionRequest?.(permission);
         const origin = info.originMessage ?? { content: "", role: "assistant" };
         const permissions = Array.isArray(origin.pendingPermissions)
@@ -205,9 +227,9 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       return info.originMessage ?? { content: "", role: "assistant" };
     }
 
-    if (chunk?.event === "provider_session" && chunk.data && chunk.data !== "[DONE]") {
+    if (chunk?.event === "provider_session" && parsedChunk) {
       try {
-        const session = JSON.parse(chunk.data) as ProviderSessionNotice;
+        const session = parsedChunk as unknown as ProviderSessionNotice;
         if (session.sessionId) this.onProviderSession?.(session);
       } catch (err) {
         console.error("Failed to parse provider_session event:", err);
@@ -215,9 +237,9 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       return info.originMessage ?? { content: "", role: "assistant" };
     }
 
-    if (chunk?.event === "web_search" && chunk.data && chunk.data !== "[DONE]") {
+    if (chunk?.event === "web_search" && parsedChunk) {
       try {
-        const parsed = JSON.parse(chunk.data) as {
+        const parsed = parsedChunk as {
           results?: Array<{ title?: string; url?: string; content?: string }>;
         };
         const sources: WebSearchSourceItem[] = (parsed.results ?? []).map((result, index) => {
@@ -266,8 +288,8 @@ export class OpenChatProvider extends DeepSeekChatProvider<
     let deltaContent = "";
     let deltaReasoning = "";
     try {
-      if (chunk?.data && chunk.data !== "[DONE]") {
-        const parsed = JSON.parse(chunk.data) as {
+      if (chunkData && chunkData !== "[DONE]") {
+        const parsed = parsedChunk as {
           choices?: Array<{
             delta?: { content?: unknown; reasoning_content?: unknown };
             message?: { content?: unknown; reasoning_content?: unknown };
@@ -378,6 +400,10 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       case "turn.failed":
         this.onChatError?.(event.message);
         return preserveMessageMeta(base, { ...base, role: "assistant", chatError: event.message });
+      default:
+        // Metadata events can arrive between text deltas. Keep the current
+        // message instead of returning undefined and breaking the chat store.
+        return preserveMessageMeta(base, base);
     }
   }
 

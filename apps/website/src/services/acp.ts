@@ -200,7 +200,7 @@ export function subscribeAcpSessionStream(
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
         let separator: number;
         while ((separator = buffer.indexOf("\n\n")) !== -1) {
           const frame = buffer.slice(0, separator);

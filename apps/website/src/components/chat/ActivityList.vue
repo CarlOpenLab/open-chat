@@ -453,40 +453,42 @@ onBeforeUnmount(() => {
         <!-- 标题行：与展开内容上下布局，互不居中 -->
         <div
           v-else
-          class="my-4px group flex min-h-6 items-center gap-2 rounded-[6px] px-1.5 py-[3px] text-[11.5px] leading-[14px] w-full"
+          class="my-4px group flex min-h-6 items-center rounded-[6px] px-1.5 py-[3px] text-[11.5px] leading-[14px] w-full"
           :class="
             hasDetail(entry)
               ? 'cursor-pointer hover:bg-[color-mix(in_srgb,var(--brand-foreground)_6%,transparent)] active:bg-[color-mix(in_srgb,var(--brand-foreground)_9%,transparent)]'
               : 'cursor-default'
           "
         >
-          <component
-            v-if="entry.icon"
-            :is="entry.icon"
-            class="h-[11px] w-[11px] flex-none text-brand-muted-strong"
-          />
-          <span
-            class="min-w-0 max-w-[300px] flex-[0_1_auto] overflow-hidden truncate text-brand-muted"
-            >{{ entry.title }}</span
-          >
-          <span
-            v-if="entry.fileStats?.additions"
-            class="flex-none font-mono text-[10.5px] text-brand-success"
-            >+{{ entry.fileStats.additions }}</span
-          >
-          <span
-            v-if="entry.fileStats?.deletions"
-            class="flex-none font-mono text-[10.5px] text-brand-danger"
-            >-{{ entry.fileStats.deletions }}</span
-          >
-          <span
-            v-if="!isItemExpanded(entry.id) && entry.preview"
-            class="min-w-0 flex-1 overflow-hidden truncate text-[11px] text-brand-ghost"
-            >{{ entry.preview }}</span
-          >
+          <div class="flex flex-1 min-w-0 items-center gap-2">
+            <component
+              v-if="entry.icon"
+              :is="entry.icon"
+              class="h-[11px] w-[11px] flex-none text-brand-muted-strong"
+            />
+            <span
+              class="min-w-0 max-w-[300px] flex-[0_1_auto] overflow-hidden truncate text-brand-muted"
+              >{{ entry.title }}</span
+            >
+            <span
+              v-if="entry.fileStats?.additions"
+              class="flex-none font-mono text-[10.5px] text-brand-success"
+              >+{{ entry.fileStats.additions }}</span
+            >
+            <span
+              v-if="entry.fileStats?.deletions"
+              class="flex-none font-mono text-[10.5px] text-brand-danger"
+              >-{{ entry.fileStats.deletions }}</span
+            >
+            <span
+              v-if="!isItemExpanded(entry.id) && entry.preview"
+              class="min-w-0 flex-1 overflow-hidden truncate text-[11px] text-brand-ghost"
+              >{{ entry.preview }}</span
+            >
+          </div>
           <span class="inline-flex flex-none items-center" aria-hidden="true">
             <X v-if="entry.status === 'error'" class="h-2.5 w-2.5 text-brand-danger" />
-            <Check v-else-if="entry.status === 'success'" class="h-2.5 w-2.5 text-brand-ghost" />
+            <Check v-else-if="entry.status === 'success'" class="h-2.5 w-2.5 text-brand-success" />
             <span
               v-else-if="entry.status === 'running'"
               class="h-1.25 w-1.25 rounded-full bg-brand-accent animate-[activity-pulse_1.6s_ease-in-out_infinite]"

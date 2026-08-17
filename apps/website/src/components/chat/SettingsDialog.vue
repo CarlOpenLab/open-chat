@@ -1,6 +1,17 @@
 <script setup lang="ts">
-import { CloudUpload, Database, Info, Monitor, Moon, Settings2, Sun, Trash2, X } from "@lucide/vue";
-import { Button, Modal, Segmented, Upload } from "antdv-next";
+import {
+  Bell,
+  CloudUpload,
+  Database,
+  Info,
+  Monitor,
+  Moon,
+  Settings2,
+  Sun,
+  Trash2,
+  X,
+} from "@lucide/vue";
+import { Button, Modal, Segmented, Switch, Upload } from "antdv-next";
 import { computed, h, ref, watch } from "vue";
 import { APP_VERSION } from "../../version";
 
@@ -11,11 +22,15 @@ interface Props {
   open: boolean;
   dark: boolean;
   themeMode: ThemeMode;
+  taskCompletionNotificationsEnabled: boolean;
+  browserNotificationsSupported: boolean;
 }
 
 interface Emits {
   (e: "update:open", value: boolean): void;
   (e: "themeModeChange", mode: ThemeMode): void;
+  (e: "taskCompletionNotificationsChange", enabled: boolean): void;
+  (e: "testTaskCompletionNotification"): void;
   (e: "exportHistory"): void;
   (e: "importHistory", file: File): void;
   (e: "clearHistory"): void;
@@ -29,6 +44,11 @@ const activeTab = ref<SettingsTab>("general");
 const themeModeValue = computed({
   get: () => props.themeMode,
   set: (mode: ThemeMode) => emit("themeModeChange", mode),
+});
+
+const taskCompletionNotificationsValue = computed({
+  get: () => props.taskCompletionNotificationsEnabled,
+  set: (enabled: boolean) => emit("taskCompletionNotificationsChange", enabled),
 });
 
 // @lucide/vue 图标是函数式组件，直接作为 Segmented 的 icon 会被 antdv-next
@@ -118,6 +138,42 @@ const navItems = [
                   :options="themeSegmentedOptions"
                   @change="themeModeValue = $event as ThemeMode"
                 />
+              </div>
+            </div>
+
+            <h3 class="settings-section-title settings-section-title-spaced">通知</h3>
+            <p class="settings-section-desc">在任务完成后发送浏览器系统通知。</p>
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="min-w-0">
+                  <div class="settings-label settings-label-with-icon">
+                    <Bell class="!h-[14px] !w-[14px]" />任务完成通知
+                  </div>
+                  <p class="settings-hint">
+                    {{
+                      browserNotificationsSupported
+                        ? taskCompletionNotificationsEnabled
+                          ? "浏览器已允许系统通知"
+                          : "开启后将请求浏览器通知权限"
+                        : "当前浏览器不支持系统通知"
+                    }}
+                  </p>
+                </div>
+                <div class="settings-notification-actions">
+                  <Button
+                    :disabled="
+                      !taskCompletionNotificationsEnabled || !browserNotificationsSupported
+                    "
+                    @click="emit('testTaskCompletionNotification')"
+                  >
+                    <Bell class="!h-[14px] !w-[14px]" />测试通知
+                  </Button>
+                  <Switch
+                    v-model:checked="taskCompletionNotificationsValue"
+                    :disabled="!browserNotificationsSupported"
+                    aria-label="任务完成通知"
+                  />
+                </div>
               </div>
             </div>
           </section>
@@ -334,6 +390,9 @@ const navItems = [
   line-height: 1.6;
   color: var(--brand-muted);
 }
+.settings-section-title-spaced {
+  margin-top: 28px;
+}
 .settings-card {
   border: 1px solid var(--brand-border);
   border-radius: 10px;
@@ -358,6 +417,17 @@ const navItems = [
   color: var(--brand-foreground);
   font-size: 11.5px;
   font-weight: 650;
+}
+.settings-label-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-notification-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
 }
 
 /* Segmented 的 label 行高较大：
