@@ -162,6 +162,10 @@ export class SessionRunRegistry {
   private mirrorResponse(entry: SessionRunEntry): ServerResponse {
     return new Proxy({} as ServerResponse, {
       get: (_target, property) => {
+        // Native event helpers skip writes when the original HTTP response has
+        // closed. A refreshed page closes that response, but the tracked turn
+        // must keep publishing to its reconnectable session subscribers.
+        if (property === "writableEnded" || property === "destroyed") return false;
         if (property === "write") {
           return (chunk: string | Uint8Array) => {
             this.publish(entry, chunkText(chunk));

@@ -226,8 +226,16 @@ export function subscribeAcpSessionStream(
                 // The provider owns malformed-event reporting; keep the stream alive here.
               }
             }
-            if (data === "[DONE]" && outcome !== "failed") outcome = "completed";
+            const done = data === "[DONE]";
+            if (done && outcome !== "failed") outcome = "completed";
             onEvent(event, data);
+            // [DONE] is the authoritative terminal frame. Do not wait for a
+            // proxy to close the TCP response before notifying the UI that the
+            // task has completed.
+            if (done) {
+              await reader.cancel();
+              return;
+            }
           }
         }
       }
