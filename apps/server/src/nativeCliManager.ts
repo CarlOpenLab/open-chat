@@ -631,7 +631,10 @@ class CodexRuntime implements NativeRuntime {
   private turnId = "";
   private startupNotice = "";
   private model: string;
-  private readonly streamedAgentMessages = new Set<string>();
+  /** Per-item text lets the completed item repair a missing final delta without
+   * replaying the complete message after normal streaming. */
+  private readonly streamedAgentMessages = new Map<string, string>();
+  private unkeyedStreamedAgentMessage = "";
   private readonly toolCalls = new Map<string, { name: string; input?: unknown }>();
 
   private constructor(
@@ -718,6 +721,7 @@ class CodexRuntime implements NativeRuntime {
   async runTurn(text: string, res: ServerResponse, signal: AbortSignal): Promise<void> {
     if (this.active) throw GatewayError.invalidRequest("该 Codex 会话仍在运行");
     this.streamedAgentMessages.clear();
+    this.unkeyedStreamedAgentMessage = "";
     this.toolCalls.clear();
     const done = new Promise<void>((resolve, reject) => {
       this.active = { res, resolve, reject, sawText: false, sawReasoning: false };
@@ -790,7 +794,14 @@ class CodexRuntime implements NativeRuntime {
       const delta = stringValue(params.delta);
       if (delta) {
         const itemId = stringValue(params.itemId);
-        if (itemId) this.streamedAgentMessages.add(itemId);
+        if (itemId) {
+          this.streamedAgentMessages.set(
+            itemId,
+            `${this.streamedAgentMessages.get(itemId) ?? ""}${delta}`,
+          );
+        } else {
+          this.unkeyedStreamedAgentMessage += delta;
+        }
         // Codex commentary is visible assistant text, not hidden reasoning.
         // Hidden reasoning arrives through item/reasoning/*Delta below.
         this.active.sawText = true;
@@ -813,17 +824,23 @@ class CodexRuntime implements NativeRuntime {
       if (item && stringValue(item.type) === "agentMessage") {
         if (method === "item/completed") {
           const itemId = stringValue(item.id);
-          const alreadyStreamed = itemId
-            ? this.streamedAgentMessages.delete(itemId)
-            : this.active.sawText;
-          if (!alreadyStreamed) {
-            const text = stringValue(item.text) || contentText(item.content);
-            if (text) {
-              this.active.sawText = true;
-              writeNativeDelta(this.active.res, `codex/${this.model || "default"}`, {
-                content: text,
-              });
-            }
+          const streamed = itemId
+            ? (this.streamedAgentMessages.get(itemId) ?? this.unkeyedStreamedAgentMessage)
+            : this.unkeyedStreamedAgentMessage;
+          if (itemId) this.streamedAgentMessages.delete(itemId);
+          this.unkeyedStreamedAgentMessage = "";
+
+          const text = stringValue(item.text) || contentText(item.content);
+          const missingSuffix = text.startsWith(streamed)
+            ? text.slice(streamed.length)
+            : !streamed
+              ? text
+              : "";
+          if (missingSuffix) {
+            this.active.sawText = true;
+            writeNativeDelta(this.active.res, `codex/${this.model || "default"}`, {
+              content: missingSuffix,
+            });
           }
         }
         return;
@@ -887,6 +904,7 @@ class CodexRuntime implements NativeRuntime {
     const active = this.active;
     this.finishToolCalls(active, true, error.message);
     this.streamedAgentMessages.clear();
+    this.unkeyedStreamedAgentMessage = "";
     this.active = null;
     active?.reject(error);
   }

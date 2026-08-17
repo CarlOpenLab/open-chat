@@ -98,6 +98,32 @@ const optimisticMessage = ref<{
   message: XModelMessage;
   extraInfo: Record<string, unknown>;
 } | null>(null);
+
+/**
+ * The SDK normally preserves `optimisticId` on its local user row. Keep a
+ * content fallback for the brief period where an SDK/store update omits that
+ * metadata, otherwise both rows remain rendered for the whole request.
+ */
+const hasAcknowledgedOptimisticMessage = (
+  source: DefaultMessageInfo<XModelMessage>[],
+  pending: NonNullable<typeof optimisticMessage.value>,
+): boolean => {
+  if (
+    source.some(
+      (item) =>
+        (item.extraInfo as { optimisticId?: unknown } | undefined)?.optimisticId === pending.id,
+    )
+  ) {
+    return true;
+  }
+
+  const lastUserMessage = [...source].reverse().find((item) => item.message.role === "user");
+  return (
+    typeof lastUserMessage?.message.content === "string" &&
+    typeof pending.message.content === "string" &&
+    lastUserMessage.message.content === pending.message.content
+  );
+};
 const conversationsOpen = ref(true);
 const rightPanelOpen = ref(false);
 const deleteOpen = ref(false);
@@ -1563,6 +1589,14 @@ watch(
   messages,
   (newMessages) => {
     const conversationWriteKey = activeRequestConversationKey.value || currentConversationKey.value;
+    const pending = optimisticMessage.value;
+    if (
+      pending &&
+      pending.conversationKey === conversationWriteKey &&
+      hasAcknowledgedOptimisticMessage(newMessages, pending)
+    ) {
+      optimisticMessage.value = null;
+    }
     updateConversationMessages(
       conversationWriteKey,
       persistMessageTimings(conversationWriteKey, newMessages),
@@ -1732,10 +1766,7 @@ const bubbleItems = computed(() => {
   // Once useXChat has emitted the local user item, only retire that optimistic
   // row. The assistant fallback must stay until the SDK publishes its own
   // loading/updating item, otherwise the request has a visible feedback gap.
-  const storeHasPendingMessage = conversationMessages.some(
-    (item) =>
-      (item.extraInfo as { optimisticId?: unknown } | undefined)?.optimisticId === pending.id,
-  );
+  const storeHasPendingMessage = hasAcknowledgedOptimisticMessage(conversationMessages, pending);
 
   const pendingInfo: DefaultMessageInfo<XModelMessage> = {
     id: pending.id,
