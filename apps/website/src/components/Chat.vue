@@ -495,6 +495,38 @@ const {
 
 loadModels();
 
+// ============ 每个供应商记住的默认模型 ============
+// 切换供应商时，新会话默认用上次为该供应商选择的模型，而不是 CLI 自带的默认模型
+// （如 codex 的 sol）。存 localStorage，仅前端偏好，不影响服务端。
+const AGENT_DEFAULT_MODEL_KEY = "open-chat-agent-default-models";
+
+const loadAgentDefaultModels = (): Record<string, string> => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(AGENT_DEFAULT_MODEL_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, string> = {};
+    for (const [agentId, model] of Object.entries(parsed)) {
+      if (typeof model === "string" && model) result[agentId] = model;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+};
+const agentDefaultModels = ref<Record<string, string>>(loadAgentDefaultModels());
+
+const rememberAgentDefaultModel = (agentId: string, model: string) => {
+  if (!agentId || !model) return;
+  agentDefaultModels.value = { ...agentDefaultModels.value, [agentId]: model };
+  try {
+    localStorage.setItem(AGENT_DEFAULT_MODEL_KEY, JSON.stringify(agentDefaultModels.value));
+  } catch {
+    // 隐私模式下 localStorage 可能不可用，仅在内存中保留本次会话的偏好。
+  }
+};
+
 const activeAcpModelOption = computed(() =>
   acpSession.value?.configOptions.find(
     (option) =>
@@ -538,22 +570,11 @@ const inputCurrentModelLabel = computed(() => {
 });
 const projectPathEnabled = computed(() => isAcpAgent.value || isLocalModel(currentModel.value));
 
-const selectedHistoryModel = computed(() =>
-  isAcpAgent.value
-    ? activeAcpModelOption.value?.type === "select"
-      ? activeAcpModelOption.value.currentValue
-      : ""
-    : currentModel.value,
-);
+// 会话列表只按供应商（agent）过滤：切换模型不会让历史会话消失或重排。
 const visibleConversationList = computed(() =>
-  conversationList.value.filter((conversation) => {
-    if ((conversation.agentId || "api") !== activeAgentId.value) return false;
-    return (
-      !selectedHistoryModel.value ||
-      !conversation.modelId ||
-      conversation.modelId === selectedHistoryModel.value
-    );
-  }),
+  conversationList.value.filter(
+    (conversation) => (conversation.agentId || "api") === activeAgentId.value,
+  ),
 );
 
 const ensureDraftConversationKey = (): string => {
@@ -564,6 +585,45 @@ const ensureDraftConversationKey = (): string => {
 };
 
 let acpSessionLoadSequence = 0;
+
+/**
+ * 新会话（草稿 / 无消息且无真实会话 id）下，把该供应商记住的默认模型应用到服务端会话，
+ * 避免每次切回都落到 CLI 自带的默认模型（如 codex 的 sol）。
+ */
+const applyAgentDefaultModel = async (
+  session: AcpSessionState,
+  conversationId: string,
+  projectPath: string,
+): Promise<AcpSessionState> => {
+  const savedDefault = agentDefaultModels.value[activeAgentId.value];
+  if (!savedDefault) return session;
+  const option = session.configOptions.find(
+    (item) =>
+      item.type === "select" &&
+      (item.category === "model" ||
+        item.id.toLowerCase() === "model" ||
+        item.name.toLowerCase() === "model"),
+  );
+  if (!option || option.type !== "select" || option.currentValue === savedDefault) return session;
+  const available = flattenAcpSelectOptions(option.options).some(
+    (model) => model.value === savedDefault,
+  );
+  if (!available) return session;
+  try {
+    return await setAcpSessionConfig(
+      activeAgentId.value,
+      conversationId,
+      option.id,
+      savedDefault,
+      projectPath,
+      "",
+    );
+  } catch (error) {
+    console.warn(`应用 ${activeAgentId.value} 的默认模型失败：`, error);
+    return session;
+  }
+};
+
 const refreshAcpSession = async () => {
   const sequence = ++acpSessionLoadSequence;
   if (!isAcpAgent.value || !activeAgent.value.available || isHydrating.value) {
@@ -584,10 +644,23 @@ const refreshAcpSession = async () => {
     );
     if (sequence !== acpSessionLoadSequence) return;
     acpSession.value = session;
+    // 新会话：应用该供应商记住的默认模型（如 codex 上次选的模型，而非 CLI 默认 sol）。
+    // 仅在草稿 / 无消息且无真实会话 id 时应用，打开已有会话不做覆盖。
+    const isFreshConversation =
+      !conversation || (!conversation.messages?.length && !conversation.providerSessionId);
+    if (isFreshConversation && isAcpAgent.value) {
+      const sessionWithDefault = await applyAgentDefaultModel(
+        session,
+        conversationId,
+        sessionProjectPath,
+      );
+      if (sequence !== acpSessionLoadSequence) return;
+      acpSession.value = sessionWithDefault;
+    }
     // 以服务端 activeRuns 为准；若回合恰在本次加载后结束，下次状态刷新会兜底纠正。
     // native（pi/omp）的 running 由流事件活跃度推断（touchNativeStreamActivity），不在此设置。
     if (usesAcpProtocol.value) {
-      acpRunState.value = session.running ? { state: "running" } : null;
+      acpRunState.value = acpSession.value.running ? { state: "running" } : null;
     }
     if (conversation && conversation.agentId === activeAgentId.value) {
       if (
@@ -1926,7 +1999,7 @@ const sendMessageNow = (
     const newConversation = createNewConversation(
       options.systemPrompt ?? "",
       isAcpAgent.value ? ensureDraftConversationKey() : "",
-      selectedHistoryModel.value,
+      inputCurrentModel.value,
     );
     newConversation.projectPath = projectPath.value.trim();
     if (
@@ -2247,6 +2320,7 @@ const handleModelChange = async (key: string) => {
     historyBack.value = [];
     historyForward.value = [];
     syncConversationRoute("replace");
+    rememberAgentDefaultModel(activeAgentId.value, key);
     message.success(`已切换到 ${inputCurrentModelLabel.value}`);
   } catch (error) {
     message.error(error instanceof Error ? error.message : "Agent 模型切换失败");
