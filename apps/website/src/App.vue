@@ -10,7 +10,9 @@ import {
   ref,
   watch,
 } from "vue";
+import { ACCESS_REQUIRED_EVENT, setGatewayAccessGranted } from "./services/access";
 import { shadcnDarkTheme, shadcnTheme } from "./theme/shadcnTheme";
+import { Button, Input } from "antdv-next";
 
 const Chat = defineAsyncComponent(() => import("./components/Chat.vue"));
 const CodeHighlightDemoPage = defineAsyncComponent(
@@ -123,6 +125,56 @@ const currentComponent = computed(() => {
   };
   return pages[currentPage.value];
 });
+const accessReady = ref(false);
+const accessGranted = ref(false);
+const accessPassword = ref("");
+const accessError = ref("");
+const accessSubmitting = ref(false);
+
+const checkAccess = async () => {
+  try {
+    const response = await fetch("/api/access/status");
+    const data = (await response.json()) as { authorized?: boolean };
+    accessGranted.value = data.authorized === true;
+    setGatewayAccessGranted(accessGranted.value);
+  } catch {
+    // During a dev-server startup the gateway may still be coming up. Keep the
+    // lock screen visible instead of rendering a partially usable app.
+    accessGranted.value = false;
+    setGatewayAccessGranted(false);
+  } finally {
+    accessReady.value = true;
+  }
+};
+
+const submitAccessPassword = async () => {
+  if (!accessPassword.value || accessSubmitting.value) return;
+  accessSubmitting.value = true;
+  accessError.value = "";
+  try {
+    const response = await fetch("/api/access/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: accessPassword.value }),
+    });
+    if (!response.ok) throw new Error("密码不正确，请从启动终端获取本次密码。");
+    accessPassword.value = "";
+    accessGranted.value = true;
+    setGatewayAccessGranted(true);
+  } catch (error) {
+    accessError.value = error instanceof Error ? error.message : "登录失败，请重试。";
+  } finally {
+    accessSubmitting.value = false;
+  }
+};
+
+const handleAccessRequired = () => {
+  setGatewayAccessGranted(false);
+  accessGranted.value = false;
+  accessReady.value = true;
+  accessPassword.value = "";
+  accessError.value = "访问密码已失效，请输入终端中显示的本次密码。";
+};
 let focusTimer: ReturnType<typeof setTimeout> | undefined;
 
 const focusMainContent = async () => {
@@ -187,10 +239,13 @@ watch(
 );
 
 onMounted(() => {
+  window.addEventListener(ACCESS_REQUIRED_EVENT, handleAccessRequired);
+  void checkAccess();
   window.addEventListener("popstate", syncRoute);
   systemDarkQuery.addEventListener("change", handleSystemThemeChange);
 });
 onBeforeUnmount(() => {
+  window.removeEventListener(ACCESS_REQUIRED_EVENT, handleAccessRequired);
   window.removeEventListener("popstate", syncRoute);
   systemDarkQuery.removeEventListener("change", handleSystemThemeChange);
   if (focusTimer) window.clearTimeout(focusTimer);
@@ -199,7 +254,47 @@ onBeforeUnmount(() => {
 
 <template>
   <XProvider :theme="appTheme" :locale="locale" layer>
-    <Suspense>
+    <main
+      v-if="!accessReady || !accessGranted"
+      class="grid min-h-[100dvh] place-items-center bg-background px-5"
+      aria-live="polite"
+    >
+      <div
+        v-if="accessReady"
+        class="w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-sm"
+      >
+        <h1 class="m-0 text-xl font-semibold text-foreground">Open Chat</h1>
+        <p class="mt-2 text-sm leading-6 text-muted-foreground">
+          请输入启动 Open Chat 的终端中显示的本次访问密码。
+        </p>
+        <label class="mt-5 block text-sm font-medium text-foreground" for="access-password"
+          >访问密码</label
+        >
+        <Input
+          id="access-password"
+          v-model:value="accessPassword"
+          class="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:border-primary"
+          type="password"
+          autocomplete="current-password"
+          autofocus
+          :disabled="accessSubmitting"
+        />
+        <p v-if="accessError" class="mt-2 text-sm text-red-500">{{ accessError }}</p>
+        <Button
+          class="mt-5 w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
+          :disabled="!accessPassword || accessSubmitting"
+          @click="submitAccessPassword"
+        >
+          {{ accessSubmitting ? "验证中…" : "进入 Open Chat" }}
+        </Button>
+      </div>
+      <span
+        v-else
+        class="h-7 w-7 animate-[spin_700ms_linear_infinite] rounded-full border-2 border-solid border-border border-t-foreground"
+        aria-label="正在检查访问权限"
+      ></span>
+    </main>
+    <Suspense v-else>
       <Transition name="route-fade" mode="out-in">
         <component
           :is="currentComponent"

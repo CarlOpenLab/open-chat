@@ -1,4 +1,5 @@
 import { API_BASE_URL, GATEWAY_API_KEY } from "./ai";
+import { handleGatewayUnauthorized, requireGatewayAccess } from "./access";
 import type { TranscriptMessage } from "./transcript";
 
 export interface AcpAgentView {
@@ -99,9 +100,11 @@ export const API_AGENT: AgentView = {
 };
 
 export async function loadAcpAgents(): Promise<AgentView[]> {
+  requireGatewayAccess();
   const response = await fetch(`${API_BASE_URL}/api/acp/agents`, {
     headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
   });
+  handleGatewayUnauthorized(response);
   if (!response.ok) throw new Error(`本地 Agent 加载失败（HTTP ${response.status}）`);
   const data = (await response.json()) as { agents?: AcpAgentView[] };
   const agents = Array.isArray(data.agents) ? data.agents : [];
@@ -181,10 +184,12 @@ export function subscribeAcpSessionStream(
   void (async () => {
     let outcome: AcpSessionStreamOutcome = "disconnected";
     try {
+      requireGatewayAccess();
       const response = await fetch(`${API_BASE_URL}/api/acp/session/stream?${query}`, {
         headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
         signal: controller.signal,
       });
+      handleGatewayUnauthorized(response);
       if (response.status === 204) {
         outcome = "completed";
         return;
@@ -253,6 +258,7 @@ export function subscribeAcpSessionStream(
 /** 取消运行中的 ACP 回合（多标签 / 刷新恢复场景下停止孤儿回合）。 */
 export async function cancelAcpTurn(agentId: string, conversationId: string): Promise<void> {
   try {
+    requireGatewayAccess();
     const response = await fetch(`${API_BASE_URL}/api/acp/session/cancel`, {
       method: "POST",
       headers: {
@@ -261,6 +267,7 @@ export async function cancelAcpTurn(agentId: string, conversationId: string): Pr
       },
       body: JSON.stringify({ agentId, conversationId }),
     });
+    handleGatewayUnauthorized(response);
     if (!response.ok) {
       throw new Error(`Agent turn cancellation failed (HTTP ${response.status})`);
     }
@@ -274,12 +281,14 @@ async function requestAcpSession(url: string, init: RequestInit = {}): Promise<A
 }
 
 async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
+  requireGatewayAccess();
   const headers = new Headers(init.headers);
   if (GATEWAY_API_KEY) headers.set("Authorization", `Bearer ${GATEWAY_API_KEY}`);
   const response = await fetch(url, {
     ...init,
     headers,
   });
+  handleGatewayUnauthorized(response);
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
     throw new Error(data.error?.message || `Agent 会话请求失败（HTTP ${response.status}）`);

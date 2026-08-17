@@ -23,7 +23,7 @@ import {
   X,
 } from "@lucide/vue";
 import { Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
-import { computed, h, ref, watch, type Component } from "vue";
+import { computed, h, onBeforeUnmount, ref, watch, type Component } from "vue";
 import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import type { PermissionRequest } from "../../services/OpenChatProvider";
 import { aiService, type GitWorkspaceInfo, type UploadedAttachment } from "../../services/ai";
@@ -636,6 +636,45 @@ const handleSubmit = (value: string) => {
   attachmentsPanelOpen.value = false;
 };
 
+let isImeComposing = false;
+let suppressPostCompositionEnter = false;
+let compositionEndTimer: ReturnType<typeof setTimeout> | undefined;
+
+const handleCompositionStart = () => {
+  isImeComposing = true;
+  suppressPostCompositionEnter = false;
+  if (compositionEndTimer) clearTimeout(compositionEndTimer);
+};
+
+const handleCompositionEnd = () => {
+  isImeComposing = false;
+  suppressPostCompositionEnter = true;
+  if (compositionEndTimer) clearTimeout(compositionEndTimer);
+  // WebKit may emit compositionend before the Enter keydown that committed
+  // the candidate. Keep the guard through the current browser task only, so a
+  // deliberate subsequent Enter can still send normally.
+  compositionEndTimer = setTimeout(() => {
+    suppressPostCompositionEnter = false;
+    compositionEndTimer = undefined;
+  }, 0);
+};
+
+/** Returning false tells Sender not to interpret this Enter as submit. */
+const handleSenderKeyDown = (event: KeyboardEvent): void | false => {
+  if (
+    isImeComposing ||
+    event.isComposing ||
+    event.keyCode === 229 ||
+    (event.key === "Enter" && suppressPostCompositionEnter)
+  ) {
+    return false;
+  }
+};
+
+onBeforeUnmount(() => {
+  if (compositionEndTimer) clearTimeout(compositionEndTimer);
+});
+
 const editingQueueId = ref("");
 const editingQueueValue = ref("");
 
@@ -901,7 +940,10 @@ const chipClass = (active: boolean, disabled = false) => {
       :on-cancel="() => emit('cancel')"
       :on-change="handleChange"
       :on-submit="handleSubmit"
+      :on-key-down="handleSenderKeyDown"
       :on-paste-file="handlePasteFile"
+      @compositionstart="handleCompositionStart"
+      @compositionend="handleCompositionEnd"
       :suffix="false"
       :disabled="disabled || (agentMode && !agentAvailable)"
     >

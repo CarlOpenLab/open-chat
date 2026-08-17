@@ -12,6 +12,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startGateway, type GatewayHandle } from "server/app";
@@ -64,7 +65,7 @@ const HELP = `open-chat — 本地启动 Open Chat 工作区（网关 + Web UI�
 
 选项:
   --port <port>        网关端口（默认 8082，0 = 自动分配）
-  --host <host>        网关监听地址（默认 127.0.0.1）
+  --host <host>        网关监听地址（默认 0.0.0.0，可从局域网访问）
   --website-dir <dir>  静态站点目录（默认使用内置网站资源）
   --dev                启动 Vite 开发服务器并打开 http://localhost:3000
   --build              构建网站与 CLI 后退出（open-chat build）
@@ -229,14 +230,25 @@ function openBrowser(url: string): void {
   child.unref();
 }
 
-function printBanner(url: string): void {
-  const width = Math.max(46, url.length + 14);
+function lanUrls(port: number, host?: string): string[] {
+  if (host && host !== "0.0.0.0" && host !== "::") return [];
+  return Object.values(networkInterfaces())
+    .flat()
+    .filter((network): network is NonNullable<typeof network> => Boolean(network))
+    .filter((network) => network.family === "IPv4" && !network.internal)
+    .map((network) => `http://${network.address}:${port}/`);
+}
+
+function printBanner(url: string, localNetworkUrls: string[] = []): void {
+  const allUrls = [url, ...localNetworkUrls];
+  const width = Math.max(46, ...allUrls.map((item) => item.length + 14));
   const pad = (text: string): string => `│  ${text.padEnd(width - 4)}│`;
   console.log("");
   console.log(`┌${"─".repeat(width - 2)}┐`);
   console.log(pad("Open Chat · AI CLI Workspace"));
   console.log(pad(""));
   console.log(pad(url));
+  for (const localNetworkUrl of localNetworkUrls) console.log(pad(`LAN: ${localNetworkUrl}`));
   console.log(pad(""));
   console.log(pad("按 Ctrl+C 停止"));
   console.log(`└${"─".repeat(width - 2)}┘`);
@@ -313,7 +325,7 @@ async function main(): Promise<void> {
     if (opts.verbose) {
       console.log(`[open-chat] website: ${websiteDir ?? "vite dev server"}`);
     }
-    printBanner(targetUrl);
+    printBanner(targetUrl, opts.dev ? lanUrls(3000, opts.host) : lanUrls(gateway.port, opts.host));
     if (opts.open) openBrowser(targetUrl);
   } catch (err) {
     // 任何启动失败：清掉已拉起的子进程再退出。

@@ -142,10 +142,16 @@ const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const pendingA2UISurfaceId = ref("");
 const showWelcome = ref(true);
 const isHydrating = ref(true);
+let componentUnmounted = false;
 const activeRequestConversationKey = ref<string>("");
 /** 请求开始时间，供侧栏「工作中」条目计时 */
 const requestStartedAt = ref(0);
 let activeRequestOutcome: "pending" | "error" | "abort" | null = null;
+/**
+ * Provider history often omits a transient turn.failed assistant message.
+ * Keep the live message authoritative until the user explicitly acts.
+ */
+const failedHistoryRefreshLocks = new Set<string>();
 const manuallyStoppedConversationKeys = new Set<string>();
 let scheduleNextQueuedMessage: (conversationKey: string) => void = () => {};
 const turnTimingStarts = new Map<string, number>();
@@ -624,7 +630,14 @@ const applyAgentDefaultModel = async (
   }
 };
 
-const refreshAcpSession = async () => {
+const refreshAcpSession = async (force = false) => {
+  if (
+    !force &&
+    currentConversationKey.value &&
+    failedHistoryRefreshLocks.has(currentConversationKey.value)
+  ) {
+    return;
+  }
   const sequence = ++acpSessionLoadSequence;
   if (!isAcpAgent.value || !activeAgent.value.available || isHydrating.value) {
     acpSession.value = null;
@@ -643,6 +656,9 @@ const refreshAcpSession = async () => {
       isAcpAgent.value ? conversation?.providerSessionId : "",
     );
     if (sequence !== acpSessionLoadSequence) return;
+    // A refresh may have started just before turn.failed arrived. Re-check the
+    // lock after the network response so that stale history cannot win the race.
+    if (!force && failedHistoryRefreshLocks.has(conversationId)) return;
     acpSession.value = session;
     // 新会话：应用该供应商记住的默认模型（如 codex 上次选的模型，而非 CLI 默认 sol）。
     // 仅在草稿 / 无消息且无真实会话 id 时应用，打开已有会话不做覆盖。
@@ -1215,7 +1231,7 @@ const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
 };
 
 const refreshSessionState = async () => {
-  if (isHydrating.value || document.visibilityState === "hidden") return;
+  if (componentUnmounted || isHydrating.value || document.visibilityState === "hidden") return;
   if (sessionRefreshInFlight) return;
   sessionRefreshInFlight = true;
   const agent = activeAgent.value;
@@ -1294,7 +1310,11 @@ const refreshSessionState = async () => {
       sessionRefreshController = null;
     }
     sessionRefreshInFlight = false;
-    if (sequence === sessionRefreshSequence && document.visibilityState !== "hidden") {
+    if (
+      !componentUnmounted &&
+      sequence === sessionRefreshSequence &&
+      document.visibilityState !== "hidden"
+    ) {
       const hasRunningSession = openChatSessions.value.some((session) => session.running);
       scheduleSessionRefresh(
         hasRunningSession || isRequesting.value
@@ -1306,7 +1326,12 @@ const refreshSessionState = async () => {
 };
 
 const scheduleSessionRefresh = (delayMs = 0) => {
-  if (sessionRefreshFrame !== null || isHydrating.value || document.visibilityState === "hidden") {
+  if (
+    componentUnmounted ||
+    sessionRefreshFrame !== null ||
+    isHydrating.value ||
+    document.visibilityState === "hidden"
+  ) {
     return;
   }
   const generation = sessionRefreshGeneration;
@@ -1314,6 +1339,7 @@ const scheduleSessionRefresh = (delayMs = 0) => {
   const tick = (now: number) => {
     if (
       generation !== sessionRefreshGeneration ||
+      componentUnmounted ||
       isHydrating.value ||
       document.visibilityState === "hidden"
     ) {
@@ -1337,7 +1363,7 @@ const scheduleSessionRefresh = (delayMs = 0) => {
 const restartSessionRefresh = () => {
   stopSessionRefresh();
   sessionRefreshSequence += 1;
-  if (!isHydrating.value && document.visibilityState !== "hidden") {
+  if (!componentUnmounted && !isHydrating.value && document.visibilityState !== "hidden") {
     scheduleSessionRefresh();
   }
 };
@@ -1452,6 +1478,13 @@ watch(isRequesting, (requesting) => {
   const completedConversationKey = activeRequestConversationKey.value;
   const completedRequestStartedAt = requestStartedAt.value;
   const completedOutcome = activeRequestOutcome;
+  if (completedConversationKey) {
+    if (completedOutcome === "error") {
+      failedHistoryRefreshLocks.add(completedConversationKey);
+    } else if (completedOutcome === "pending") {
+      failedHistoryRefreshLocks.delete(completedConversationKey);
+    }
+  }
   const manuallyStopped = completedConversationKey
     ? manuallyStoppedConversationKeys.delete(completedConversationKey)
     : false;
@@ -1617,8 +1650,15 @@ const startAcpLiveStream = () => {
       // stream and creates a tight request loop.
       markConversationRunIdle(conversationId);
       acpRunState.value = null;
-      // 回合结束：服务端历史已完整，以最终状态收尾并刷新运行态。
-      void refreshAcpSession();
+      if (outcome === "failed") {
+        failedHistoryRefreshLocks.add(conversationId);
+      } else {
+        failedHistoryRefreshLocks.delete(conversationId);
+      }
+      // A failed retry already has its error attached to the live assistant
+      // message. Do not reload history here: providers generally do not
+      // persist that transient error, so a refresh would immediately hide it.
+      if (outcome === "completed") void refreshAcpSession();
       const manuallyStopped = manuallyStoppedConversationKeys.delete(conversationId);
       if (outcome === "completed" && !manuallyStopped) {
         if (conversation.queuedMessages?.length) {
@@ -1656,7 +1696,10 @@ watch(
   },
 );
 
-watch([activeAgentId, currentConversationKey, isHydrating], () => {
+watch([activeAgentId, currentConversationKey, isHydrating], ([, key], [, previousKey]) => {
+  // Selecting another conversation is an explicit user/navigation action, so
+  // its provider history may become authoritative again.
+  if (key && key !== previousKey) failedHistoryRefreshLocks.delete(key);
   void refreshAcpSession();
 });
 
@@ -1732,6 +1775,7 @@ const handleWorkspaceKeydown = (event: KeyboardEvent) => {
 };
 
 onMounted(async () => {
+  componentUnmounted = false;
   window.addEventListener("keydown", handleWorkspaceKeydown);
   window.addEventListener("popstate", handleRoutePopState);
   document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -1749,6 +1793,7 @@ onMounted(async () => {
     }),
     aiService.getDefaultProjectPath().catch(() => ""),
   ]);
+  if (componentUnmounted) return;
   defaultProjectPath.value = loadedDefaultProjectPath;
   if (loadedDefaultProjectPath) {
     projectPathHistory.value = Object.fromEntries(
@@ -1776,8 +1821,10 @@ onMounted(async () => {
   }
 
   await syncProviderConversations(activeAgentId.value);
+  if (componentUnmounted) return;
   // URL 直达：打开复制的链接时恢复对应供应商与会话
   await restoreRouteConversation(initialChatPath);
+  if (componentUnmounted) return;
   // Release session/config watchers only after the final route conversation
   // is known. Releasing earlier creates a throwaway draft session request.
   isHydrating.value = false;
@@ -1785,6 +1832,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  componentUnmounted = true;
   window.removeEventListener("keydown", handleWorkspaceKeydown);
   window.removeEventListener("popstate", handleRoutePopState);
   document.removeEventListener("visibilitychange", handleVisibilityChange);
@@ -2017,6 +2065,7 @@ const sendMessageNow = (
 
   const conversation = getCurrentConversation();
   if (!conversation) return false;
+  failedHistoryRefreshLocks.delete(String(conversation.key));
   if (options.systemPrompt !== undefined) {
     conversation.systemPrompt = options.systemPrompt.trim();
   }
@@ -2234,8 +2283,9 @@ const handleProjectPathChange = (value: string) => {
   if (conversation) {
     conversation.projectPath = projectPath.value;
     schedulePersistState();
+    failedHistoryRefreshLocks.delete(String(conversation.key));
   }
-  void refreshAcpSession();
+  void refreshAcpSession(true);
 };
 
 const handleProjectPathRemove = (value: string) => {
@@ -2397,6 +2447,7 @@ const handleReloadMessage = (messageId: string | number) => {
 
   setMessages(currentConversationMessages.value);
   const currentConversation = getCurrentConversation();
+  if (currentConversation) failedHistoryRefreshLocks.delete(String(currentConversation.key));
   activeRequestConversationKey.value = currentConversationKey.value;
   const baseSystemPrompt = currentConversation?.systemPrompt ?? "";
   const forwardProvider = getForwardProvider(currentModel.value);

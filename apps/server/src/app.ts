@@ -12,6 +12,7 @@ import { createServer } from "node:http";
 import type { Server } from "node:http";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   attachmentStore,
   type AttachmentStore,
@@ -55,7 +56,7 @@ export interface GatewayRuntime {
 }
 
 export interface GatewayStartOptions {
-  /** 覆盖默认监听地址（127.0.0.1）。 */
+  /** 覆盖默认监听地址（0.0.0.0，可从局域网访问）。 */
   host?: string;
   /** 覆盖默认端口（8082）；0 表示自动分配（以实际监听端口为准）。 */
   port?: number;
@@ -74,6 +75,12 @@ export interface GatewayHandle {
   stop(): Promise<void>;
 }
 
+/** One process-local password and session. Both disappear when the gateway stops. */
+interface WebAccessControl {
+  password: string;
+  sessionToken: string;
+}
+
 /** 构建内置默认运行时（无配置文件，自动发现本机 CLI）。 */
 export function loadGatewayRuntime(): GatewayRuntime {
   const config = defaultAppConfig();
@@ -84,7 +91,11 @@ export function loadGatewayRuntime(): GatewayRuntime {
 }
 
 /** 构建网关 Express 应用；`staticDir` 非空时在同一端口托管 Web UI。 */
-export function createGatewayApp(runtime: GatewayRuntime, staticDir?: string): Express {
+export function createGatewayApp(
+  runtime: GatewayRuntime,
+  staticDir?: string,
+  access?: WebAccessControl,
+): Express {
   const { config, searchProvider, localChat, agentManager } = runtime;
   // 无项目目录时的默认 agent 工作目录：~/.cc-hearts-open-code/workspace
   mkdirSync(defaultWorkspaceDir(), { recursive: true });
@@ -94,7 +105,38 @@ export function createGatewayApp(runtime: GatewayRuntime, staticDir?: string): E
   // 附件上传走 base64 JSON，放大后可达 40MB 左右，放宽 body 上限。
   app.use(express.json({ limit: "44mb" }));
 
-  if (config.gatewayApiKey) {
+  if (access) {
+    app.get("/api/access/status", (req: Request, res: Response) => {
+      res.json({ authorized: hasWebAccess(req, access, config.gatewayApiKey) });
+    });
+    app.post("/api/access/login", (req: Request, res: Response) => {
+      const password = typeof req.body?.password === "string" ? req.body.password : "";
+      if (!sameSecret(password, access.password)) {
+        return res
+          .status(401)
+          .json({ error: { message: "密码不正确", type: "authentication_error" } });
+      }
+      res.setHeader("Set-Cookie", buildWebAccessCookie(access.sessionToken));
+      return res.json({ authorized: true });
+    });
+    app.post("/api/access/logout", (_req: Request, res: Response) => {
+      res.setHeader(
+        "Set-Cookie",
+        "open_chat_access=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+      );
+      res.json({ authorized: false });
+    });
+    // Static assets remain public so the login screen can load, but every
+    // operational API requires the per-start password session.
+    app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+      if (hasWebAccess(req, access, config.gatewayApiKey)) return next();
+      return res
+        .status(401)
+        .json({ error: { message: "请输入访问密码", type: "authentication_error" } });
+    });
+  }
+
+  if (config.gatewayApiKey && !access) {
     app.use(gatewayAuthMiddleware(config.gatewayApiKey));
   }
 
@@ -452,9 +494,13 @@ export function createGatewayApp(runtime: GatewayRuntime, staticDir?: string): E
  */
 export async function startGateway(options: GatewayStartOptions): Promise<GatewayHandle> {
   const runtime = loadGatewayRuntime();
-  const app = createGatewayApp(runtime, options.staticDir);
+  const access: WebAccessControl = {
+    password: randomBytes(12).toString("base64url"),
+    sessionToken: randomBytes(32).toString("base64url"),
+  };
+  const app = createGatewayApp(runtime, options.staticDir, access);
 
-  const host = options.host ?? "127.0.0.1";
+  const host = options.host ?? "0.0.0.0";
   const port = options.port ?? 8082;
 
   const server = createServer(app);
@@ -473,6 +519,8 @@ export async function startGateway(options: GatewayStartOptions): Promise<Gatewa
   console.log(`Health:      http://${host}:${actualPort}/health`);
   console.log(`Models:      http://${host}:${actualPort}/api/models`);
   console.log(`Chat:        http://${host}:${actualPort}/api/chat/completions`);
+  console.log(`Web password: ${access.password}`);
+  console.log("Web access:  enter this password in the browser; it changes on every start");
   console.log(`Gateway auth: ${runtime.config.gatewayApiKey ? "enabled" : "disabled"}`);
   console.log(`Web search:  ${runtime.searchProvider ? runtime.searchProvider.name : "disabled"}`);
   console.log(`Local AI:    ${runtime.localChat ? "enabled (opencode)" : "disabled"}`);
@@ -674,6 +722,41 @@ function gatewayAuthMiddleware(apiKey: string) {
     }
     next();
   };
+}
+
+function hasWebAccess(req: Request, access: WebAccessControl, gatewayApiKey: string): boolean {
+  // Existing API-key clients keep working; browser sessions use the generated
+  // cookie instead, so the key never has to be embedded in the Web UI.
+  const header = req.header("authorization");
+  if (
+    gatewayApiKey &&
+    header?.startsWith("Bearer ") &&
+    sameSecret(header.slice(7), gatewayApiKey)
+  ) {
+    return true;
+  }
+  return sameSecret(readCookie(req, "open_chat_access"), access.sessionToken);
+}
+
+function readCookie(req: Request, name: string): string {
+  const prefix = `${name}=`;
+  for (const part of (req.header("cookie") || "").split(";")) {
+    const value = part.trim();
+    if (value.startsWith(prefix)) return value.slice(prefix.length);
+  }
+  return "";
+}
+
+function sameSecret(value: string, expected: string): boolean {
+  const actualBuffer = Buffer.from(value);
+  const expectedBuffer = Buffer.from(expected);
+  return (
+    actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
+  );
+}
+
+function buildWebAccessCookie(token: string): string {
+  return `open_chat_access=${token}; Path=/; HttpOnly; SameSite=Strict`;
 }
 
 function isLoopbackRequest(req: Request): boolean {

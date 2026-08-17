@@ -7,7 +7,7 @@
  *
  * 可选参数：
  *   --port <port>  监听端口（默认 8082，0 = 自动分配）
- *   --host <host>  监听地址（默认 127.0.0.1）
+ *   --host <host>  监听地址（默认 0.0.0.0，可从局域网访问）
  */
 import { startGateway } from "./app";
 
@@ -17,7 +17,7 @@ function parseArg(name: string): string | undefined {
 }
 
 const portRaw = parseArg("--port");
-const host = parseArg("--host") ?? "127.0.0.1";
+const host = parseArg("--host") ?? "0.0.0.0";
 const port = portRaw !== undefined ? Number(portRaw) : undefined;
 if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) {
   console.error(`无效端口: ${portRaw}`);
