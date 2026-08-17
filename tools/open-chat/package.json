@@ -22,10 +22,15 @@
     "access": "public"
   },
   "scripts": {
-    "build": "esbuild src/cli.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist/cli.cjs --banner:js=\"#!/usr/bin/env node\" --sourcemap",
+    "build": "esbuild src/cli.ts --bundle --external:express --external:cors --external:@agentclientprotocol/sdk --platform=node --format=cjs --target=node22 --outfile=dist/cli.cjs --banner:js=\"#!/usr/bin/env node\" --sourcemap --sources-content=false --minify",
     "dev": "tsx src/cli.ts",
     "start": "node bin/open-chat.mjs",
     "prepack": "pnpm --dir ../.. run build:package"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "catalog:",
+    "cors": "catalog:",
+    "express": "catalog:"
   },
   "devDependencies": {
     "@types/express": "catalog:",
