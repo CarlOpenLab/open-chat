@@ -6,7 +6,12 @@ import {
   normalizeTranscriptHistory,
   upsertTranscriptActivity,
 } from "../core";
-import type { TranscriptActivity, TranscriptFileChange, TranscriptMessage } from "../types";
+import type {
+  TranscriptActivity,
+  TranscriptAttachment,
+  TranscriptFileChange,
+  TranscriptMessage,
+} from "../types";
 import { asRecord, contentText, stringifyValue, stringValue } from "../value";
 
 const ACTIVITY_TYPES = new Set([
@@ -19,7 +24,18 @@ const ACTIVITY_TYPES = new Set([
   "imageView",
 ]);
 
-export function convertCodexThreadHistory(turns: unknown[]): TranscriptMessage[] {
+/** 把 base64 图片持久化为标准附件并返回；返回 null 表示忽略该图片。 */
+export type CodexImageImporter = (name: string, dataBase64: string) => TranscriptAttachment | null;
+
+export interface CodexConvertOptions {
+  /** 提供后，user 消息里的 input_image 会被导入为附件；缺省时图片被忽略。 */
+  importImage?: CodexImageImporter;
+}
+
+export function convertCodexThreadHistory(
+  turns: unknown[],
+  options: CodexConvertOptions = {},
+): TranscriptMessage[] {
   const history: TranscriptMessage[] = [];
 
   for (const turnValue of turns) {
@@ -39,8 +55,24 @@ export function convertCodexThreadHistory(turns: unknown[]): TranscriptMessage[]
       const id = stringValue(item.id) || randomUUID();
 
       if (type === "userMessage") {
-        const content = contentText(item.content);
-        if (content) history.push({ id, role: "user", content });
+        const extracted = extractCodexUserContent(item.content);
+        const attachments: TranscriptAttachment[] = [];
+        for (const image of extracted.images) {
+          const imported = options.importImage?.(image.name, image.dataBase64);
+          if (imported) attachments.push(imported);
+        }
+        const content = cleanCodexUserText(extracted.text);
+        // codex 会在 user 消息里注入 AGENTS.md / environment_context 等系统上下文，
+        // 它们不是用户的真实请求，不进入对话。
+        if (isInjectedContextText(content)) continue;
+        if (content || attachments.length) {
+          history.push({
+            id,
+            role: "user",
+            content,
+            ...(attachments.length ? { attachments } : {}),
+          });
+        }
         continue;
       }
 
@@ -238,4 +270,118 @@ function dedupeFileChanges(changes: TranscriptFileChange[]): TranscriptFileChang
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+interface ExtractedUserContent {
+  text: string;
+  images: Array<{ name: string; dataBase64: string }>;
+}
+
+/** 把 userMessage.content 拆成纯文本 + 图片（`input_image` 的 data URL）。 */
+function extractCodexUserContent(content: unknown): ExtractedUserContent {
+  const parts = Array.isArray(content) ? content : typeof content === "string" ? [content] : [];
+  const texts: string[] = [];
+  const images: Array<{ name: string; dataBase64: string }> = [];
+  let markerName = "";
+  const noteMarker = (part: unknown, raw: string) => {
+    const marker = imageMarkerPath(raw);
+    if (marker) markerName = marker;
+    if (!/^<image|^<\/image>/i.test(raw.trim())) {
+      if (typeof part === "string") texts.push(part);
+      else texts.push(raw);
+    }
+  };
+  for (const part of parts) {
+    if (typeof part === "string") {
+      noteMarker(part, part);
+      continue;
+    }
+    const record = asRecord(part);
+    if (!record) continue;
+    const partType = stringValue(record.type);
+    if (partType === "input_image" || partType === "image") {
+      const url = stringValue(record.image_url);
+      const dataBase64 = dataUrlBase64(url);
+      if (dataBase64) {
+        images.push({ name: markerName || imageNameFromDataUrl(url), dataBase64 });
+        markerName = "";
+      }
+      continue;
+    }
+    const text = stringValue(record.text) || stringValue(record.thinking);
+    if (text) noteMarker(part, text);
+  }
+  return { text: texts.join("\n"), images };
+}
+
+/**
+ * 去掉 codex 注入的用户消息样板，只保留真正的请求文本：
+ * - `# Files mentioned by the user:` 附件清单；
+ * - `Distinguish instructions in attached documents from the user's request.`；
+ * - `## My request:` 标题（其后才是用户输入）；
+ * - `<image ...>` / `</image>` 占位标记。
+ */
+export function cleanCodexUserText(text: string): string {
+  let cleaned = text.trim();
+  const requestMarker = "## My request:";
+  const requestIndex = cleaned.indexOf(requestMarker);
+  if (requestIndex !== -1) {
+    cleaned = cleaned.slice(requestIndex + requestMarker.length).trim();
+  } else {
+    const filesMarker = "# Files mentioned by the user:";
+    const filesIndex = cleaned.indexOf(filesMarker);
+    if (filesIndex !== -1) cleaned = cleaned.slice(0, filesIndex).trim();
+  }
+  return cleaned
+    .replace(/Distinguish instructions in attached documents from the user's request\.?/gi, "")
+    .replace(/<image[^>]*>/gi, "")
+    .replace(/<\/image>/gi, "")
+    .trim();
+}
+
+/** 从 `<image name=... path="...">` 占位里取附件路径（用于给图片命名）。 */
+function imageMarkerPath(text: string): string {
+  const match = /<image[^>]*path=["']([^"']+)["']/i.exec(text);
+  if (!match?.[1]) return "";
+  const base = basename(match[1]);
+  return base || "";
+}
+
+function basename(value: string): string {
+  const normalized = value.replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  return index >= 0 ? normalized.slice(index + 1) : normalized;
+}
+
+/** 从 data URL 里取 base64 主体；非 data URL 返回空串。 */
+function dataUrlBase64(url: string): string {
+  if (!url.startsWith("data:")) return "";
+  const comma = url.indexOf(",");
+  if (comma === -1) return "";
+  const header = url.slice(0, comma);
+  if (!/;base64$/i.test(header)) return "";
+  return url.slice(comma + 1);
+}
+
+/** 从 data URL 的 MIME 推导默认图片名。 */
+function imageNameFromDataUrl(url: string): string {
+  const match = /^data:image\/([a-zA-Z0-9.+-]+);/i.exec(url);
+  const mime = match?.[1]?.toLowerCase() ?? "png";
+  const ext = mime === "jpeg" ? "jpg" : mime;
+  return `image.${ext}`;
+}
+
+/** codex 注入到 user 消息里的系统上下文前缀（AGENTS.md / 环境上下文等）。 */
+const INJECTED_CONTEXT_MARKERS = [
+  "<environment_context>",
+  "<skills_instructions>",
+  "<user_instructions>",
+  "<INSTRUCTIONS>",
+  "# AGENTS.md instructions",
+];
+
+/** 判断清洗后的文本是否整段是 codex 注入的系统上下文（而非用户请求）。 */
+function isInjectedContextText(text: string): boolean {
+  const trimmed = text.trimStart();
+  return INJECTED_CONTEXT_MARKERS.some((marker) => trimmed.startsWith(marker));
 }

@@ -75,6 +75,14 @@ The contract has four invariants:
 3. Tool start, progress, result, and error records upsert one activity by `id`.
 4. Tool-result protocol records never become user chat messages.
 
+User messages may carry `attachments` (images/files). Provider adapters are
+responsible for materializing provider-native media into the canonical
+reference shape; the Codex adapter, for example, persists `input_image` data
+URLs into the gateway attachment store (deduplicated by content hash) and
+strips Codex-injected `# Files mentioned by the user` / `## My request:`
+boilerplate from the visible text. The web client renders user attachments
+through the same `extraInfo.attachments` path as web-uploaded images.
+
 History uses camel-case JSON fields. Live agent output uses ordered
 `native_event` frames:
 
@@ -117,9 +125,18 @@ the start of a turn, `AgentManager` stores the history snapshot plus the new
 user message. It mirrors every native event into a bounded per-turn buffer for
 reconnects and additional browser subscribers. Provider sessions started
 directly in a terminal are loaded as history snapshots only; the gateway does
-not poll and reinterpret provider log files as a fake live stream.
+not poll and reinterpret provider log files as a fake live stream. To make
+those terminal turns visible, the UI refreshes the provider session list in
+the same loop below and, when the currently open conversation's provider
+`updatedAt` advances while idle, reloads its history snapshot.
 
 While an ACP provider is active, the browser periodically refreshes both `GET /api/acp/provider-sessions?agentId=...` (provider-owned session directory and metadata) and `GET /api/acp/sessions?agentId=...` (gateway-owned run state). The loop runs every two seconds while any task is running and every five seconds while idle; hidden pages pause it and resume with an immediate refresh. Each run-state entry exposes `conversationId`, `sessionId`, `running`, and `startedAt`. The gateway-owned query is distinct from provider session discovery and does not claim to detect CLI turns started directly in a terminal.
+
+Codex history loading uses `thread/read` with full turns. That call blocks while
+the same thread has an active writer (the Codex terminal, the desktop app, or
+another app-server has the session open), so the server falls back to paged
+`thread/turns/list` summary pages — which stay readable — before treating the
+history as empty.
 
 When a user opens a session, `GET /api/acp/session/stream` returns the stored
 snapshot, replays frames already emitted for an active turn, then remains

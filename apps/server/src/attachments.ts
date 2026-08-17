@@ -13,7 +13,7 @@
  *
  * 数据根目录可用 `OPEN_CHAT_DATA_DIR` 环境变量覆盖。
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -144,6 +144,46 @@ export class AttachmentStore {
     return directory;
   }
 
+  /**
+   * 按内容去重落盘：同一份字节始终映射到同一个引用，重复导入（历史多次
+   * 加载、同一图片多次出现）不重复占用磁盘。目录 id 由内容 sha256 派生，
+   * 仍满足引用校验规则。
+   */
+  importBytesDeduped(name: string, bytes: Buffer): StoredAttachment {
+    const safe = safeName(name);
+    if (bytes.length === 0) throw new Error("附件内容为空");
+    if (bytes.length > MAX_ATTACHMENT_BYTES) {
+      throw new Error(`附件超过 ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB 上限`);
+    }
+    const id = sha256ReferenceId(bytes);
+    const directory = path.join(this.root, id);
+    const file = path.join(directory, safe);
+    if (fs.existsSync(file) && fs.statSync(file).isFile()) {
+      return {
+        reference: `${ATTACHMENT_SCHEME}${id}`,
+        path: file,
+        name: safe,
+        isImage: isImageName(safe),
+      };
+    }
+    const staging = path.join(this.root, `.${id}.tmp`);
+    try {
+      fs.mkdirSync(staging, { recursive: true });
+      fs.writeFileSync(path.join(staging, safe), bytes);
+      fs.renameSync(staging, directory);
+    } catch (error) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      // 并发写入同一内容时目录可能已由另一请求建好，直接复用。
+      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw error;
+    }
+    return {
+      reference: `${ATTACHMENT_SCHEME}${id}`,
+      path: file,
+      name: safe,
+      isImage: isImageName(safe),
+    };
+  }
+
   /** 按引用 + 文件名读取字节，校验路径归属，杜绝目录穿越。 */
   read(reference: string, name: string): Buffer {
     const directory = this.pathFor(reference);
@@ -194,3 +234,15 @@ export class AttachmentStore {
 export function attachmentContentType(name: string): string {
   return contentTypeForName(name);
 }
+
+/**
+ * 由内容派生稳定引用 id（sha256 前 32 位十六进制，格式化为 8-4-4-4-12，
+ * 与 `referenceId` 的 UUID 校验规则兼容）。同一图片多次导入共用同一引用。
+ */
+function sha256ReferenceId(bytes: Buffer): string {
+  const hex = createHash("sha256").update(bytes).digest("hex").slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** 网关级共享附件存储（Web UI 上传与 codex 历史图片导入共用同一目录）。 */
+export const attachmentStore = new AttachmentStore();

@@ -16,6 +16,8 @@ import { parseFileWorkspaceContent } from "../../utils/fileWorkspace";
 import AssistantMessageContent from "./AssistantMessageContent.vue";
 import EmptyState from "./EmptyState.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
+import { Image } from "antdv-next";
+import { javascript } from "@codemirror/lang-javascript";
 
 interface Props {
   showWelcome: boolean;
@@ -136,8 +138,7 @@ const updateWithScrollAnchor = (update: () => void) => {
 const markdownTheme = computed<MarkdownTheme>(() => (props.dark ? "dark" : "light"));
 const markdownClassName = computed(() => `chat-markdown x-markdown-${markdownTheme.value}`);
 provide(markdownThemeKey, markdownTheme);
-/** 回合折叠（分割线）、活动摘要、条目展开、耗时统计。 */
-const foldExpandedMap = ref<Record<string, boolean>>({});
+/** 活动摘要、条目展开、耗时统计。 */
 const summaryExpandedMap = ref<Record<string, boolean>>({});
 const itemExpandedMap = ref<Record<string, string[]>>({});
 /** 用户在流式中手动折叠过思考条目（显式点击优先于自动展开）。 */
@@ -343,11 +344,6 @@ const persistedTurnDuration = (item: BubbleItemType): number | undefined => {
 };
 
 /** 历史消息（本次会话未观测到耗时）默认展开活动列表；本次会话中结束的回合默认折叠为分割线。 */
-const defaultFoldExpanded = (key: string): boolean => !turnDurationMap.value[key];
-
-const isFoldExpanded = (messageId: string | number): boolean =>
-  foldExpandedMap.value[getThinkKey(messageId)] ?? defaultFoldExpanded(getThinkKey(messageId));
-
 const isSummaryExpanded = (messageId: string | number, streaming: boolean): boolean => {
   const key = getThinkKey(messageId);
   const saved = summaryExpandedMap.value[key];
@@ -369,9 +365,6 @@ const isItemExpandedIds = (item: BubbleItemType): string[] => {
   return saved.includes("reasoning") ? saved : [...saved, "reasoning"];
 };
 
-const setFoldExpanded = (messageId: string | number, expanded: boolean) => {
-  foldExpandedMap.value = { ...foldExpandedMap.value, [getThinkKey(messageId)]: expanded };
-};
 const setSummaryExpanded = (messageId: string | number, expanded: boolean) => {
   summaryExpandedMap.value = { ...summaryExpandedMap.value, [getThinkKey(messageId)]: expanded };
 };
@@ -421,7 +414,6 @@ watch(
   [displayItems, () => props.workingStartedAtMs],
   ([items]) => {
     const now = Date.now();
-    const nextFold = { ...foldExpandedMap.value };
     const nextSummary = { ...summaryExpandedMap.value };
 
     items.forEach((item) => {
@@ -461,10 +453,9 @@ watch(
         }
       }
 
-      // 回合结束 → 折叠为“用时 Xs ▸”分割线；流式中摘要行默认展开。
-      if (prevStreaming && !streaming && nextFold[key] === undefined) {
-        nextFold[key] = false;
-        if (nextSummary[key] === undefined) nextSummary[key] = false;
+      // 活动摘要：流式中默认展开（实时看进度），回合结束默认折叠为“已执行：…”。
+      if (prevStreaming && !streaming && nextSummary[key] === undefined) {
+        nextSummary[key] = false;
       }
       if (streaming && nextSummary[key] === undefined) {
         nextSummary[key] = true;
@@ -473,7 +464,6 @@ watch(
       lastStreamingMap.value[key] = streaming;
     });
 
-    foldExpandedMap.value = nextFold;
     summaryExpandedMap.value = nextSummary;
     void bindScrollBox();
   },
@@ -524,7 +514,6 @@ onBeforeUnmount(() => {
           :content="String(content)"
           :markdown-class-name="markdownClassName"
           :streaming="isStreamingStatus(item.status)"
-          :fold-expanded="isFoldExpanded(item.key)"
           :summary-expanded="isSummaryExpanded(item.key, isStreamingStatus(item.status))"
           :item-expanded-ids="isItemExpandedIds(item)"
           :turn-duration-ms="turnDurationMap[getThinkKey(item.key)]"
@@ -538,30 +527,26 @@ onBeforeUnmount(() => {
           :submissions="submissionsForMessage(item.key)"
           :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
           @a2ui-action="emit('a2uiAction', $event)"
-          @update:fold-expanded="setFoldExpanded(item.key, $event)"
           @update:summary-expanded="setSummaryExpanded(item.key, $event)"
           @update:item-expanded-ids="setItemExpandedIds(item.key, $event)"
         />
-        <span v-else class="whitespace-pre-wrap break-words">{{ content }}</span>
-        <div
-          v-if="item.role === 'user' && userMessageAttachments(item).length"
-          class="user-attachments"
-        >
-          <a
-            v-for="att in userMessageAttachments(item)"
-            :key="att.reference"
-            :href="attachmentUrl(att.reference, att.name)"
-            target="_blank"
-            rel="noopener"
-            class="user-attachment-link"
-          >
-            <img
-              :src="attachmentUrl(att.reference, att.name)"
-              :alt="att.name"
-              class="user-attachment-image"
-            />
-          </a>
-        </div>
+        <template v-else>
+          <!-- 图片附件按 codex 展示顺序放在正文上方 -->
+          <div v-if="userMessageAttachments(item).length" class="user-attachments">
+            <div
+              v-for="att in userMessageAttachments(item)"
+              :key="att.reference"
+              class="user-attachment-link"
+            >
+              <Image
+                :src="attachmentUrl(att.reference, att.name)"
+                :alt="att.name"
+                class="user-attachment-image"
+              />
+            </div>
+          </div>
+          <span class="whitespace-pre-wrap break-words">{{ content }}</span>
+        </template>
       </template>
 
       <template #footer="{ item }">

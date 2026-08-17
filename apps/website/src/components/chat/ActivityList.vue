@@ -319,23 +319,29 @@ const entries = computed<ActivityEntry[]>(() => {
   return normalizeEntryIds(list);
 });
 
-/** 活动摘要："正在执行：1 次思考 · 2 次工具调用" / "已执行：…"。 */
+/** 活动摘要："正在执行：N 次命令，M 次思考" / "已执行：…"。 */
 const summaryLabel = computed(() => {
   if (!entries.value.length) return "";
-  const nouns: Record<ActivityEntry["kind"], string> = {
-    reasoning: "思考",
-    tool: "工具调用",
-    plan: "计划步骤",
-    workspace: "文件修改",
-    content: "回答",
-  };
-  const counts = new Map<ActivityEntry["kind"], number>();
+  let commands = 0;
+  let reasoning = 0;
+  let plans = 0;
+  let files = 0;
   for (const entry of entries.value) {
-    counts.set(entry.kind, (counts.get(entry.kind) ?? 0) + 1);
+    if (entry.kind === "reasoning") reasoning += 1;
+    else if (entry.kind === "plan") plans += 1;
+    else if (entry.kind === "workspace") files += 1;
+    else if (entry.kind === "tool") {
+      if (entry.fileChanges?.length || entry.fileStats) files += 1;
+      else commands += 1;
+    }
   }
-  const parts = [...counts.entries()].map(([kind, count]) => `${count} 次${nouns[kind]}`);
+  const parts: string[] = [];
+  if (commands) parts.push(`${commands} 次命令`);
+  if (reasoning) parts.push(`${reasoning} 次思考`);
+  if (plans) parts.push(`${plans} 个计划`);
+  if (files) parts.push(`${files} 次文件修改`);
   const running = entries.value.some((entry) => entry.status === "running");
-  return running ? `正在执行：${parts.join(" · ")}` : `已执行：${parts.join(" · ")}`;
+  return running ? `正在执行：${parts.join("，")}` : `已执行：${parts.join("，")}`;
 });
 const anyRunning = computed(() => entries.value.some((entry) => entry.status === "running"));
 
@@ -418,7 +424,6 @@ onBeforeUnmount(() => {
   <div v-if="entries.length" class="flex w-full min-w-0 flex-col gap-0.5">
     <!-- 摘要行：活动折叠开关 -->
     <button
-      v-if="!timeline.length"
       type="button"
       class="inline-flex h-[22px] w-fit items-center gap-1.5 rounded border-0 bg-transparent px-0.5 py-0 text-left text-[11px] leading-[14px] font-medium text-brand-muted-strong hover:text-brand-muted"
       @click="toggleSummary"
@@ -433,7 +438,7 @@ onBeforeUnmount(() => {
       <ChevronDown v-else class="h-2.5 w-2.5 flex-none text-brand-ghost" />
     </button>
 
-    <div v-if="summaryExpanded || timeline.length" class="flex w-full min-w-0 flex-col pl-[15px]">
+    <div v-if="summaryExpanded || streaming" class="flex w-full min-w-0 flex-col pl-[15px]">
       <div
         v-for="entry in entries"
         :key="entry.id"

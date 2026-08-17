@@ -36,6 +36,15 @@ export type TranscriptTimelineItem =
   | { kind: "tool"; id: string; activity: TranscriptActivity }
   | { kind: "plan"; id: string; plan: TranscriptPlan };
 
+/** 消息携带的附件（图片/文件）。reference 为网关附件引用或 data:/http(s) 地址。 */
+export interface TranscriptAttachment {
+  reference: string;
+  name: string;
+  isImage: boolean;
+  /** 网关侧绝对路径（仅供同机 agent 读取，前端不使用）。 */
+  path?: string;
+}
+
 /** Canonical message shape consumed by every history adapter and the web client. */
 export interface TranscriptMessage {
   id: string;
@@ -45,6 +54,7 @@ export interface TranscriptMessage {
   toolCalls?: TranscriptActivity[];
   agentPlan?: TranscriptPlan;
   timeline?: TranscriptTimelineItem[];
+  attachments?: TranscriptAttachment[];
 }
 
 export interface TranscriptHistoryCollector {

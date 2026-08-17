@@ -13,7 +13,8 @@ import type { Server } from "node:http";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
-  AttachmentStore,
+  attachmentStore,
+  type AttachmentStore,
   ATTACHMENT_SCHEME,
   attachmentContentType,
   defaultWorkspaceDir,
@@ -43,7 +44,7 @@ import { writeNativeEvent } from "./nativeEvents";
 import { readGitWorkspace, switchGitBranch } from "./gitWorkspace";
 
 /** 附件存储单例：落盘到 ~/.cc-hearts-open-code/attachments（OPEN_CHAT_DATA_DIR 可覆盖）。 */
-const attachments = new AttachmentStore();
+const attachments = attachmentStore;
 
 /** 网关运行时：配置 + 由配置构建的各管理器。 */
 export interface GatewayRuntime {

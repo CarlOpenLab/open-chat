@@ -146,7 +146,8 @@ export function hasTranscriptContent(message: TranscriptMessage): boolean {
     message.content.trim() ||
     message.reasoningContent?.trim() ||
     message.toolCalls?.length ||
-    message.agentPlan,
+    message.agentPlan ||
+    message.attachments?.length,
   );
 }
 

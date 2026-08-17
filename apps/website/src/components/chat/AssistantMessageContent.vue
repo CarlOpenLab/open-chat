@@ -8,20 +8,17 @@ import type { Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
 import type { ToolCallItem } from "../../services/OpenChatProvider";
 import type { TranscriptTimelineItem } from "../../services/transcript";
-import { formatWorkedDuration, formatWorkingElapsed } from "../../utils/chatDuration";
+import { formatWorkingElapsed } from "../../utils/chatDuration";
 import type { A2UIActionPayload, A2UISubmission } from "../../utils/a2ui";
 import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 import ActivityList from "./ActivityList.vue";
-import TurnFold from "./TurnFold.vue";
 
 interface Props {
   item: BubbleItemType;
   content: string;
   markdownClassName: string;
   streaming: boolean;
-  /** 回合结束后“用时 Xs ▸”折叠是否展开（点击分割线切换）。 */
-  foldExpanded: boolean;
   /** 活动列表摘要行是否展开。 */
   summaryExpanded: boolean;
   /** 已展开的条目 id（思考 / 工具 / 计划 / 文件）。 */
@@ -39,7 +36,6 @@ interface Props {
 
 interface Emits {
   (e: "a2uiAction", payload: A2UIActionPayload): void;
-  (e: "update:foldExpanded", expanded: boolean): void;
   (e: "update:summaryExpanded", expanded: boolean): void;
   (e: "update:itemExpandedIds", ids: string[]): void;
 }
@@ -82,14 +78,8 @@ const timeline = computed<TranscriptTimelineItem[]>(() => {
   const value = props.item.extraInfo?.timeline;
   return Array.isArray(value) ? (value as TranscriptTimelineItem[]) : [];
 });
-const hasTimelineContent = computed(() =>
-  timeline.value.some((entry) => entry.kind === "content" && entry.content.trim()),
-);
-const visibleTimeline = computed(() =>
-  timeline.value.filter(
-    (entry) => props.streaming || props.foldExpanded || entry.kind === "content",
-  ),
-);
+/** 活动列表只承载思考/工具/计划/文件等“活动”，正文由下方 XMarkdown 单独渲染。 */
+const activityTimeline = computed(() => timeline.value.filter((entry) => entry.kind !== "content"));
 
 const planInfo = computed(() => props.item.extraInfo?.agentPlan ?? null);
 const workspaceInfo = computed(() => props.item.extraInfo?.parsedWorkspace ?? null);
@@ -104,7 +94,7 @@ const reasoningInfo = computed(() => {
 });
 
 const hasActivities = computed(() => {
-  if (timeline.value.length) return true;
+  if (activityTimeline.value.length) return true;
   if (reasoningContent.value.trim()) return true;
   if (toolCalls.value.length) return true;
   if (Array.isArray(planInfo.value?.entries) && planInfo.value.entries.length) return true;
@@ -116,10 +106,6 @@ const hasActivities = computed(() => {
     workspace?.hasWorkspaceBlock || workspace?.files?.length || workspace?.errors?.length,
   );
 });
-
-const turnDurationLabel = computed(() =>
-  props.turnDurationMs ? `用时 ${formatWorkedDuration(props.turnDurationMs)}` : "",
-);
 
 /** 底部“工作中 · Xs”跳动计时。 */
 const nowMs = ref(Date.now());
@@ -179,31 +165,24 @@ const onFaviconError = (url: string) => {
       </span>
     </div>
 
-    <!-- 流式中展示活动列表；回合结束折叠为“用时 Xs ▸”分割线（均在回答上方） -->
-    <template v-if="hasActivities">
-      <TurnFold
-        v-if="!streaming && turnDurationLabel"
-        :label="turnDurationLabel"
-        :expanded="foldExpanded"
-        @toggle="emit('update:foldExpanded', !foldExpanded)"
-      />
-      <ActivityList
-        v-if="streaming || foldExpanded || timeline.some((entry) => entry.kind === 'content')"
-        :reasoning="reasoningInfo"
-        :tools="toolCalls"
-        :plan="planInfo"
-        :workspace="workspaceInfo"
-        :timeline="visibleTimeline"
-        :streaming="streaming"
-        :summary-expanded="summaryExpanded"
-        :item-expanded-ids="itemExpandedIds"
-        @update:summary-expanded="emit('update:summaryExpanded', $event)"
-        @update:item-expanded-ids="emit('update:itemExpandedIds', $event)"
-      />
-    </template>
+    <!-- 活动摘要行 + 可展开列表：默认折叠为“已执行：N 次命令，M 次思考”，点击展开 -->
+    <ActivityList
+      v-if="hasActivities"
+      :reasoning="reasoningInfo"
+      :tools="toolCalls"
+      :plan="planInfo"
+      :workspace="workspaceInfo"
+      :timeline="activityTimeline"
+      :streaming="streaming"
+      :summary-expanded="summaryExpanded"
+      :item-expanded-ids="itemExpandedIds"
+      @update:summary-expanded="emit('update:summaryExpanded', $event)"
+      @update:item-expanded-ids="emit('update:itemExpandedIds', $event)"
+    />
 
+    <!-- 正文始终单独渲染 -->
     <XMarkdown
-      v-if="!hasTimelineContent && answerContent.trim()"
+      v-if="answerContent.trim()"
       :content="answerContent"
       :components="markdownComponents"
       :streaming="markdownStreaming"

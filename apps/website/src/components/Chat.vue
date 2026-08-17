@@ -1020,6 +1020,19 @@ const syncProviderConversations = async (agentId: string): Promise<void> => {
         if (Number.isFinite(updatedAt) && existing.updatedAt !== updatedAt) {
           existing.updatedAt = updatedAt;
           changed = true;
+          // The provider session changed outside Open Chat (Codex terminal /
+          // desktop app continued the same thread). Reload the open
+          // conversation's history snapshot so those turns become visible.
+          // The gateway never live-streams externally started turns.
+          if (
+            existing.agentId === activeAgentId.value &&
+            String(existing.key) === currentConversationKey.value &&
+            !isRequesting.value &&
+            !isHydrating.value &&
+            !acpStreamController.value
+          ) {
+            void refreshAcpSession();
+          }
         }
         continue;
       }
@@ -1144,6 +1157,10 @@ const refreshSessionState = async () => {
   const controller = new AbortController();
   sessionRefreshController = controller;
   try {
+    // Provider-owned session metadata (title / cwd / updatedAt) drives the
+    // sidebar and lets externally updated sessions reload their history
+    // snapshot below. It is refreshed on the same cadence as run state.
+    await syncProviderConversations(agentId);
     const previouslyRunning = openChatSessions.value.filter(
       (session) => session.agentId === agentId && session.running,
     );

@@ -37,6 +37,14 @@ export type TranscriptTimelineItem =
   | { kind: "tool"; id: string; activity: TranscriptActivity }
   | { kind: "plan"; id: string; plan: TranscriptPlan };
 
+/** 消息携带的附件（图片/文件）。reference 为网关附件引用或 data:/http(s) 地址。 */
+export interface TranscriptAttachment {
+  reference: string;
+  name: string;
+  isImage: boolean;
+  path?: string;
+}
+
 /** Wire contract shared by every server-side provider adapter. */
 export interface TranscriptMessage {
   id: string;
@@ -46,6 +54,7 @@ export interface TranscriptMessage {
   toolCalls?: TranscriptActivity[];
   agentPlan?: TranscriptPlan;
   timeline?: TranscriptTimelineItem[];
+  attachments?: TranscriptAttachment[];
 }
 
 export function transcriptHistoryToModelMessages(
@@ -66,6 +75,7 @@ export function transcriptToModelMessage(item: TranscriptMessage): XModelMessage
     ...(item.reasoningContent ? { reasoningContent: item.reasoningContent } : {}),
     ...(item.toolCalls?.length ? { toolCalls: item.toolCalls } : {}),
     ...(item.agentPlan ? { agentPlan: item.agentPlan } : {}),
+    ...(item.attachments?.length ? { attachments: item.attachments } : {}),
     ...(timeline.length ? { timeline } : {}),
   };
 }

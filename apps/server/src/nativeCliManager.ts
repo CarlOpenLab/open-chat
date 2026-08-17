@@ -13,11 +13,12 @@ import { GatewayError } from "./error";
 import type { LocalChatManager, LocalModelInfo } from "./localProvider";
 import { convertClaudeHistory } from "./transcript/adapters/claude";
 import { convertCodexThreadHistory, normalizeCodexActivity } from "./transcript/adapters/codex";
+import { readCodexRolloutTurns } from "./codexRollout";
 import { convertPiHistory } from "./transcript/adapters/pi";
-import type { TranscriptMessage } from "./transcript/types";
+import type { TranscriptMessage, TranscriptAttachment } from "./transcript/types";
 import { writeTranscriptCustomEvent } from "./transcript/stream";
 import { writeNativeEvent } from "./nativeEvents";
-import { defaultWorkspaceDir } from "./attachments";
+import { attachmentStore, defaultWorkspaceDir } from "./attachments";
 
 type NativeTransport = Exclude<AgentTransport, "acp">;
 
@@ -1764,10 +1765,57 @@ async function readCodexSessionHistory(
 ): Promise<TranscriptMessage[]> {
   const executable = resolveExecutable(agent.command);
   if (!executable || !threadId) return [];
+  const turns = await readCodexTurns(executable, threadId, cwd, agent.args);
+  return convertCodexThreadHistory(turns, { importImage: importCodexImageAttachment });
+}
+
+/** 把 codex user 消息里的 base64 图片持久化为网关标准附件（按内容去重）。 */
+function importCodexImageAttachment(name: string, dataBase64: string): TranscriptAttachment | null {
+  try {
+    const bytes = Buffer.from(dataBase64, "base64");
+    if (bytes.length === 0) return null;
+    const stored = attachmentStore.importBytesDeduped(name || "image.png", bytes);
+    return {
+      reference: stored.reference,
+      name: stored.name,
+      isImage: stored.isImage,
+      ...(stored.path ? { path: stored.path } : {}),
+    };
+  } catch (error) {
+    console.error("[codex] image attachment import failed:", error);
+    return null;
+  }
+}
+
+/**
+ * Reads persisted Codex turns for a thread.
+ *
+ * `thread/read` with `includeTurns` returns fully materialized turns, but it
+ * blocks while the thread has an active writer — i.e. when the same session is
+ * open in the Codex terminal, the desktop app, or another app-server. In that
+ * case open-chat's RPC timeout would previously turn a busy session into an
+ * empty history. `thread/turns/list` summary pages stay readable for such
+ * threads (they carry the user/agent message text), so fall back to it before
+ * giving up.
+ */
+/**
+ * `thread/read` blocks while a thread has an active writer, so bound it well
+ * below RPC_TIMEOUT_MS and let the `thread/turns/list` fallback take over for
+ * sessions that are open in another Codex client. Unblocked reads return in
+ * milliseconds.
+ */
+const CODEX_READ_TURNS_TIMEOUT_MS = 6_000;
+
+async function readCodexTurns(
+  executable: string,
+  threadId: string,
+  cwd: string,
+  extraArgs: string[],
+): Promise<unknown[]> {
   let exited: Error | null = null;
   const rpc = new JsonRpcProcess(
     executable,
-    ["app-server", "--stdio", ...agent.args],
+    ["app-server", "--stdio", ...extraArgs],
     cwd,
     () => {},
     (error) => {
@@ -1780,19 +1828,64 @@ async function readCodexSessionHistory(
       capabilities: { experimentalApi: true },
     });
     rpc.notify("initialized", {});
-    const response = await rpc.request("thread/read", { threadId, includeTurns: true });
-    if (exited) throw exited;
-    const thread = asRecord(response.result)?.thread;
-    const turns = Array.isArray(asRecord(thread)?.turns)
-      ? (asRecord(thread)?.turns as unknown[])
-      : [];
-    return convertCodexThreadHistory(turns);
-  } catch (error) {
-    console.error(`[${agent.id}] session history read failed:`, error);
-    return [];
+    try {
+      const response = await rpc.request(
+        "thread/read",
+        { threadId, includeTurns: true },
+        CODEX_READ_TURNS_TIMEOUT_MS,
+      );
+      if (exited) throw exited;
+      const thread = asRecord(response.result)?.thread;
+      const turns = Array.isArray(asRecord(thread)?.turns)
+        ? (asRecord(thread)?.turns as unknown[])
+        : [];
+      if (turns.length > 0) return turns;
+    } catch (error) {
+      console.error(
+        `[codex] thread/read blocked (another Codex client may hold the session), ` +
+          `falling back to local rollout:`,
+        error,
+      );
+    }
+    // 第二回退：直接读本地 rollout 文件。占用时也能拿到完整 turns（含图片）。
+    const rolloutTurns = await readCodexRolloutTurns(threadId);
+    if (rolloutTurns.length > 0) return rolloutTurns;
+    console.error(
+      `[codex] local rollout read empty for ${threadId}, falling back to thread/turns/list`,
+    );
+    const summaryTurns = await listCodexTurns(rpc, threadId);
+    if (summaryTurns.length > 0) return summaryTurns;
+    throw new Error(`Codex 会话 ${threadId} 历史读取失败（thread/read 与回退读取均无返回）`);
   } finally {
     rpc.close();
   }
+}
+
+/** Pages `thread/turns/list` (newest-first) and returns chronological turns. */
+async function listCodexTurns(rpc: JsonRpcProcess, threadId: string): Promise<unknown[]> {
+  const turns: unknown[] = [];
+  const seen = new Set<string>();
+  let cursor = "";
+  for (let page = 0; page < 100; page += 1) {
+    const response = await rpc.request("thread/turns/list", {
+      threadId,
+      limit: 100,
+      sortDirection: "desc",
+      ...(cursor ? { backwardsCursor: cursor } : {}),
+    });
+    const result = asRecord(response.result) ?? {};
+    const pageTurns = Array.isArray(result.data) ? (result.data as unknown[]) : [];
+    for (const turn of pageTurns) {
+      const id = stringValue(asRecord(turn)?.id);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      turns.push(turn);
+    }
+    cursor = stringValue(result.backwardsCursor);
+    if (!cursor || pageTurns.length < 100) break;
+  }
+  // History adapters expect chronological order; `thread/turns/list` desc is newest-first.
+  return turns.reverse();
 }
 
 async function discoverPiModels(
