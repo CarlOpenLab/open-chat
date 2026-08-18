@@ -101,6 +101,34 @@ control events. `transcript/stream.ts` is retained for ordinary upstream
 OpenAI compatibility and legacy history snapshots; it is not used for native
 turn output.
 
+## Session Event Adapter
+
+Sessions can also be rendered as an event log: one JSON event per line, with
+numbered `seq` events (`turn/start`, `user/message`, `assistant/message`,
+`tool/call`, `tool/result`, `step/start`, `step/end`, `turn/end`,
+`session/title`) that must keep strict discipline before a resumed conversation
+is accepted by model APIs. Open Chat exposes a bidirectional event-log adapter
+around the canonical `TranscriptMessage` contract:
+
+- `transcript/sessionEvents.ts` — `synthesizeSessionEvents(history, options)`
+  renders the canonical history into session events (droppable straight into a
+  per-line JSON log). Event discipline is enforced: continuous `seq`,
+  `surfaceOp: 'append'` on surface events, `sourceEventSeqs` linking each
+  `tool/result` to its `tool/call`, and the pairing invariant (every
+  `tool/call` gets a `tool/result`, so model APIs accept the resumed thread).
+  Content the log cannot express (`agentPlan`, `attachments`) is skipped and
+  reported through `degradations` — fail loudly, never silently.
+  `validateSessionEvents` runs a structural self-check on any synthesized log.
+- `transcript/adapters/sessionEvents.ts` — `convertSessionEventsHistory(lines)`
+  reads event lines back into the canonical history (text → `content`,
+  reasoning → `reasoningContent`, `tool-call` blocks / `tool/call` events →
+  `toolCalls`, `tool/result` upserted by `toolCallId` onto the owning assistant
+  message), mirroring the other history adapters.
+
+This makes a conversation portable in both directions: an Open Chat session can
+be exported as a resumable session log, and a session log can be opened and
+rendered in the workspace.
+
 ## Server Ownership
 
 | Module                     | Responsibility                                                                             |
