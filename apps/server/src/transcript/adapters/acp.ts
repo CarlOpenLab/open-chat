@@ -1,8 +1,15 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import { appendTranscriptTimeline, transcriptMessageFor, upsertTranscriptActivity } from "../core";
-import type { TranscriptActivity, TranscriptHistoryCollector, TranscriptPlan } from "../types";
+import {
+  appendContentSegment,
+  appendReasoningSegment,
+  transcriptMessageFor,
+  upsertPlanSegment,
+  upsertToolSegment,
+} from "../core";
+import type { TranscriptHistoryCollector, TranscriptPlan } from "../types";
 import { stringifyValue } from "../value";
 
+/** 把 ACP 会话更新累积到扁平 collector（segments + id/timestamp）。 */
 export function collectAcpHistoryUpdate(
   collector: TranscriptHistoryCollector,
   update: SessionUpdate,
@@ -10,48 +17,51 @@ export function collectAcpHistoryUpdate(
   switch (update.sessionUpdate) {
     case "user_message_chunk": {
       const text = acpContentText(update.content);
-      if (text) transcriptMessageFor(collector, "user", "acp-history").content += text;
+      if (text) {
+        const message = transcriptMessageFor(collector, "user", "acp-history");
+        if (message.role === "user") message.content += text;
+      }
       break;
     }
     case "agent_message_chunk": {
       const text = acpContentText(update.content);
       if (text) {
         const message = transcriptMessageFor(collector, "assistant", "acp-history");
-        message.content += text;
-        appendTranscriptTimeline(message, {
-          kind: "content",
-          id: `content-${message.id}`,
-          content: text,
-        });
+        if (message.role === "assistant") appendContentSegment(message, text);
       }
       break;
     }
     case "agent_thought_chunk": {
       const text = acpContentText(update.content);
-      if (!text) break;
-      const message = transcriptMessageFor(collector, "assistant", "acp-history");
-      message.reasoningContent = `${message.reasoningContent ?? ""}${text}`;
-      appendTranscriptTimeline(message, {
-        kind: "reasoning",
-        id: `reasoning-${message.id}`,
-        content: text,
-      });
+      if (text) {
+        const message = transcriptMessageFor(collector, "assistant", "acp-history");
+        if (message.role === "assistant") appendReasoningSegment(message, text);
+      }
       break;
     }
     case "tool_call":
     case "tool_call_update": {
       const message = transcriptMessageFor(collector, "assistant", "acp-history");
-      const activity = normalizeAcpActivity(update);
-      message.toolCalls = upsertTranscriptActivity(message.toolCalls, activity);
-      appendTranscriptTimeline(message, { kind: "tool", id: activity.id, activity });
+      if (message.role === "assistant") {
+        const activity = normalizeAcpActivity(update);
+        upsertToolSegment(message, {
+          kind: "tool",
+          id: activity.id,
+          name: activity.name,
+          status: activity.status,
+          ...(activity.input !== undefined ? { input: activity.input } : {}),
+          ...(activity.output !== undefined ? { output: activity.output } : {}),
+          ...(activity.error !== undefined ? { error: activity.error } : {}),
+        });
+      }
       break;
     }
     case "plan":
     case "plan_update":
       const message = transcriptMessageFor(collector, "assistant", "acp-history");
-      const plan = normalizeAcpPlan(update);
-      message.agentPlan = plan;
-      appendTranscriptTimeline(message, { kind: "plan", id: `plan-${message.id}`, plan });
+      if (message.role === "assistant") {
+        upsertPlanSegment(message, normalizeAcpPlan(update).entries ?? []);
+      }
       break;
     default:
       break;
@@ -75,7 +85,14 @@ export function normalizeAcpPlan(update: SessionUpdate): TranscriptPlan {
   return entries.length ? { entries } : {};
 }
 
-export function normalizeAcpActivity(update: SessionUpdate): TranscriptActivity {
+export function normalizeAcpActivity(update: SessionUpdate): {
+  id: string;
+  name: string;
+  status: "pending" | "running" | "completed" | "error";
+  input?: unknown;
+  output?: string;
+  error?: string;
+} {
   if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
     return { id: "unknown", name: "工具调用", status: "pending" };
   }

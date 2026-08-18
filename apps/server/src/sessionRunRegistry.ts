@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { flattenHistory } from "@cc-heart/open-chat-types";
 import { nativeEventFrame } from "./nativeEvents";
 import type { TranscriptMessage } from "./transcript/types";
 
@@ -110,7 +111,9 @@ export class SessionRunRegistry {
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     });
-    response.write(`event: snapshot\ndata: ${JSON.stringify({ messages: entry.snapshot })}\n\n`);
+    response.write(
+      `event: snapshot\ndata: ${JSON.stringify({ records: flattenHistory(entry.snapshot) })}\n\n`,
+    );
     for (const chunk of entry.chunks) response.write(chunk);
     entry.subscribers.add(response);
     response.on("close", () => entry.subscribers.delete(response));

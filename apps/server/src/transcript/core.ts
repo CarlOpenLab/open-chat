@@ -1,10 +1,14 @@
 import type {
-  TranscriptActivity,
+  AssistantMessage,
   TranscriptHistoryCollector,
   TranscriptMessage,
   TranscriptRole,
-  TranscriptTimelineItem,
+  TranscriptSegment,
 } from "./types";
+
+// ─────────────────────────────────────────────────────────────
+// 扁平消息 collector（服务端 live 累积，如 ACP）。
+// ─────────────────────────────────────────────────────────────
 
 export function createTranscriptCollector(
   messages: TranscriptMessage[] = [],
@@ -20,137 +24,106 @@ export function transcriptMessageFor(
   const last = collector.messages.at(-1);
   if (last && collector.activeRole === role) return last;
 
-  const message: TranscriptMessage = {
-    id: `${idPrefix}-${collector.nextId++}`,
-    role,
-    content: "",
-  };
+  const timestamp = Date.now();
+  const id = `${idPrefix}-${collector.nextId++}`;
+  const message: TranscriptMessage =
+    role === "user"
+      ? { id, timestamp, role: "user", content: "" }
+      : { id, timestamp, role: "assistant", segments: [] };
   collector.messages.push(message);
   collector.activeRole = role;
   return message;
 }
 
-export function appendTranscriptText(current: string | undefined, next: string, separator = "") {
-  if (!next) return current ?? "";
-  if (!current) return next;
-  return `${current}${separator}${next}`;
+// ─────────────────────────────────────────────────────────────
+// 扁平 segments 操作。
+// ─────────────────────────────────────────────────────────────
+
+/** 相邻 content 段合并（块之间用空行），否则追加。 */
+export function appendContentSegment(message: AssistantMessage, text: string): void {
+  appendSegment(message, { kind: "content", content: text });
 }
 
-export function upsertTranscriptActivity(
-  activities: TranscriptActivity[] | undefined,
-  activity: TranscriptActivity,
-): TranscriptActivity[] {
-  const next = activities ? activities.slice() : [];
-  const index = next.findIndex((item) => item.id === activity.id);
-  if (index === -1) next.push(activity);
-  else next[index] = { ...next[index], ...activity };
-  return next;
+/** 相邻 reasoning 段合并，否则追加。 */
+export function appendReasoningSegment(message: AssistantMessage, text: string): void {
+  appendSegment(message, { kind: "reasoning", content: text });
 }
 
-export function appendTranscriptTimeline(
-  message: TranscriptMessage,
-  item: TranscriptTimelineItem,
-): void {
-  const timeline = message.timeline ? message.timeline.slice() : [];
-  if (item.kind === "tool") {
-    const index = timeline.findIndex((entry) => entry.kind === "tool" && entry.id === item.id);
-    if (index === -1) timeline.push(item);
-    else {
-      const previous = timeline[index];
-      if (previous?.kind === "tool") {
-        timeline[index] = {
-          ...previous,
-          activity: { ...previous.activity, ...item.activity },
-        };
-      }
-    }
-  } else if (item.kind === "plan") {
-    const index = timeline.findIndex((entry) => entry.kind === "plan" && entry.id === item.id);
-    if (index === -1) timeline.push(item);
-    else timeline[index] = item;
+export function appendSegment(message: AssistantMessage, segment: TranscriptSegment): void {
+  const segments = message.segments;
+  const previous = segments.at(-1);
+  if (
+    (segment.kind === "content" || segment.kind === "reasoning") &&
+    previous?.kind === segment.kind
+  ) {
+    const merged =
+      previous.kind === "content" && segment.kind === "content"
+        ? `${previous.content}\n\n${segment.content}`
+        : `${previous.content}${segment.content}`;
+    segments[segments.length - 1] = { ...previous, content: merged } as TranscriptSegment;
   } else {
-    const previous = timeline.at(-1);
-    if (previous?.kind === item.kind) {
-      timeline[timeline.length - 1] = {
-        ...previous,
-        content: `${previous.content}${item.content}`,
-      };
-    } else {
-      const duplicateCount = timeline.filter((entry) => entry.id === item.id).length;
-      timeline.push(duplicateCount ? { ...item, id: `${item.id}-${duplicateCount}` } : item);
-    }
+    segments.push(segment);
   }
-  message.timeline = timeline;
+}
+
+/** 工具段按 id upsert（后到状态覆盖旧状态）。 */
+export function upsertToolSegment(
+  message: AssistantMessage,
+  tool: Extract<TranscriptSegment, { kind: "tool" }>,
+): void {
+  const index = message.segments.findIndex(
+    (segment) => segment.kind === "tool" && segment.id === tool.id,
+  );
+  if (index === -1) message.segments.push(tool);
+  else message.segments[index] = { ...message.segments[index], ...tool };
+}
+
+/** plan 段唯一，后到者覆盖。 */
+export function upsertPlanSegment(
+  message: AssistantMessage,
+  entries: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>,
+): void {
+  const index = message.segments.findIndex((segment) => segment.kind === "plan");
+  const segment: TranscriptSegment = { kind: "plan", entries };
+  if (index === -1) message.segments.push(segment);
+  else message.segments[index] = segment;
+}
+
+/** 文件修改段按 path upsert。 */
+export function upsertFileChangeSegment(
+  message: AssistantMessage,
+  change: Extract<TranscriptSegment, { kind: "fileChange" }>,
+): void {
+  const index = message.segments.findIndex(
+    (segment) => segment.kind === "fileChange" && segment.path === change.path,
+  );
+  if (index === -1) message.segments.push(change);
+  else message.segments[index] = { ...message.segments[index], ...change };
 }
 
 /**
- * Provider histories occasionally split one assistant turn across several
- * adjacent records. Merge only adjacent assistant records; user boundaries
- * remain authoritative turn boundaries.
+ * 扁平历史规范化：合并相邻 assistant 消息（拼接 segments，相邻同种段再合并），
+ * user 消息边界保持权威。
  */
 export function normalizeTranscriptHistory(messages: TranscriptMessage[]): TranscriptMessage[] {
   const history: TranscriptMessage[] = [];
   for (const message of messages) {
-    if (!hasTranscriptContent(message)) continue;
-    const previous = history.at(-1);
-    if (message.role === "assistant" && previous?.role === "assistant") {
-      previous.content = appendTranscriptText(previous.content, message.content, "\n\n");
-      previous.reasoningContent = optionalText(
-        appendTranscriptText(previous.reasoningContent, message.reasoningContent ?? "", "\n\n"),
-      );
-      for (const activity of message.toolCalls ?? []) {
-        previous.toolCalls = upsertTranscriptActivity(previous.toolCalls, activity);
-      }
-      if (message.agentPlan) previous.agentPlan = message.agentPlan;
-      for (const item of message.timeline ?? []) appendTranscriptTimeline(previous, item);
+    if (message.role === "user") {
+      history.push(message);
       continue;
     }
-    const normalized = {
-      ...message,
-      content: message.content.trim(),
-      reasoningContent: optionalText(message.reasoningContent?.trim() ?? ""),
-    };
-    if (normalized.role === "assistant" && !normalized.timeline?.length) {
-      if (normalized.reasoningContent) {
-        appendTranscriptTimeline(normalized, {
-          kind: "reasoning",
-          id: `reasoning-${normalized.id}`,
-          content: normalized.reasoningContent,
-        });
-      }
-      for (const activity of normalized.toolCalls ?? []) {
-        appendTranscriptTimeline(normalized, { kind: "tool", id: activity.id, activity });
-      }
-      if (normalized.agentPlan) {
-        appendTranscriptTimeline(normalized, {
-          kind: "plan",
-          id: `plan-${normalized.id}`,
-          plan: normalized.agentPlan,
-        });
-      }
-      if (normalized.content) {
-        appendTranscriptTimeline(normalized, {
-          kind: "content",
-          id: `content-${normalized.id}`,
-          content: normalized.content,
-        });
-      }
+    if (!message.segments.length) continue;
+    const previous = history.at(-1);
+    if (previous?.role === "assistant") {
+      for (const segment of message.segments) appendSegment(previous, segment);
+    } else {
+      history.push(message);
     }
-    history.push(normalized);
   }
   return history;
 }
 
-export function hasTranscriptContent(message: TranscriptMessage): boolean {
-  return Boolean(
-    message.content.trim() ||
-    message.reasoningContent?.trim() ||
-    message.toolCalls?.length ||
-    message.agentPlan ||
-    message.attachments?.length,
-  );
-}
-
-function optionalText(value: string): string | undefined {
-  return value || undefined;
+/** 判断扁平 assistant 消息是否有内容（有任意 segment 即算）。 */
+export function hasAssistantSegments(message: AssistantMessage): boolean {
+  return message.segments.length > 0;
 }

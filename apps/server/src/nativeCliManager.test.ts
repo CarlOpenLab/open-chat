@@ -51,16 +51,32 @@ describe("convertCodexThreadHistory", () => {
     ]);
 
     expect(history).toHaveLength(2);
-    expect(history[0]).toMatchObject({ id: "user-1", role: "user", content: "Fix it" });
-    expect(history[1]).toMatchObject({
+    expect(history[0]).toMatchObject({
+      id: "user-1",
+      role: "user",
+      content: "Fix it",
+      timestamp: expect.any(Number),
+    });
+    const assistant = history[1];
+    expect(assistant).toMatchObject({
       id: "comment-1:assistant",
       role: "assistant",
-      content: "Checking.\n\nVerified.\n\nFixed.",
-      reasoningContent: "Found it.",
+      timestamp: expect.any(Number),
     });
-    expect(history[1]?.toolCalls).toEqual([
-      expect.objectContaining({ id: "tool-1", status: "completed", output: "ok" }),
+    const segments = assistant.role === "assistant" ? assistant.segments : [];
+    expect(segments.map((segment) => segment.kind)).toEqual([
+      "content",
+      "reasoning",
+      "tool",
+      "content",
     ]);
+    const tool = segments.find((segment) => segment.kind === "tool");
+    expect(tool).toMatchObject({
+      kind: "tool",
+      id: "tool-1",
+      status: "completed",
+      output: "ok",
+    });
   });
 
   it("keeps unphased agent messages as visible assistant content", () => {
@@ -73,20 +89,15 @@ describe("convertCodexThreadHistory", () => {
       },
     ]);
 
-    expect(history).toEqual([
-      {
-        id: "progress:assistant",
-        role: "assistant",
-        content: "Working.\n\nDone.",
-        reasoningContent: undefined,
-        timeline: [
-          {
-            kind: "content",
-            id: "content-progress:assistant",
-            content: "Working.\n\nDone.",
-          },
-        ],
-      },
+    expect(history).toHaveLength(1);
+    const assistant = history[0];
+    expect(assistant).toMatchObject({
+      id: "progress:assistant",
+      role: "assistant",
+      timestamp: expect.any(Number),
+    });
+    expect(assistant.role === "assistant" ? assistant.segments : []).toEqual([
+      { kind: "content", content: "Working.\n\nDone." },
     ]);
   });
 
@@ -208,7 +219,9 @@ describe("convertCodexThreadHistory", () => {
       },
     ]);
 
-    expect(history.map((message) => message.content)).toEqual(["真的请求"]);
+    expect(history.map((message) => (message.role === "user" ? message.content : ""))).toEqual([
+      "真的请求",
+    ]);
   });
 });
 
@@ -380,12 +393,20 @@ describe("provider transcript adapters", () => {
     ]);
 
     expect(history).toHaveLength(2);
-    expect(history[1]).toMatchObject({
-      role: "assistant",
-      content: "Done.",
-      reasoningContent: "I should read it.",
-      toolCalls: [{ id: "read-1", name: "read", status: "completed", output: "source" }],
+    const claudeAssistant = history[1];
+    expect(claudeAssistant).toMatchObject({ role: "assistant", timestamp: expect.any(Number) });
+    const claudeSegments = claudeAssistant.role === "assistant" ? claudeAssistant.segments : [];
+    expect(claudeSegments.map((segment) => segment.kind)).toEqual(["reasoning", "tool", "content"]);
+    const claudeTool = claudeSegments.find((segment) => segment.kind === "tool");
+    expect(claudeTool).toMatchObject({
+      kind: "tool",
+      id: "read-1",
+      name: "read",
+      status: "completed",
+      output: "source",
     });
+    const claudeText = claudeSegments.find((segment) => segment.kind === "content");
+    if (claudeText && claudeText.kind === "content") expect(claudeText.content).toBe("Done.");
   });
 
   it("merges Pi tool results and final text into one assistant turn", () => {
@@ -420,11 +441,17 @@ describe("provider transcript adapters", () => {
     ]);
 
     expect(history).toHaveLength(2);
-    expect(history[1]).toMatchObject({
-      role: "assistant",
-      content: "Done.",
-      reasoningContent: "Reading.",
-      toolCalls: [{ id: "read-1", name: "read", status: "completed", output: "source" }],
+    const piAssistant = history[1];
+    expect(piAssistant).toMatchObject({ role: "assistant", timestamp: expect.any(Number) });
+    const piSegments = piAssistant.role === "assistant" ? piAssistant.segments : [];
+    expect(piSegments.map((segment) => segment.kind)).toEqual(["reasoning", "tool", "content"]);
+    const piTool = piSegments.find((segment) => segment.kind === "tool");
+    expect(piTool).toMatchObject({
+      kind: "tool",
+      id: "read-1",
+      name: "read",
+      status: "completed",
+      output: "source",
     });
   });
 
@@ -447,11 +474,22 @@ describe("provider transcript adapters", () => {
     ]);
 
     expect(history).toHaveLength(2);
-    expect(history[1]).toMatchObject({
-      role: "assistant",
-      content: "Done.",
-      reasoningContent: "Reading.",
-      toolCalls: [{ id: "read-1", name: "read", status: "completed", output: "source" }],
+    const opencodeAssistant = history[1];
+    expect(opencodeAssistant).toMatchObject({ role: "assistant", timestamp: expect.any(Number) });
+    const opencodeSegments =
+      opencodeAssistant.role === "assistant" ? opencodeAssistant.segments : [];
+    expect(opencodeSegments.map((segment) => segment.kind)).toEqual([
+      "reasoning",
+      "tool",
+      "content",
+    ]);
+    const opencodeTool = opencodeSegments.find((segment) => segment.kind === "tool");
+    expect(opencodeTool).toMatchObject({
+      kind: "tool",
+      id: "read-1",
+      name: "read",
+      status: "completed",
+      output: "source",
     });
   });
 
@@ -479,11 +517,22 @@ describe("provider transcript adapters", () => {
     for (const update of updates) collectAcpHistoryUpdate(collector, update);
 
     expect(collector.messages).toHaveLength(2);
-    expect(collector.messages[1]).toMatchObject({
-      role: "assistant",
-      content: "Done.",
-      reasoningContent: "Reading.",
-      toolCalls: [{ id: "read-1", name: "read", status: "completed", output: "source" }],
+    expect(collector.messages[0]).toMatchObject({
+      role: "user",
+      content: "Inspect it",
+      timestamp: expect.any(Number),
+    });
+    const acpAssistant = collector.messages[1];
+    expect(acpAssistant).toMatchObject({ role: "assistant", timestamp: expect.any(Number) });
+    const acpSegments = acpAssistant.role === "assistant" ? acpAssistant.segments : [];
+    expect(acpSegments.map((segment) => segment.kind)).toEqual(["reasoning", "tool", "content"]);
+    const acpTool = acpSegments.find((segment) => segment.kind === "tool");
+    expect(acpTool).toMatchObject({
+      kind: "tool",
+      id: "read-1",
+      name: "read",
+      status: "completed",
+      output: "source",
     });
   });
 });

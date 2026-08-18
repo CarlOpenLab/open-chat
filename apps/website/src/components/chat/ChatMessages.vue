@@ -1,18 +1,11 @@
 <script setup lang="ts">
 import type { BubbleItemType, BubbleListProps, ItemType } from "@antdv-next/x";
 import { Actions, BubbleList } from "@antdv-next/x";
-import type { XCardCommand } from "@antdv-next/x-card";
 import { ArrowDown, Copy, RotateCcw } from "@lucide/vue";
 import { computed, h, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
-import {
-  getA2UISurfaceId,
-  parseA2UIContent,
-  type A2UIActionPayload,
-  type A2UISubmission,
-} from "../../utils/a2ui";
 import type { WebSearchSourceItem, UploadedAttachment } from "../../services/ai";
 import { attachmentUrl } from "../../services/ai";
-import { parseFileWorkspaceContent } from "../../utils/fileWorkspace";
+import type { TranscriptSegment } from "@cc-heart/open-chat-types";
 import AssistantMessageContent from "./AssistantMessageContent.vue";
 import EmptyState from "./EmptyState.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
@@ -24,30 +17,21 @@ interface Props {
   bubbleItems: BubbleItemType[];
   dark: boolean;
   conversationKey: string;
-  a2uiPendingSurfaceId?: string;
-  a2uiSubmissions?: A2UISubmission[];
   searchResultsByMessageId?: Record<string, WebSearchSourceItem[]>;
   /** 当前会话服务端运行起点，刷新恢复时与侧栏计时保持一致。 */
   workingStartedAtMs?: number;
 }
 
 interface Emits {
-  (e: "a2uiAction", payload: A2UIActionPayload): void;
   (e: "reload", messageId: string | number): void;
   (e: "promptClick", info: { data: { key: string; description: string } }): void;
 }
 
-interface ParsedA2UIRenderContent {
-  commands: XCardCommand[];
-  errors: string[];
-  hasPendingBlock: boolean;
-}
-
-interface ParsedThinkContent {
-  thinkContent: string;
-  answerContent: string;
-  thinkDone: boolean;
-}
+const props = withDefaults(defineProps<Props>(), {
+  searchResultsByMessageId: () => ({}),
+  workingStartedAtMs: undefined,
+});
+const emit = defineEmits<Emits>();
 
 /** 从消息里取出图片附件（仅 user 消息携带，经 modelMessagesToBubbleItems 放入 extraInfo）。 */
 function userMessageAttachments(item: {
@@ -66,14 +50,6 @@ function userMessageAttachments(item: {
     );
   });
 }
-
-const props = withDefaults(defineProps<Props>(), {
-  a2uiPendingSurfaceId: "",
-  a2uiSubmissions: () => [],
-  searchResultsByMessageId: () => ({}),
-  workingStartedAtMs: undefined,
-});
-const emit = defineEmits<Emits>();
 const messagesRoot = ref<HTMLElement | null>(null);
 const showScrollToBottom = ref(false);
 let scrollBox: HTMLElement | null = null;
@@ -170,160 +146,27 @@ const roleConfig: BubbleListProps["role"] = {
   },
 };
 
-const parseThinkContent = (value: string): ParsedThinkContent | null => {
-  const openMatch = value.match(/<think(?:\s+status\s*=\s*["']?([^"'>\s]+)["']?)?\s*>/i);
-  if (!openMatch || openMatch.index === undefined) {
-    const partialOpenMatch = value.match(/<think\b[^>]*$/i);
-    if (partialOpenMatch?.index !== undefined) {
-      return {
-        thinkContent: "",
-        answerContent: value.slice(0, partialOpenMatch.index).trim(),
-        thinkDone: false,
-      };
-    }
-    const withoutThinkTags = value.replace(/<\/?think(?:\s+[^>]*)?\s*>/gi, "").trim();
-    return withoutThinkTags === value.trim()
-      ? null
-      : { thinkContent: "", answerContent: withoutThinkTags, thinkDone: true };
-  }
-
-  const status = (openMatch[1] || "").toLowerCase();
-  const thinkStart = openMatch.index + openMatch[0].length;
-  const closeMatch = value.slice(thinkStart).match(/<\/think\s*>/i);
-  const closeIndex = closeMatch ? thinkStart + (closeMatch.index ?? 0) : -1;
-  const closeLength = closeMatch?.[0].length ?? 0;
-  const prefix = value.slice(0, openMatch.index).trim();
-  const thinkRaw =
-    closeIndex === -1 ? value.slice(thinkStart) : value.slice(thinkStart, closeIndex);
-  const suffix = closeIndex === -1 ? "" : value.slice(closeIndex + closeLength).trim();
-
-  return {
-    thinkContent: thinkRaw.replace(/^\n+/, "").trim(),
-    answerContent: [prefix, suffix].filter(Boolean).join("\n\n").trim(),
-    thinkDone: closeIndex !== -1 || status === "done",
-  };
+/** 消息里的扁平活动段（assistant）。 */
+const messageSegments = (item: BubbleItemType): TranscriptSegment[] => {
+  const value = item.extraInfo?.segments;
+  return Array.isArray(value) ? (value as TranscriptSegment[]) : [];
 };
 
-const displayItems = computed<BubbleItemType[]>(() => {
-  const preparedItems = props.bubbleItems.map((item) => {
-    const parsedWorkspace =
-      item.role === "assistant" && typeof item.content === "string"
-        ? parseFileWorkspaceContent(item.content)
-        : null;
-    const workspaceMarkdown = parsedWorkspace?.markdown ?? item.content;
-    const parsedA2UI =
-      item.role === "assistant" && typeof workspaceMarkdown === "string"
-        ? parseA2UIContent(workspaceMarkdown)
-        : null;
-    const displayContent = parsedA2UI?.markdown ?? workspaceMarkdown;
-
-    return {
-      ...item,
-      content: displayContent,
-      extraInfo: {
-        ...item.extraInfo,
-        parsedWorkspace,
-        parsedA2UI,
-        parsedThink:
-          item.role === "assistant" && typeof displayContent === "string"
-            ? typeof item.extraInfo?.reasoningContent === "string" &&
-              item.extraInfo.reasoningContent.trim()
-              ? {
-                  thinkContent: item.extraInfo.reasoningContent,
-                  answerContent: displayContent,
-                  thinkDone: !isStreamingStatus(item.status),
-                }
-              : parseThinkContent(displayContent)
-            : null,
-      },
-    };
-  });
-
-  const surfaceOwner = new Map<string, string>();
-  const commandsByOwner = new Map<string, XCardCommand[]>();
-
-  preparedItems.forEach((item) => {
-    const parsed = item.extraInfo?.parsedA2UI;
-    if (!parsed || isStreamingStatus(item.status)) return;
-
-    parsed.commands.forEach((command) => {
-      const surfaceId = getA2UISurfaceId(command);
-      const itemKey = String(item.key);
-
-      if ("createSurface" in command) {
-        if (surfaceOwner.has(surfaceId)) {
-          parsed.errors.push(`A2UI Surface ${surfaceId} 被重复创建`);
-          return;
-        }
-        surfaceOwner.set(surfaceId, itemKey);
-      }
-
-      const ownerKey = surfaceOwner.get(surfaceId);
-      if (!ownerKey) {
-        parsed.errors.push(`A2UI Surface ${surfaceId} 尚未创建`);
-        return;
-      }
-
-      commandsByOwner.set(ownerKey, [...(commandsByOwner.get(ownerKey) ?? []), command]);
-      if ("deleteSurface" in command) surfaceOwner.delete(surfaceId);
-    });
-  });
-
-  return preparedItems.flatMap((item) => {
-    const parsed = item.extraInfo?.parsedA2UI;
-    if (!parsed) return [item];
-
-    const isFinal = !isStreamingStatus(item.status);
-    const errors = isFinal ? [...parsed.errors] : [];
-    if (isFinal && parsed.hasPendingBlock) {
-      errors.push("A2UI 响应未完整闭合");
-    }
-
-    const parsedA2UI: ParsedA2UIRenderContent = {
-      commands: isFinal ? (commandsByOwner.get(String(item.key)) ?? []) : [],
-      errors,
-      hasPendingBlock: !isFinal && (parsed.hasPendingBlock || parsed.commands.length > 0),
-    };
-    const hasVisibleText = typeof item.content !== "string" || item.content.trim().length > 0;
-    const hasVisibleReasoning =
-      typeof item.extraInfo?.reasoningContent === "string" &&
-      item.extraInfo.reasoningContent.trim().length > 0;
-    const hasVisibleA2UI =
-      parsedA2UI.commands.length > 0 || parsedA2UI.errors.length > 0 || parsedA2UI.hasPendingBlock;
-    const hasVisibleWorkspace = Boolean(item.extraInfo?.parsedWorkspace?.hasWorkspaceBlock);
-    const hasVisibleToolCalls =
-      Array.isArray(item.extraInfo?.toolCalls) && item.extraInfo.toolCalls.length > 0;
-    const hasVisibleChatMeta =
+/**
+ * 丢弃完全空白的 assistant 消息（无正文、无活动、无错误/提示）。
+ * 内容清洗（think/workspace 剥离）已上移到数据层，这里不再做字符串解析。
+ */
+const displayItems = computed<BubbleItemType[]>(() =>
+  props.bubbleItems.filter((item) => {
+    if (item.role !== "assistant" || isStreamingStatus(item.status)) return true;
+    const hasContent = typeof item.content === "string" && item.content.trim().length > 0;
+    const hasSegments = messageSegments(item).length > 0;
+    const hasMeta =
       Boolean(item.extraInfo?.chatError) ||
       (Array.isArray(item.extraInfo?.chatNotices) && item.extraInfo.chatNotices.length > 0);
-
-    if (
-      item.role === "assistant" &&
-      !isStreamingStatus(item.status) &&
-      !hasVisibleText &&
-      !hasVisibleReasoning &&
-      !hasVisibleA2UI &&
-      !hasVisibleWorkspace &&
-      !hasVisibleToolCalls &&
-      !hasVisibleChatMeta
-    )
-      return [];
-
-    return [
-      {
-        ...item,
-        extraInfo: {
-          ...item.extraInfo,
-          parsedA2UI,
-        },
-      },
-    ];
-  });
-});
-
-const isA2UIActionPending = (commands: XCardCommand[]) =>
-  Boolean(props.a2uiPendingSurfaceId) &&
-  commands.some((command) => getA2UISurfaceId(command) === props.a2uiPendingSurfaceId);
+    return hasContent || hasSegments || hasMeta;
+  }),
+);
 
 const lastAssistantMessageKey = computed(
   () => [...displayItems.value].reverse().find((item) => item.role === "assistant")?.key,
@@ -331,9 +174,6 @@ const lastAssistantMessageKey = computed(
 const autoScroll = computed(() =>
   displayItems.value.some((item) => isStreamingStatus(item.status)),
 );
-
-const submissionsForMessage = (messageId: string | number) =>
-  props.a2uiSubmissions.filter((submission) => submission.ownerMessageId === String(messageId));
 
 const getThinkKey = (messageId: string | number) =>
   `${props.conversationKey || "__draft__"}::${String(messageId)}`;
@@ -354,11 +194,10 @@ const isSummaryExpanded = (messageId: string | number, streaming: boolean): bool
 const isItemExpandedIds = (item: BubbleItemType): string[] => {
   const key = getThinkKey(item.key);
   const saved = itemExpandedMap.value[key] ?? [];
-  const reasoning = item.extraInfo?.reasoningContent;
+  const hasReasoning = messageSegments(item).some((segment) => segment.kind === "reasoning");
   const reasoningLive =
     isStreamingStatus(item.status) &&
-    typeof reasoning === "string" &&
-    reasoning.trim().length > 0 &&
+    hasReasoning &&
     item.extraInfo?.reasoningDone !== true &&
     !reasoningCollapsedMap.value[key];
   if (!reasoningLive) return saved;
@@ -385,10 +224,8 @@ const setItemExpandedIds = (messageId: string | number, ids: string[]) => {
 
 /** 气泡下方操作栏：复制 + 重新生成（x Actions 原生样式）。 */
 const buildMessageActions = (item: BubbleItemType): ItemType[] => {
-  const parsedThink = item.extraInfo?.parsedThink as ParsedThinkContent | null | undefined;
-  const content = parsedThink
-    ? parsedThink.answerContent
-    : typeof item.content === "string"
+  const content =
+    typeof item.content === "string"
       ? item.content.replace(/<\/?think(?:\s+[^>]*)?\s*>/gi, "")
       : "";
   return [
@@ -445,15 +282,15 @@ watch(
       }
 
       // 思考计时。
-      const reasoning = item.extraInfo?.reasoningContent;
-      if (typeof reasoning === "string" && reasoning.trim()) {
+      const hasReasoning = messageSegments(item).some((segment) => segment.kind === "reasoning");
+      if (hasReasoning) {
         if (!reasoningStartMap.value[key]) reasoningStartMap.value[key] = now;
         if (item.extraInfo?.reasoningDone === true && !reasoningDurationMap.value[key]) {
           reasoningDurationMap.value[key] = Math.max(1, now - reasoningStartMap.value[key]);
         }
       }
 
-      // 活动摘要：流式中默认展开（实时看进度），回合结束默认折叠为“已执行：…”。
+      // 活动摘要：流式中默认展开（实时看进度），回合结束默认折叠为"已执行：…"。
       if (prevStreaming && !streaming && nextSummary[key] === undefined) {
         nextSummary[key] = false;
       }
@@ -519,14 +356,7 @@ onBeforeUnmount(() => {
           :turn-duration-ms="turnDurationMap[getThinkKey(item.key)]"
           :reasoning-duration-ms="reasoningDurationMap[getThinkKey(item.key)]"
           :started-at-ms="props.workingStartedAtMs ?? messageStartMap[getThinkKey(item.key)]"
-          :a2ui-action-pending="
-            item.extraInfo?.parsedA2UI
-              ? isA2UIActionPending(item.extraInfo.parsedA2UI.commands)
-              : false
-          "
-          :submissions="submissionsForMessage(item.key)"
           :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
-          @a2ui-action="emit('a2uiAction', $event)"
           @update:summary-expanded="setSummaryExpanded(item.key, $event)"
           @update:item-expanded-ids="setItemExpandedIds(item.key, $event)"
         />
@@ -591,7 +421,7 @@ onBeforeUnmount(() => {
 .user-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   margin-top: 6px;
 }
 .user-attachment-link {

@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
+    "@cc-heart/open-chat-types": "workspace:*",
     "cors": "catalog:",
     "express": "catalog:"
   },

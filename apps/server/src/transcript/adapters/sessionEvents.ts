@@ -1,26 +1,27 @@
 // transcript/adapters/sessionEvents.ts — 会话事件日志 → 规范历史
 //
-// 把会话事件日志（每行一个 JSON 事件，已解析的行数组）还原为 open-chat 规范历史
-// TranscriptMessage[]，供历史加载 / 渲染 / 续聊使用。与 sessionEvents.ts 的合成器
-// 互为逆向。
+// 把会话事件日志（每行一个 JSON 事件，已解析的行数组）还原为 open-chat 扁平规范历史
+// TranscriptMessage[]（segments + id/timestamp），供历史加载 / 渲染 / 续聊使用。
+// 与 sessionEvents.ts 的合成器互为逆向。
 //
 // 还原规则：
 //   - user/message → user 消息（text 块拼接）；
-//   - assistant/message → assistant 消息（text → content、reasoning → reasoningContent、
-//     tool-call 块 → toolCalls，timeline 一并重建）；
+//   - assistant/message → assistant 消息（text → content 段、reasoning → reasoning 段、
+//     tool-call 块 → tool 段）；
 //   - tool/call 事件补充 tool-call 块缺失的 name/arguments（部分源只写块不带参数）；
-//   - tool/result → 找到最近的 assistant 消息，按 toolCallId upsert 对应 activity
+//   - tool/result → 找到最近的 assistant 消息，按 toolCallId upsert 对应 tool 段
 //     的 output / status / error（与 claude.ts / pi.ts 相同的 activity-upsert 纪律）；
 //   - 其余事件（turn/start、step/start、session/title 等）不进入历史。
 
 import { randomUUID } from "node:crypto";
 import {
-  appendTranscriptTimeline,
+  appendContentSegment,
+  appendReasoningSegment,
   normalizeTranscriptHistory,
-  upsertTranscriptActivity,
+  upsertToolSegment,
 } from "../core";
-import type { TranscriptActivity, TranscriptMessage } from "../types";
-import { asRecord, contentText, stringValue } from "../value";
+import type { AssistantMessage, ToolSegment, TranscriptMessage, UserMessage } from "../types";
+import { asRecord, contentText, extractTimestamp, stringValue } from "../value";
 
 /** 把 arguments JSON 字符串解析回 input 对象（非 JSON / 空串返回原字符串）。 */
 export function parseEventArguments(argumentsValue: unknown): unknown {
@@ -34,7 +35,7 @@ export function parseEventArguments(argumentsValue: unknown): unknown {
   }
 }
 
-/** 会话事件日志（已解析的 JSON 行）→ 规范历史。 */
+/** 会话事件日志（已解析的 JSON 行）→ 扁平规范历史。 */
 export function convertSessionEventsHistory(
   lines: Array<Record<string, unknown>>,
 ): TranscriptMessage[] {
@@ -57,15 +58,18 @@ export function convertSessionEventsHistory(
     const type = stringValue(ev?.type);
     const data = asRecord(ev?.data);
     if (!data) continue;
+    const timestamp = extractTimestamp(ev?.time);
 
     if (type === "user/message") {
       const text = contentText(data.content);
       if (!text.trim()) continue;
-      history.push({
+      const user: UserMessage = {
         id: stringValue(data.id) || randomUUID(),
+        timestamp,
         role: "user",
         content: text,
-      });
+      };
+      history.push(user);
       continue;
     }
 
@@ -94,12 +98,11 @@ export function convertSessionEventsHistory(
       .filter((block) => block && stringValue(block.type) === "tool-call")
       .map((block) => normalizeToolCall(block!, callById));
     if (!text && !reasoning && !toolCalls.length) continue;
-    const normalized: TranscriptMessage = {
+    const assistant: AssistantMessage = {
       id: stringValue(message?.id) || randomUUID(),
+      timestamp,
       role: "assistant",
-      content: text,
-      ...(reasoning ? { reasoningContent: reasoning } : {}),
-      ...(toolCalls.length ? { toolCalls } : {}),
+      segments: [],
     };
     for (const blockValue of blocks) {
       const block = asRecord(blockValue);
@@ -107,28 +110,15 @@ export function convertSessionEventsHistory(
       const blockType = stringValue(block.type);
       if (blockType === "reasoning") {
         const blockText = stringValue(block.text) || stringValue(block.thinking);
-        if (blockText) {
-          appendTranscriptTimeline(normalized, {
-            kind: "reasoning",
-            id: `reasoning-${normalized.id}`,
-            content: blockText,
-          });
-        }
+        if (blockText) appendReasoningSegment(assistant, blockText);
       } else if (blockType === "tool-call") {
-        const activity = normalizeToolCall(block, callById);
-        appendTranscriptTimeline(normalized, { kind: "tool", id: activity.id, activity });
+        upsertToolSegment(assistant, normalizeToolCall(block, callById));
       } else if (blockType === "text") {
         const blockText = stringValue(block.text);
-        if (blockText) {
-          appendTranscriptTimeline(normalized, {
-            kind: "content",
-            id: `content-${normalized.id}`,
-            content: blockText,
-          });
-        }
+        if (blockText) appendContentSegment(assistant, blockText);
       }
     }
-    history.push(normalized);
+    history.push(assistant);
   }
 
   return normalizeTranscriptHistory(history);
@@ -137,14 +127,17 @@ export function convertSessionEventsHistory(
 function normalizeToolCall(
   block: Record<string, unknown>,
   callById: Map<string, { name: string; argumentsValue: unknown }>,
-): TranscriptActivity {
+): ToolSegment {
   const id = stringValue(block.id);
   const known = id ? callById.get(id) : undefined;
   return {
+    kind: "tool",
     id: id || randomUUID(),
     name: stringValue(block.name) || known?.name || "工具调用",
     status: "running",
-    input: parseEventArguments(block.arguments ?? known?.argumentsValue),
+    ...(block.arguments !== undefined || known?.argumentsValue !== undefined
+      ? { input: parseEventArguments(block.arguments ?? known?.argumentsValue) }
+      : {}),
   };
 }
 
@@ -160,15 +153,19 @@ function applyToolResults(history: TranscriptMessage[], data: Record<string, unk
     const error = block.isError === true;
     const output = contentText(block.content);
     const assistant = [...history].reverse().find((item) => item.role === "assistant");
-    if (!assistant) continue;
-    const activity: TranscriptActivity = {
+    if (!assistant || assistant.role !== "assistant") continue;
+    const existing = assistant.segments.find(
+      (segment): segment is Extract<ToolSegment, { kind: "tool" }> =>
+        segment.kind === "tool" && segment.id === toolCallId,
+    );
+    const name = existing?.name || "工具调用";
+    upsertToolSegment(assistant, {
+      kind: "tool",
       id: toolCallId,
-      name: assistant.toolCalls?.find((item) => item.id === toolCallId)?.name || "工具调用",
+      name,
       status: error ? "error" : "completed",
-      output,
+      ...(output ? { output } : {}),
       ...(error ? { error: output } : {}),
-    };
-    assistant.toolCalls = upsertTranscriptActivity(assistant.toolCalls, activity);
-    appendTranscriptTimeline(assistant, { kind: "tool", id: toolCallId, activity });
+    });
   }
 }

@@ -6,11 +6,8 @@ import { Globe2, TriangleAlert } from "@lucide/vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
-import type { ToolCallItem } from "../../services/OpenChatProvider";
-import type { TranscriptTimelineItem } from "../../services/transcript";
+import type { TranscriptSegment } from "@cc-heart/open-chat-types";
 import { formatWorkingElapsed } from "../../utils/chatDuration";
-import type { A2UIActionPayload, A2UISubmission } from "../../utils/a2ui";
-import A2UIRenderer from "./A2UIRenderer.vue";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 import ActivityList from "./ActivityList.vue";
 
@@ -23,25 +20,20 @@ interface Props {
   summaryExpanded: boolean;
   /** 已展开的条目 id（思考 / 工具 / 计划 / 文件）。 */
   itemExpandedIds: string[];
-  /** 整个回合的耗时（用于分割线“用时 Xs”）。 */
+  /** 整个回合的耗时（用于分割线"用时 Xs"）。 */
   turnDurationMs?: number;
-  /** 思考阶段的耗时（用于“思考用时 Xs”）。 */
+  /** 思考阶段的耗时（用于"思考用时 Xs"）。 */
   reasoningDurationMs?: number;
-  /** 回合开始时间戳（用于底部“工作中 · Xs”跳动）。 */
+  /** 回合开始时间戳（用于底部"工作中 · Xs"跳动）。 */
   startedAtMs?: number;
-  a2uiActionPending: boolean;
-  submissions: A2UISubmission[];
   searchResults: WebSearchSourceItem[];
 }
 
-interface Emits {
-  (e: "a2uiAction", payload: A2UIActionPayload): void;
+const props = defineProps<Props>();
+const emit = defineEmits<{
   (e: "update:summaryExpanded", expanded: boolean): void;
   (e: "update:itemExpandedIds", ids: string[]): void;
-}
-
-const props = defineProps<Props>();
-const emit = defineEmits<Emits>();
+}>();
 
 const markdownComponents: Record<string, Component> = {
   code: MarkdownCodeRenderer,
@@ -53,61 +45,19 @@ const markdownStreaming = computed(() => ({
   tail: false,
 }));
 
-const parsedThink = computed(() => props.item.extraInfo?.parsedThink);
-const answerContent = computed(() => parsedThink.value?.answerContent || props.content);
-const reasoningContent = computed(
-  () =>
-    (typeof props.item.extraInfo?.reasoningContent === "string"
-      ? props.item.extraInfo.reasoningContent
-      : "") ||
-    parsedThink.value?.thinkContent ||
-    "",
+const segments = computed<TranscriptSegment[]>(() => {
+  const value = props.item.extraInfo?.segments;
+  return Array.isArray(value) ? (value as TranscriptSegment[]) : [];
+});
+const reasoningDone = computed(() => props.item.extraInfo?.reasoningDone === true);
+/** 活动列表只承载思考/工具/计划/文件等"活动"，正文由下方 XMarkdown 单独渲染。 */
+const activitySegments = computed(() =>
+  segments.value.filter((segment) => segment.kind !== "content"),
 );
-const reasoningDone = computed(() => {
-  if (typeof props.item.extraInfo?.reasoningDone === "boolean") {
-    return props.item.extraInfo.reasoningDone;
-  }
-  return parsedThink.value ? parsedThink.value.thinkDone : !props.streaming;
-});
 
-const toolCalls = computed<ToolCallItem[]>(() => {
-  const value = props.item.extraInfo?.toolCalls;
-  return Array.isArray(value) ? (value as ToolCallItem[]) : [];
-});
-const timeline = computed<TranscriptTimelineItem[]>(() => {
-  const value = props.item.extraInfo?.timeline;
-  return Array.isArray(value) ? (value as TranscriptTimelineItem[]) : [];
-});
-/** 活动列表只承载思考/工具/计划/文件等“活动”，正文由下方 XMarkdown 单独渲染。 */
-const activityTimeline = computed(() => timeline.value.filter((entry) => entry.kind !== "content"));
+const hasActivities = computed(() => activitySegments.value.length > 0);
 
-const planInfo = computed(() => props.item.extraInfo?.agentPlan ?? null);
-const workspaceInfo = computed(() => props.item.extraInfo?.parsedWorkspace ?? null);
-const reasoningInfo = computed(() => {
-  const content = reasoningContent.value;
-  if (!content.trim()) return null;
-  return {
-    content,
-    done: reasoningDone.value,
-    durationMs: props.reasoningDurationMs,
-  };
-});
-
-const hasActivities = computed(() => {
-  if (activityTimeline.value.length) return true;
-  if (reasoningContent.value.trim()) return true;
-  if (toolCalls.value.length) return true;
-  if (Array.isArray(planInfo.value?.entries) && planInfo.value.entries.length) return true;
-  const workspace = workspaceInfo.value as
-    | { hasWorkspaceBlock?: boolean; files?: unknown[]; errors?: unknown[] }
-    | null
-    | undefined;
-  return Boolean(
-    workspace?.hasWorkspaceBlock || workspace?.files?.length || workspace?.errors?.length,
-  );
-});
-
-/** 底部“工作中 · Xs”跳动计时。 */
+/** 底部"工作中 · Xs"跳动计时。 */
 const nowMs = ref(Date.now());
 let tickTimer: ReturnType<typeof setInterval> | undefined;
 watch(
@@ -165,25 +115,23 @@ const onFaviconError = (url: string) => {
       </span>
     </div>
 
-    <!-- 活动摘要行 + 可展开列表：默认折叠为“已执行：N 次命令，M 次思考”，点击展开 -->
+    <!-- 活动摘要行 + 可展开列表：默认折叠为"已执行：N 次命令，M 次思考"，点击展开 -->
     <ActivityList
       v-if="hasActivities"
-      :reasoning="reasoningInfo"
-      :tools="toolCalls"
-      :plan="planInfo"
-      :workspace="workspaceInfo"
-      :timeline="activityTimeline"
+      :segments="activitySegments"
       :streaming="streaming"
+      :reasoning-done="reasoningDone"
       :summary-expanded="summaryExpanded"
       :item-expanded-ids="itemExpandedIds"
+      :reasoning-duration-ms="reasoningDurationMs"
       @update:summary-expanded="emit('update:summaryExpanded', $event)"
       @update:item-expanded-ids="emit('update:itemExpandedIds', $event)"
     />
 
     <!-- 正文始终单独渲染 -->
     <XMarkdown
-      v-if="answerContent.trim()"
-      :content="answerContent"
+      v-if="content.trim()"
+      :content="content"
       :components="markdownComponents"
       :streaming="markdownStreaming"
       :class-name="markdownClassName"
@@ -195,22 +143,6 @@ const onFaviconError = (url: string) => {
       <TriangleAlert class="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span>请求失败：{{ chatError }}</span>
     </div>
-
-    <A2UIRenderer
-      v-if="
-        item.extraInfo?.parsedA2UI &&
-        (item.extraInfo.parsedA2UI.commands.length ||
-          item.extraInfo.parsedA2UI.errors.length ||
-          item.extraInfo.parsedA2UI.hasPendingBlock)
-      "
-      :commands="item.extraInfo.parsedA2UI.commands"
-      :errors="item.extraInfo.parsedA2UI.errors"
-      :pending="item.extraInfo.parsedA2UI.hasPendingBlock"
-      :action-pending="a2uiActionPending"
-      :owner-message-id="String(item.key)"
-      :submissions="submissions"
-      @action="emit('a2uiAction', $event)"
-    />
 
     <Sources
       v-if="searchResults.length"
@@ -236,7 +168,7 @@ const onFaviconError = (url: string) => {
       </template>
     </Sources>
 
-    <!-- 进行中指示：底部“工作中 · Xs”，随内容流式跳动 -->
+    <!-- 进行中指示：底部"工作中 · Xs"，随内容流式跳动 -->
     <div
       v-if="streaming"
       class="inline-flex min-h-[22px] items-center gap-2 text-[11.5px] leading-4 font-medium text-brand-muted-strong animate-[working-status-in_220ms_ease-out_both]"
@@ -248,10 +180,10 @@ const onFaviconError = (url: string) => {
           class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite]"
         />
         <i
-          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.09s]"
+          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.12s]"
         />
         <i
-          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.18s]"
+          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.24s]"
         />
       </span>
       <span>工作中{{ workingElapsed ? ` · ${workingElapsed}` : "" }}</span>

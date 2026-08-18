@@ -6,8 +6,10 @@ import type {
   XRequestConfigOptions,
 } from "@antdv-next/x-sdk";
 import { DeepSeekChatProvider } from "@antdv-next/x-sdk";
+import { activityToSegments, applySegmentDelta } from "@cc-heart/open-chat-types";
+import type { TranscriptSegment } from "@cc-heart/open-chat-types";
 import type { WebSearchSourceItem } from "./ai";
-import type { TranscriptActivity, TranscriptPlan, TranscriptTimelineItem } from "./transcript";
+import type { TranscriptActivity, TranscriptPlan } from "./transcript";
 
 /** Transient placeholder shown in the assistant bubble while the gateway runs
  * a web search round. Replaced by real text/reasoning as soon as it arrives. */
@@ -307,28 +309,37 @@ export class OpenChatProvider extends DeepSeekChatProvider<
 
     const accumulatedContent = `${originContent}${deltaContent}`;
     const accumulatedReasoning = `${originReasoning}${deltaReasoning}`;
-    // 兼容模型直接在 content 里输出 <think> 标签（DeepSeek 原生风格）。
+    // 兼容模型直接在 content 里输出  thinking 标签（DeepSeek 原生风格）。
     const split = splitReasoningContent(accumulatedContent);
+    const originSegments = Array.isArray(
+      (origin as (XModelMessage & { segments?: TranscriptSegment[] }) | undefined)?.segments,
+    )
+      ? (origin as XModelMessage & { segments: TranscriptSegment[] }).segments
+      : [];
+    const nextSegments: TranscriptSegment[] = split.hasThink
+      ? split.reasoningContent
+        ? [
+            ...originSegments.filter((segment) => segment.kind !== "reasoning"),
+            { kind: "reasoning", content: split.reasoningContent },
+          ]
+        : originSegments
+      : (() => {
+          let segments = originSegments;
+          if (deltaReasoning) {
+            segments = applySegmentDelta(segments, { kind: "reasoning", content: deltaReasoning });
+          }
+          if (deltaContent) {
+            segments = applySegmentDelta(segments, { kind: "content", content: deltaContent });
+          }
+          return segments;
+        })();
     const next: XModelMessage = {
       role: origin?.role || "assistant",
       content: split.hasThink ? split.answerContent : accumulatedContent,
       ...(split.reasoningContent || accumulatedReasoning
         ? { reasoningContent: split.reasoningContent || accumulatedReasoning }
         : {}),
-      ...((deltaReasoning || deltaContent) && !/<\/?think\b/i.test(accumulatedContent)
-        ? {
-            timeline: mergeTimeline(
-              (origin as (XModelMessage & { timeline?: TranscriptTimelineItem[] }) | undefined)
-                ?.timeline,
-              ...(deltaReasoning
-                ? [{ kind: "reasoning", id: "reasoning", content: deltaReasoning } as const]
-                : []),
-              ...(deltaContent
-                ? [{ kind: "content", id: "content", content: deltaContent } as const]
-                : []),
-            ),
-          }
-        : {}),
+      ...(nextSegments.length ? { segments: nextSegments } : {}),
     };
     // 思考结束判定：<think> 闭合，或思考结束后开始输出正文。
     if (split.hasThink) {
@@ -341,6 +352,11 @@ export class OpenChatProvider extends DeepSeekChatProvider<
 
   private applyNativeEvent(origin: XModelMessage, event: NativeCliEvent): XModelMessage {
     const base = origin ?? { role: "assistant", content: "" };
+    const segments = Array.isArray(
+      (base as XModelMessage & { segments?: TranscriptSegment[] }).segments,
+    )
+      ? (base as XModelMessage & { segments: TranscriptSegment[] }).segments
+      : [];
     switch (event.type) {
       case "content.delta": {
         const content = `${getMessageText(base.content)}${event.content}`;
@@ -348,10 +364,7 @@ export class OpenChatProvider extends DeepSeekChatProvider<
           ...base,
           role: "assistant",
           content,
-          timeline: mergeTimeline(
-            (base as XModelMessage & { timeline?: TranscriptTimelineItem[] }).timeline,
-            { kind: "content", id: "content", content: event.content },
-          ),
+          segments: applySegmentDelta(segments, { kind: "content", content: event.content }),
           ...(base.reasoningContent ? { reasoningDone: true } : {}),
         });
       }
@@ -362,10 +375,7 @@ export class OpenChatProvider extends DeepSeekChatProvider<
           role: "assistant",
           reasoningContent,
           reasoningDone: false,
-          timeline: mergeTimeline(
-            (base as XModelMessage & { timeline?: TranscriptTimelineItem[] }).timeline,
-            { kind: "reasoning", id: "reasoning", content: event.content },
-          ),
+          segments: applySegmentDelta(segments, { kind: "reasoning", content: event.content }),
         });
       }
       case "activity.upsert":
@@ -373,22 +383,17 @@ export class OpenChatProvider extends DeepSeekChatProvider<
         return preserveMessageMeta(base, {
           ...base,
           role: "assistant",
-          toolCalls: mergeToolCalls(base.toolCalls, event.activity),
-          timeline: mergeTimeline(
-            (base as XModelMessage & { timeline?: TranscriptTimelineItem[] }).timeline,
-            { kind: "tool", id: event.activity.id, activity: event.activity },
-          ),
+          segments: applyActivitySegments(segments, event.activity),
           ...(base.reasoningContent ? { reasoningDone: true } : {}),
         });
       case "plan.updated":
         return preserveMessageMeta(base, {
           ...base,
           role: "assistant",
-          agentPlan: event.plan,
-          timeline: mergeTimeline(
-            (base as XModelMessage & { timeline?: TranscriptTimelineItem[] }).timeline,
-            { kind: "plan", id: "plan", plan: event.plan },
-          ),
+          segments: applySegmentDelta(segments, {
+            kind: "plan",
+            entries: event.plan.entries ?? [],
+          }),
           ...(base.reasoningContent ? { reasoningDone: true } : {}),
         });
       case "turn.completed":
@@ -434,32 +439,18 @@ export class OpenChatProvider extends DeepSeekChatProvider<
   }
 }
 
-/** 按工具 id 合并有序 native activity 事件（后到的完整状态覆盖旧状态）。 */
-function mergeToolCalls(existing: unknown, incoming: ToolCallItem): ToolCallItem[] {
-  const list = Array.isArray(existing) ? (existing as ToolCallItem[]) : [];
-  const index = list.findIndex((tool) => tool.id && tool.id === incoming.id);
-  if (index === -1) return [...list, incoming];
-  const next = list.slice();
-  next[index] = { ...next[index], ...incoming };
-  return next;
-}
-
 /** 把消息上累积的工具调用 / 错误 / 提示 / 权限字段回接到转换后的消息上（super 只返回 content/role）。 */
 function preserveMessageMeta(
   origin: XModelMessage | undefined,
   next: XModelMessage,
 ): XModelMessage {
   const meta: {
-    toolCalls?: ToolCallItem[];
     chatError?: string;
     chatNotices?: string[];
     pendingPermissions?: PermissionRequest[];
     reasoningContent?: string;
     reasoningDone?: boolean;
   } = {};
-  if (next.toolCalls === undefined && Array.isArray(origin?.toolCalls)) {
-    meta.toolCalls = origin.toolCalls;
-  }
   if (next.chatError === undefined && typeof origin?.chatError === "string") {
     meta.chatError = origin.chatError;
   }
@@ -468,16 +459,6 @@ function preserveMessageMeta(
   }
   if (next.pendingPermissions === undefined && Array.isArray(origin?.pendingPermissions))
     meta.pendingPermissions = origin.pendingPermissions;
-  if (next.agentPlan === undefined && origin?.agentPlan && typeof origin.agentPlan === "object") {
-    (meta as Record<string, unknown>).agentPlan = origin.agentPlan;
-  }
-  if (
-    next.timeline === undefined &&
-    Array.isArray((origin as Record<string, unknown> | undefined)?.timeline)
-  ) {
-    (meta as Record<string, unknown>).timeline = (origin as Record<string, unknown>)
-      .timeline as TranscriptTimelineItem[];
-  }
   if (
     typeof next.reasoningContent !== "string" &&
     typeof (origin as Record<string, unknown> | undefined)?.reasoningContent === "string"
@@ -546,43 +527,19 @@ function stripLocalMessageFields(message: XModelMessage): XModelMessage {
   delete next.chatNotices;
   delete next.pendingPermissions;
   delete next.openChatLocalOnly;
-  delete (next as Record<string, unknown>).timeline;
+  delete (next as Record<string, unknown>).segments;
   return next;
 }
 
-function mergeTimeline(
-  existing: unknown,
-  ...incoming: TranscriptTimelineItem[]
-): TranscriptTimelineItem[] {
-  const result = Array.isArray(existing) ? ([...existing] as TranscriptTimelineItem[]) : [];
-  for (const item of incoming) {
-    if (item.kind === "tool") {
-      const index = result.findIndex((entry) => entry.kind === "tool" && entry.id === item.id);
-      if (index === -1) result.push(item);
-      else {
-        const previous = result[index];
-        if (previous?.kind === "tool") {
-          result[index] = {
-            ...previous,
-            activity: { ...previous.activity, ...item.activity },
-          };
-        }
-      }
-    } else if (item.kind === "plan") {
-      const index = result.findIndex((entry) => entry.kind === "plan" && entry.id === item.id);
-      if (index === -1) result.push(item);
-      else result[index] = item;
-    } else {
-      const previous = result.at(-1);
-      if (previous?.kind === item.kind) {
-        result[result.length - 1] = { ...previous, content: `${previous.content}${item.content}` };
-      } else {
-        const duplicateCount = result.filter((entry) => entry.id === item.id).length;
-        result.push(duplicateCount ? { ...item, id: `${item.id}-${duplicateCount}` } : item);
-      }
-    }
-  }
-  return result;
+/** 把 native activity 事件映射为 segments（P1：tool 不带 fileChanges，文件修改用 fileChange 段）。 */
+function applyActivitySegments(
+  segments: TranscriptSegment[],
+  activity: TranscriptActivity,
+): TranscriptSegment[] {
+  return activityToSegments(activity).reduce<TranscriptSegment[]>(
+    (acc, segment) => applySegmentDelta(acc, segment),
+    segments,
+  );
 }
 
 /** 流结束时把未闭合的 `<think>` 标记为完成并补上闭合标签。 */

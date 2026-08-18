@@ -17,14 +17,16 @@ function options(overrides: Partial<Parameters<typeof synthesizeSessionEvents>[1
 
 function sampleHistory(): TranscriptMessage[] {
   return [
-    { id: "u1", role: "user", content: "Inspect the repo" },
+    { id: "u1", timestamp: createdAt, role: "user", content: "Inspect the repo" },
     {
       id: "a1",
+      timestamp: createdAt + 1,
       role: "assistant",
-      content: "Let me look.",
-      reasoningContent: "First, find the layout.",
-      toolCalls: [
+      segments: [
+        { kind: "reasoning", content: "First, find the layout." },
+        { kind: "content", content: "Let me look." },
         {
+          kind: "tool",
           id: "tool-1",
           name: "read",
           status: "completed",
@@ -33,13 +35,15 @@ function sampleHistory(): TranscriptMessage[] {
         },
       ],
     },
-    { id: "u2", role: "user", content: "Now fix the test" },
+    { id: "u2", timestamp: createdAt + 2, role: "user", content: "Now fix the test" },
     {
       id: "a2",
+      timestamp: createdAt + 3,
       role: "assistant",
-      content: "Done.",
-      toolCalls: [
+      segments: [
+        { kind: "content", content: "Done." },
         {
+          kind: "tool",
           id: "tool-2",
           name: "bash",
           status: "error",
@@ -49,6 +53,10 @@ function sampleHistory(): TranscriptMessage[] {
       ],
     },
   ];
+}
+
+function assistantSegments(message: TranscriptMessage) {
+  return message.role === "assistant" ? message.segments : [];
 }
 
 describe("synthesizeSessionEvents", () => {
@@ -114,12 +122,20 @@ describe("synthesizeSessionEvents", () => {
 
   it("backs pending/running tool calls with an empty result to keep the pairing invariant", () => {
     const history: TranscriptMessage[] = [
-      { id: "u1", role: "user", content: "Run it" },
+      { id: "u1", timestamp: createdAt, role: "user", content: "Run it" },
       {
         id: "a1",
+        timestamp: createdAt + 1,
         role: "assistant",
-        content: "",
-        toolCalls: [{ id: "tool-p", name: "bash", status: "running", input: { command: "make" } }],
+        segments: [
+          {
+            kind: "tool",
+            id: "tool-p",
+            name: "bash",
+            status: "running",
+            input: { command: "make" },
+          },
+        ],
       },
     ];
     const result = synthesizeSessionEvents(history, options());
@@ -137,15 +153,19 @@ describe("synthesizeSessionEvents", () => {
     const history: TranscriptMessage[] = [
       {
         id: "u1",
+        timestamp: createdAt,
         role: "user",
         content: "Plan this",
         attachments: [{ reference: "data:image/png;base64,aa", name: "shot.png", isImage: true }],
       },
       {
         id: "a1",
+        timestamp: createdAt + 1,
         role: "assistant",
-        content: "Plan:",
-        agentPlan: { entries: [{ content: "step 1", status: "pending" }] },
+        segments: [
+          { kind: "content", content: "Plan:" },
+          { kind: "plan", entries: [{ content: "step 1", status: "pending" }] },
+        ],
       },
     ];
     const result = synthesizeSessionEvents(history, options());
@@ -198,20 +218,26 @@ describe("convertSessionEventsHistory", () => {
     const restored = convertSessionEventsHistory(lines);
 
     expect(restored).toHaveLength(4);
-    expect(restored[0]).toMatchObject({ role: "user", content: "Inspect the repo" });
-    expect(restored[1]).toMatchObject({
-      role: "assistant",
-      content: "Let me look.",
-      reasoningContent: "First, find the layout.",
+    expect(restored[0]).toMatchObject({
+      role: "user",
+      content: "Inspect the repo",
+      timestamp: expect.any(Number),
     });
-    expect(restored[1].toolCalls?.[0]).toMatchObject({
+    const a1 = restored[1];
+    expect(a1).toMatchObject({ role: "assistant", timestamp: expect.any(Number) });
+    expect(assistantSegments(a1).map((s) => s.kind)).toEqual(["reasoning", "content", "tool"]);
+    const tool1 = assistantSegments(a1).find((s) => s.kind === "tool");
+    expect(tool1).toMatchObject({
+      kind: "tool",
       id: "tool-1",
       name: "read",
       status: "completed",
       output: "export const x = 1;",
     });
-    expect(restored[1].toolCalls?.[0].input).toEqual({ path: "src/index.ts" });
-    expect(restored[3].toolCalls?.[0]).toMatchObject({
+    if (tool1 && tool1.kind === "tool") expect(tool1.input).toEqual({ path: "src/index.ts" });
+    const tool2 = assistantSegments(restored[3]).find((s) => s.kind === "tool");
+    expect(tool2).toMatchObject({
+      kind: "tool",
       id: "tool-2",
       name: "bash",
       status: "error",
@@ -219,16 +245,17 @@ describe("convertSessionEventsHistory", () => {
     });
   });
 
-  it("merges adjacent assistant fragments and rebuilds the timeline", () => {
+  it("merges adjacent assistant fragments and preserves segment order", () => {
     const result = synthesizeSessionEvents(sampleHistory(), options());
     const lines = result.events.map(
       (ev) => JSON.parse(JSON.stringify(ev)) as Record<string, unknown>,
     );
     const restored = convertSessionEventsHistory(lines);
     const assistant = restored[1];
-    expect(assistant.timeline?.map((item) => item.kind)).toEqual(["reasoning", "content", "tool"]);
-    const tool = assistant.timeline?.find((item) => item.kind === "tool");
-    expect(tool && "activity" in tool ? tool.activity.status : undefined).toBe("completed");
+    const segments = assistantSegments(assistant);
+    expect(segments.map((s) => s.kind)).toEqual(["reasoning", "content", "tool"]);
+    const tool = segments.find((s) => s.kind === "tool");
+    if (tool && tool.kind === "tool") expect(tool.status).toBe("completed");
   });
 
   it("fills tool name/arguments from tool/call events when the block lacks them", () => {
@@ -289,13 +316,16 @@ describe("convertSessionEventsHistory", () => {
       },
     ];
     const restored = convertSessionEventsHistory(lines);
-    expect(restored[1].toolCalls?.[0]).toMatchObject({
+    const assistant = restored[1];
+    const tool = assistantSegments(assistant).find((s) => s.kind === "tool");
+    expect(tool).toMatchObject({
+      kind: "tool",
       id: "t1",
       name: "bash",
       status: "completed",
       output: "ok",
     });
-    expect(restored[1].toolCalls?.[0].input).toEqual({ command: "make" });
+    if (tool && tool.kind === "tool") expect(tool.input).toEqual({ command: "make" });
   });
 });
 

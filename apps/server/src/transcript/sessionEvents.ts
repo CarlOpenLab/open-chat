@@ -14,6 +14,11 @@
 //
 // 本模块为纯函数，零宿主依赖（可独立单测）；反向读取见 adapters/sessionEvents.ts。
 
+import {
+  findPlanSegment,
+  mergeContentSegments,
+  mergeReasoningContent,
+} from "@cc-heart/open-chat-types";
 import type { TranscriptActivity, TranscriptMessage } from "./types";
 
 /** 会话事件类型白名单。 */
@@ -159,13 +164,12 @@ function toolArguments(input: unknown): string {
 /** assistant 消息 → 内容块（text / reasoning / tool-call）。 */
 function assistantBlocks(message: TranscriptMessage): unknown[] {
   const blocks: unknown[] = [];
-  if (message.reasoningContent?.trim()) {
-    blocks.push({ type: "reasoning", text: message.reasoningContent });
-  }
-  if (message.content.trim()) {
-    blocks.push({ type: "text", text: message.content });
-  }
-  for (const call of message.toolCalls ?? []) {
+  if (message.role !== "assistant") return blocks;
+  const reasoning = mergeReasoningContent(message.segments);
+  const content = mergeContentSegments(message.segments);
+  if (reasoning.trim()) blocks.push({ type: "reasoning", text: reasoning });
+  if (content.trim()) blocks.push({ type: "text", text: content });
+  for (const call of stepActivities(message)) {
     blocks.push({
       type: "tool-call",
       id: call.id,
@@ -174,6 +178,42 @@ function assistantBlocks(message: TranscriptMessage): unknown[] {
     });
   }
   return blocks;
+}
+
+/** assistant 消息里的可执行活动：tool 段 + fileChange 段（会话事件需要 tool/call→tool/result 配对）。 */
+function stepActivities(message: TranscriptMessage): TranscriptActivity[] {
+  if (message.role !== "assistant") return [];
+  const activities: TranscriptActivity[] = [];
+  for (const segment of message.segments) {
+    if (segment.kind === "tool") {
+      activities.push({
+        id: segment.id,
+        name: segment.name,
+        status: segment.status,
+        ...(segment.providerKind !== undefined ? { kind: segment.providerKind } : {}),
+        ...(segment.input !== undefined ? { input: segment.input } : {}),
+        ...(segment.output !== undefined ? { output: segment.output } : {}),
+        ...(segment.error !== undefined ? { error: segment.error } : {}),
+        ...(segment.durationMs !== undefined ? { durationMs: segment.durationMs } : {}),
+        ...(segment.displayTarget !== undefined ? { displayTarget: segment.displayTarget } : {}),
+      });
+    } else if (segment.kind === "fileChange") {
+      activities.push({
+        id: `file-${segment.path}`,
+        name: "file_change",
+        kind: "fileChange",
+        status: segment.status ?? "completed",
+        fileChanges: [
+          {
+            path: segment.path,
+            ...(segment.additions !== undefined ? { additions: segment.additions } : {}),
+            ...(segment.deletions !== undefined ? { deletions: segment.deletions } : {}),
+          },
+        ],
+      });
+    }
+  }
+  return activities;
 }
 
 /** activity → tool/result 事件里的 message（配对不变量：无结果补空 content）。 */
@@ -242,7 +282,7 @@ export function synthesizeSessionEvents(
   const coveredCallIds = new Set<string>();
   for (const t of turns) {
     for (const step of t.steps) {
-      for (const call of step.toolCalls ?? []) {
+      for (const call of stepActivities(step)) {
         if (call.status === "completed" || call.status === "error") coveredCallIds.add(call.id);
       }
     }
@@ -296,7 +336,7 @@ export function synthesizeSessionEvents(
         },
         true,
       );
-      for (const call of message.toolCalls ?? []) {
+      for (const call of stepActivities(message)) {
         const ev = push("tool/call", {
           turn,
           step: stepNum,
@@ -306,7 +346,7 @@ export function synthesizeSessionEvents(
         });
         callSeqByCallId.set(call.id, ev.seq);
       }
-      for (const call of message.toolCalls ?? []) {
+      for (const call of stepActivities(message)) {
         const callSeq = callSeqByCallId.get(call.id);
         const degraded = !coveredCallIds.has(call.id);
         if (degraded) bump("pendingToolResult");
@@ -329,7 +369,7 @@ export function synthesizeSessionEvents(
   for (const t of turns) {
     if (t.userAttachments > 0) bump("attachmentSkipped");
     for (const step of t.steps) {
-      if (step.agentPlan) bump("planSkipped");
+      if (step.role === "assistant" && findPlanSegment(step.segments)) bump("planSkipped");
       if ((step.attachments?.length ?? 0) > 0) bump("attachmentSkipped");
     }
   }

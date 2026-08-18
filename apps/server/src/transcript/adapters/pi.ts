@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
-  appendTranscriptTimeline,
+  appendContentSegment,
+  appendReasoningSegment,
   normalizeTranscriptHistory,
-  upsertTranscriptActivity,
+  upsertToolSegment,
 } from "../core";
-import type { TranscriptActivity, TranscriptMessage } from "../types";
-import { asRecord, contentText, messageContentText, stringValue } from "../value";
+import type { AssistantMessage, ToolSegment, TranscriptMessage } from "../types";
+import { asRecord, contentText, extractTimestamp, messageContentText, stringValue } from "../value";
 
+/** 把 pi jsonl 历史转换为扁平消息模型（segments + id/timestamp）。 */
 export function convertPiHistory(lines: Array<Record<string, unknown>>): TranscriptMessage[] {
   const history: TranscriptMessage[] = [];
 
@@ -16,6 +18,7 @@ export function convertPiHistory(lines: Array<Record<string, unknown>>): Transcr
     const role = stringValue(message?.role);
     const content = message?.content;
     const blocks = Array.isArray(content) ? content : [];
+    const timestamp = extractTimestamp(line.timestamp);
 
     if (role === "toolResult" || role === "tool") {
       applyPiToolResult(history, message ?? {});
@@ -35,79 +38,89 @@ export function convertPiHistory(lines: Array<Record<string, unknown>>): Transcr
       .filter((block) => ["toolCall", "tool_use", "tool"].includes(stringValue(block?.type)))
       .map((block) => normalizePiToolCall(block!));
     if (!text && !reasoning && !toolCalls.length) continue;
-    const normalized: TranscriptMessage = {
+
+    if (role === "user") {
+      history.push({
+        id: stringValue(line.id) || randomUUID(),
+        timestamp,
+        role: "user",
+        content: text,
+      });
+      continue;
+    }
+
+    const assistant: AssistantMessage = {
       id: stringValue(line.id) || randomUUID(),
-      role,
-      content: text,
-      ...(reasoning ? { reasoningContent: reasoning } : {}),
-      ...(toolCalls.length ? { toolCalls } : {}),
+      timestamp,
+      role: "assistant",
+      segments: [],
     };
     for (const blockValue of blocks) {
       const block = asRecord(blockValue);
       if (!block) continue;
       const type = stringValue(block.type);
       if (type === "thinking") {
-        const text = stringValue(block.thinking);
-        if (text)
-          appendTranscriptTimeline(normalized, {
-            kind: "reasoning",
-            id: `reasoning-${normalized.id}`,
-            content: text,
-          });
+        const blockText = stringValue(block.thinking);
+        if (blockText) appendReasoningSegment(assistant, blockText);
       } else if (["toolCall", "tool_use", "tool"].includes(type)) {
-        const activity = normalizePiToolCall(block);
-        appendTranscriptTimeline(normalized, { kind: "tool", id: activity.id, activity });
+        upsertToolSegment(assistant, normalizePiToolCall(block));
       } else if (type === "text") {
-        const text = stringValue(block.text);
-        if (text)
-          appendTranscriptTimeline(normalized, {
-            kind: "content",
-            id: `content-${normalized.id}`,
-            content: text,
-          });
+        const blockText = stringValue(block.text);
+        if (blockText) appendContentSegment(assistant, blockText);
       }
     }
-    history.push(normalized);
+    history.push(assistant);
   }
 
   return normalizeTranscriptHistory(history);
 }
 
-export function normalizePiToolCall(block: Record<string, unknown>): TranscriptActivity {
+export function normalizePiToolCall(block: Record<string, unknown>): ToolSegment {
   return {
+    kind: "tool",
     id: stringValue(block.id) || randomUUID(),
     name: stringValue(block.name) || "工具调用",
     status: "running",
-    input: block.arguments ?? block.input,
+    ...(block.arguments !== undefined
+      ? { input: block.arguments }
+      : block.input !== undefined
+        ? { input: block.input }
+        : {}),
   };
 }
 
+/** toolResult 消息 → 给最近的 assistant 消息 upsert tool 段（completed/error）。 */
 function applyPiToolResult(history: TranscriptMessage[], message: Record<string, unknown>): void {
   const activity = normalizePiToolResult(message);
   if (!activity) return;
   const assistant = [...history].reverse().find((item) => item.role === "assistant");
-  if (!assistant) return;
-  const nextActivity: TranscriptActivity = {
-    ...activity,
-    name:
-      stringValue(message.toolName) ||
-      assistant.toolCalls?.find((item) => item.id === activity.id)?.name ||
-      "工具调用",
-  };
-  assistant.toolCalls = upsertTranscriptActivity(assistant.toolCalls, nextActivity);
-  appendTranscriptTimeline(assistant, { kind: "tool", id: activity.id, activity: nextActivity });
+  if (!assistant || assistant.role !== "assistant") return;
+  const existing = assistant.segments.find(
+    (segment): segment is Extract<ToolSegment, { kind: "tool" }> =>
+      segment.kind === "tool" && segment.id === activity.id,
+  );
+  const name = stringValue(message.toolName) || existing?.name || "工具调用";
+  upsertToolSegment(assistant, {
+    kind: "tool",
+    id: activity.id,
+    name,
+    status: activity.status,
+    ...(activity.output !== undefined ? { output: activity.output } : {}),
+    ...(activity.error !== undefined ? { error: activity.error } : {}),
+  });
 }
 
-function normalizePiToolResult(message: Record<string, unknown>): TranscriptActivity | null {
+function normalizePiToolResult(message: Record<string, unknown>): ToolSegment | null {
   const id = stringValue(message.toolCallId);
   if (!id) return null;
   const error = message.isError === true;
   const output = contentText(message.content);
   return {
+    kind: "tool",
     id,
     name: stringValue(message.toolName) || "工具调用",
     status: error ? "error" : "completed",
-    output,
+    ...(output ? { output } : {}),
     ...(error ? { error: output } : {}),
   };
 }

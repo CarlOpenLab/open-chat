@@ -1,7 +1,13 @@
-import { appendTranscriptTimeline, normalizeTranscriptHistory } from "../core";
-import type { TranscriptActivity, TranscriptMessage } from "../types";
-import { asRecord, stringifyValue, stringValue } from "../value";
+import {
+  appendContentSegment,
+  appendReasoningSegment,
+  normalizeTranscriptHistory,
+  upsertToolSegment,
+} from "../core";
+import type { AssistantMessage, ToolSegment, TranscriptMessage, UserMessage } from "../types";
+import { asRecord, extractTimestamp, stringifyValue, stringValue } from "../value";
 
+/** 把 opencode 会话历史转换为扁平消息模型（segments + id/timestamp）。 */
 export function convertOpenCodeHistory(values: unknown[]): TranscriptMessage[] {
   const history: TranscriptMessage[] = [];
   for (const value of values) {
@@ -15,9 +21,26 @@ export function convertOpenCodeHistory(values: unknown[]): TranscriptMessage[] {
       : Array.isArray(info.parts)
         ? info.parts
         : [];
+    const timestamp = extractTimestamp(info.time ?? message.time);
+    const id = stringValue(info.id) || `opencode-${history.length}`;
+
+    if (role === "user") {
+      let content = "";
+      for (const partValue of parts) {
+        const part = asRecord(partValue);
+        if (!part) continue;
+        if (part.type === "text") content += stringValue(part.text);
+      }
+      if (!content) content = stringValue(info.content);
+      if (!content) continue;
+      const user: UserMessage = { id, timestamp, role: "user", content };
+      history.push(user);
+      continue;
+    }
+
     let content = "";
     let reasoningContent = "";
-    const toolCalls: TranscriptActivity[] = [];
+    const toolCalls: ToolSegment[] = [];
     for (const partValue of parts) {
       const part = asRecord(partValue);
       if (!part) continue;
@@ -29,43 +52,28 @@ export function convertOpenCodeHistory(values: unknown[]): TranscriptMessage[] {
     }
     if (!content) content = stringValue(info.content);
     if (!content && !reasoningContent && toolCalls.length === 0) continue;
-    const normalized: TranscriptMessage = {
-      id: stringValue(info.id) || `opencode-${history.length}`,
-      role,
-      content,
-      ...(reasoningContent ? { reasoningContent } : {}),
-      ...(toolCalls.length ? { toolCalls } : {}),
-    };
+
+    const assistant: AssistantMessage = { id, timestamp, role: "assistant", segments: [] };
     for (const partValue of parts) {
       const part = asRecord(partValue);
       if (!part) continue;
-      if (part.type === "text") {
+      const type = stringValue(part.type);
+      if (type === "text") {
         const text = stringValue(part.text);
-        if (text)
-          appendTranscriptTimeline(normalized, {
-            kind: "content",
-            id: `content-${normalized.id}`,
-            content: text,
-          });
-      } else if (part.type === "reasoning" || part.type === "thinking") {
+        if (text) appendContentSegment(assistant, text);
+      } else if (type === "reasoning" || type === "thinking") {
         const text = stringValue(part.text);
-        if (text)
-          appendTranscriptTimeline(normalized, {
-            kind: "reasoning",
-            id: `reasoning-${normalized.id}`,
-            content: text,
-          });
-      } else if (part.type === "tool") {
-        const activity = normalizeOpenCodeActivity(part);
-        appendTranscriptTimeline(normalized, { kind: "tool", id: activity.id, activity });
+        if (text) appendReasoningSegment(assistant, text);
+      } else if (type === "tool") {
+        upsertToolSegment(assistant, normalizeOpenCodeActivity(part));
       }
     }
-    history.push(normalized);
+    history.push(assistant);
   }
   return normalizeTranscriptHistory(history);
 }
 
-function normalizeOpenCodeActivity(part: Record<string, unknown>): TranscriptActivity {
+function normalizeOpenCodeActivity(part: Record<string, unknown>): ToolSegment {
   const state = asRecord(part.state) ?? {};
   const rawStatus = stringValue(state.status || part.status);
   const status =
@@ -78,11 +86,16 @@ function normalizeOpenCodeActivity(part: Record<string, unknown>): TranscriptAct
           : "running";
   const id = stringValue(part.callID || part.callId || part.id) || `tool-${stringValue(part.name)}`;
   return {
+    kind: "tool",
     id,
     name: stringValue(part.name || part.tool) || "工具调用",
     status,
-    input: state.input ?? part.input,
-    output: stringifyValue(state.output ?? part.output),
-    ...(status === "error" ? { error: stringifyValue(state.error ?? part.error) } : {}),
+    ...(state.input !== undefined || part.input !== undefined
+      ? { input: state.input ?? part.input }
+      : {}),
+    ...(state.output !== undefined || part.output !== undefined
+      ? { output: stringifyValue(state.output ?? part.output) }
+      : {}),
+    ...(status === "error" ? { error: stringifyValue(state.error ?? part.error, "工具失败") } : {}),
   };
 }

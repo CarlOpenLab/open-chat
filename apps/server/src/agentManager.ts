@@ -10,6 +10,7 @@ import {
 } from "./nativeCliManager";
 import { GatewayError } from "./error";
 import { SessionRunRegistry } from "./sessionRunRegistry";
+import { segmentHistory } from "@cc-heart/open-chat-types";
 import type { TranscriptMessage } from "./transcript/types";
 
 export type AgentView = AcpAgentView | NativeAgentView;
@@ -125,9 +126,10 @@ export class AgentManager {
     );
     const history = "history" in state && Array.isArray(state.history) ? state.history : [];
     const snapshot: TranscriptMessage[] = [
-      ...history,
+      ...segmentHistory(history),
       {
         id: `open-chat-user-${Date.now()}`,
+        timestamp: Date.now(),
         role: "user",
         content: text,
       },

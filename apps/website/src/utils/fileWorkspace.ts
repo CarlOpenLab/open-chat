@@ -1,3 +1,6 @@
+import { extractWorkspaceFromContent } from "@cc-heart/open-chat-types";
+import type { TranscriptSegment } from "@cc-heart/open-chat-types";
+
 type WorkspaceFileStatus = "streaming" | "complete";
 
 interface WorkspaceFile {
@@ -56,116 +59,6 @@ export function collectWorkspaceDiffStats(
   return { added, removed };
 }
 
-export function isValidWorkspaceFileDraft(value: unknown): value is WorkspaceFileDraft {
-  if (!value || typeof value !== "object") return false;
-  const draft = value as Partial<WorkspaceFileDraft>;
-  return (
-    typeof draft.path === "string" &&
-    Boolean(normalizePath(draft.path)) &&
-    typeof draft.baseContent === "string" &&
-    typeof draft.content === "string" &&
-    typeof draft.updatedAt === "number" &&
-    Number.isFinite(draft.updatedAt)
-  );
-}
-
-interface ParsedFileWorkspaceContent {
-  markdown: string;
-  files: WorkspaceFile[];
-  errors: string[];
-  hasWorkspaceBlock: boolean;
-  hasPendingBlock: boolean;
-}
-
-interface FileWorkspaceConversationItem {
-  id?: string | number;
-  role: string;
-  content: unknown;
-}
-
-interface FileWorkspaceState {
-  files: WorkspaceFile[];
-  errors: string[];
-  hasWorkspace: boolean;
-  pending: boolean;
-}
-
-interface ContentLine {
-  start: number;
-  contentEnd: number;
-  end: number;
-  text: string;
-}
-
-const FILES_OPEN_TAG = "<files>";
-const FILES_CLOSE_TAG = "</files>";
-const FILE_CLOSE_TAG = "</file>";
-const FILE_OPEN_PATTERN = /^<file\s+path="([^"]+)"(?:\s+language="([^"]+)")?\s*>$/;
-const LANGUAGE_BY_EXTENSION: Record<string, string> = {
-  cjs: "javascript",
-  css: "css",
-  csv: "csv",
-  html: "html",
-  java: "java",
-  js: "javascript",
-  json: "json",
-  jsx: "jsx",
-  md: "markdown",
-  mjs: "javascript",
-  py: "python",
-  sh: "bash",
-  ts: "typescript",
-  tsx: "tsx",
-  txt: "text",
-  vue: "vue",
-  xml: "xml",
-  yaml: "yaml",
-  yml: "yaml",
-};
-
-function toLines(content: string): ContentLine[] {
-  if (!content) return [];
-
-  const lines: ContentLine[] = [];
-  let start = 0;
-  while (start < content.length) {
-    const newline = content.indexOf("\n", start);
-    const contentEnd = newline === -1 ? content.length : newline;
-    const end = newline === -1 ? content.length : newline + 1;
-    const rawText = content.slice(start, contentEnd);
-    lines.push({
-      start,
-      contentEnd,
-      end,
-      text: rawText.endsWith("\r") ? rawText.slice(0, -1) : rawText,
-    });
-    start = end;
-  }
-  return lines;
-}
-
-function findOpeningTag(lines: ContentLine[], from: number): ContentLine | undefined {
-  let fenceMarker = "";
-
-  for (const line of lines) {
-    const trimmed = line.text.trim();
-    const fence = trimmed.match(/^(`{3,}|~{3,})/);
-    if (fence) {
-      const marker = fence[1][0];
-      if (!fenceMarker) fenceMarker = marker;
-      else if (fenceMarker === marker) fenceMarker = "";
-      continue;
-    }
-    if (!fenceMarker && line.start >= from && trimmed === FILES_OPEN_TAG) return line;
-  }
-
-  return undefined;
-}
-
-function findExactLine(lines: ContentLine[], value: string, from: number): ContentLine | undefined {
-  return lines.find((line) => line.start >= from && line.text.trim() === value);
-}
-
 function normalizePath(rawPath: string): string | null {
   const normalized = rawPath
     .trim()
@@ -183,113 +76,43 @@ function normalizePath(rawPath: string): string | null {
   return normalized;
 }
 
-function inferWorkspaceLanguage(path: string): string {
-  const extension = path.split(".").pop()?.toLowerCase() ?? "";
-  return (LANGUAGE_BY_EXTENSION[extension] ?? extension) || "text";
+export function isValidWorkspaceFileDraft(value: unknown): value is WorkspaceFileDraft {
+  if (!value || typeof value !== "object") return false;
+  const draft = value as Partial<WorkspaceFileDraft>;
+  return (
+    typeof draft.path === "string" &&
+    Boolean(normalizePath(draft.path)) &&
+    typeof draft.baseContent === "string" &&
+    typeof draft.content === "string" &&
+    typeof draft.updatedAt === "number" &&
+    Number.isFinite(draft.updatedAt)
+  );
 }
 
-function parseFilesPayload(
-  content: string,
-  payloadStart: number,
-  payloadEnd: number,
-  outerComplete: boolean,
-): Pick<ParsedFileWorkspaceContent, "files" | "errors"> {
-  const payload = content.slice(payloadStart, payloadEnd);
-  const lines = toLines(payload);
-  const files: WorkspaceFile[] = [];
-  const errors: string[] = [];
-  const seenPaths = new Set<string>();
-  let lineIndex = 0;
-
-  while (lineIndex < lines.length) {
-    const line = lines[lineIndex];
-    const trimmed = line.text.trim();
-    if (!trimmed) {
-      lineIndex += 1;
-      continue;
-    }
-
-    const openMatch = trimmed.match(FILE_OPEN_PATTERN);
-    if (!openMatch) {
-      errors.push(`文件协议中存在无法识别的内容：${trimmed.slice(0, 60)}`);
-      lineIndex += 1;
-      continue;
-    }
-
-    const path = normalizePath(openMatch[1]);
-    const closeLine = findExactLine(lines, FILE_CLOSE_TAG, line.end);
-    const fileEnd = closeLine?.start ?? payload.length;
-    const fileContent = payload.slice(line.end, fileEnd).replace(/\r\n/g, "\n").replace(/\n$/, "");
-
-    if (!path) {
-      errors.push(`文件路径无效：${openMatch[1]}`);
-    } else if (seenPaths.has(path)) {
-      errors.push(`文件路径重复：${path}`);
-    } else {
-      seenPaths.add(path);
-      files.push({
-        path,
-        content: fileContent,
-        language: openMatch[2]?.trim() || inferWorkspaceLanguage(path),
-        status: closeLine ? "complete" : "streaming",
-      });
-    }
-
-    if (!closeLine) {
-      if (outerComplete) errors.push(`文件 ${path ?? openMatch[1]} 未完整闭合`);
-      break;
-    }
-    lineIndex = lines.indexOf(closeLine) + 1;
-  }
-
-  return { files, errors };
+/** 兼容入口：解析正文里的 File Workspace 块（实现来自共享包）。 */
+export function parseFileWorkspaceContent(content: string) {
+  return extractWorkspaceFromContent(content);
 }
 
-export function parseFileWorkspaceContent(content: string): ParsedFileWorkspaceContent {
-  const normalizedContent = content.replace(/\r\n/g, "\n");
-  const lines = toLines(normalizedContent);
-  const markdownParts: string[] = [];
-  const files: WorkspaceFile[] = [];
-  const errors: string[] = [];
-  let cursor = 0;
-  let hasWorkspaceBlock = false;
-  let hasPendingBlock = false;
-
-  while (cursor < normalizedContent.length) {
-    const openLine = findOpeningTag(lines, cursor);
-    if (!openLine) break;
-
-    hasWorkspaceBlock = true;
-    markdownParts.push(normalizedContent.slice(cursor, openLine.start));
-    const closeLine = findExactLine(lines, FILES_CLOSE_TAG, openLine.end);
-    const payloadEnd = closeLine?.start ?? normalizedContent.length;
-    const parsed = parseFilesPayload(
-      normalizedContent,
-      openLine.end,
-      payloadEnd,
-      Boolean(closeLine),
-    );
-    files.push(...parsed.files);
-    errors.push(...parsed.errors);
-
-    if (!closeLine) {
-      hasPendingBlock = true;
-      cursor = normalizedContent.length;
-      break;
-    }
-    cursor = closeLine.end;
-  }
-
-  markdownParts.push(normalizedContent.slice(cursor));
-  return {
-    markdown: markdownParts.join("").trim(),
-    files,
-    errors,
-    hasWorkspaceBlock,
-    hasPendingBlock,
-  };
+interface FileWorkspaceConversationItem {
+  id?: string | number;
+  role: string;
+  content: unknown;
+  /** 扁平活动段（含 workspace 段，历史路径由 segmentHistory 提取）。 */
+  segments?: TranscriptSegment[];
 }
 
+interface FileWorkspaceState {
+  files: WorkspaceFile[];
+  errors: string[];
+  hasWorkspace: boolean;
+  pending: boolean;
+}
+
+/**
+ * 收集整个会话的 File Workspace：优先读消息的 workspace 段；
+ * 对仍把工作区块留在正文里的消息（live 流尚未提取）回退解析 content。
+ */
 export function collectFileWorkspaceState(
   items: readonly FileWorkspaceConversationItem[],
 ): FileWorkspaceState {
@@ -299,12 +122,36 @@ export function collectFileWorkspaceState(
   let pending = false;
 
   for (const item of items) {
-    if (item.role !== "assistant" || typeof item.content !== "string") continue;
+    if (item.role !== "assistant") continue;
+    const segments = item.segments ?? [];
+    const workspaceSegments = segments.filter(
+      (segment): segment is Extract<TranscriptSegment, { kind: "workspace" }> =>
+        segment.kind === "workspace",
+    );
+    if (workspaceSegments.length) {
+      hasWorkspace = true;
+      for (const workspace of workspaceSegments) {
+        if (workspace.hasPendingBlock === true) pending = true;
+        errors.push(...workspace.errors);
+        for (const file of workspace.files) {
+          filesByPath.set(file.path, {
+            path: file.path,
+            content: file.content ?? "",
+            language: file.language ?? "text",
+            status: file.status,
+            ownerMessageId: String(item.id ?? ""),
+          });
+        }
+      }
+      continue;
+    }
+
+    // 回退：仍在 content 里的块（live 流尚未拆分）。
+    if (typeof item.content !== "string") continue;
     const parsed = parseFileWorkspaceContent(item.content);
     if (!parsed.hasWorkspaceBlock) continue;
-
     hasWorkspace = true;
-    pending = parsed.hasPendingBlock;
+    pending = pending || parsed.hasPendingBlock;
     errors.push(...parsed.errors);
     for (const file of parsed.files) {
       filesByPath.set(file.path, { ...file, ownerMessageId: String(item.id ?? "") });

@@ -1,18 +1,13 @@
 import { randomUUID } from "node:crypto";
-import {
-  appendTranscriptText,
-  appendTranscriptTimeline,
-  hasTranscriptContent,
-  normalizeTranscriptHistory,
-  upsertTranscriptActivity,
-} from "../core";
+import { normalizeTranscriptHistory } from "../core";
 import type {
+  AssistantMessage,
   TranscriptActivity,
   TranscriptAttachment,
-  TranscriptFileChange,
   TranscriptMessage,
+  TranscriptSegment,
 } from "../types";
-import { asRecord, contentText, stringifyValue, stringValue } from "../value";
+import { asRecord, contentText, extractTimestamp, stringifyValue, stringValue } from "../value";
 
 const ACTIVITY_TYPES = new Set([
   "commandExecution",
@@ -32,6 +27,12 @@ export interface CodexConvertOptions {
   importImage?: CodexImageImporter;
 }
 
+/**
+ * 把 codex thread 的 turns 转换为扁平消息模型：
+ * - 每条消息带 `id` + `timestamp`；
+ * - assistant 消息只有 `segments`（reasoning/content/tool/fileChange/plan），
+ *   正文由前端合并 content 段得出，不再有平行的 content/reasoningContent/toolCalls/timeline。
+ */
 export function convertCodexThreadHistory(
   turns: unknown[],
   options: CodexConvertOptions = {},
@@ -41,10 +42,16 @@ export function convertCodexThreadHistory(
   for (const turnValue of turns) {
     const turn = asRecord(turnValue);
     const items = Array.isArray(turn?.items) ? turn.items : [];
-    let assistant: TranscriptMessage | undefined;
-    const unphasedMessages: Array<{ id: string; text: string }> = [];
-    const ensureAssistant = (id: string) => {
-      assistant ??= { id: `${id}:assistant`, role: "assistant", content: "" };
+    const turnTimestamp = extractTimestamp(turn?.timestamp);
+    let assistant: AssistantMessage | undefined;
+    const unphasedMessages: Array<{ id: string; text: string; timestamp: number }> = [];
+    const ensureAssistant = (id: string, timestamp?: number) => {
+      assistant ??= {
+        id: `${id}:assistant`,
+        timestamp: timestamp ?? turnTimestamp,
+        role: "assistant",
+        segments: [],
+      };
       return assistant;
     };
 
@@ -53,6 +60,7 @@ export function convertCodexThreadHistory(
       if (!item) continue;
       const type = stringValue(item.type);
       const id = stringValue(item.id) || randomUUID();
+      const itemTimestamp = extractTimestamp(item.timestamp, turnTimestamp);
 
       if (type === "userMessage") {
         const extracted = extractCodexUserContent(item.content);
@@ -68,6 +76,7 @@ export function convertCodexThreadHistory(
         if (content || attachments.length) {
           history.push({
             id,
+            timestamp: itemTimestamp,
             role: "user",
             content,
             ...(attachments.length ? { attachments } : {}),
@@ -81,10 +90,10 @@ export function convertCodexThreadHistory(
         if (!text) continue;
         const phase = stringValue(item.phase);
         if (phase === "commentary" || phase === "final_answer") {
-          const message = ensureAssistant(id);
-          appendCodexContent(message, text);
+          const message = ensureAssistant(id, itemTimestamp);
+          appendSegment(message, { kind: "content", content: text });
         } else {
-          unphasedMessages.push({ id, text });
+          unphasedMessages.push({ id, text, timestamp: itemTimestamp });
         }
         continue;
       }
@@ -92,66 +101,104 @@ export function convertCodexThreadHistory(
       if (type === "reasoning") {
         const reasoning = contentText(item.summary) || contentText(item.content);
         if (!reasoning) continue;
-        const message = ensureAssistant(id);
-        message.reasoningContent = appendTranscriptText(
-          message.reasoningContent,
-          reasoning,
-          "\n\n",
-        );
-        appendTranscriptTimeline(message, {
-          kind: "reasoning",
-          id: `reasoning-${message.id}`,
-          content: reasoning,
-        });
+        const message = ensureAssistant(id, itemTimestamp);
+        appendSegment(message, { kind: "reasoning", content: reasoning });
         continue;
       }
 
       if (type === "plan") {
         const text = stringValue(item.text) || contentText(item.content);
         if (!text) continue;
-        const message = ensureAssistant(id);
-        message.agentPlan = {
-          entries: [{ content: text, status: "completed" }],
-        };
-        appendTranscriptTimeline(message, {
-          kind: "plan",
-          id: `plan-${message.id}`,
-          plan: message.agentPlan,
-        });
+        const message = ensureAssistant(id, itemTimestamp);
+        upsertPlanSegment(message, [{ content: text, status: "completed" }]);
         continue;
       }
 
       if (ACTIVITY_TYPES.has(type)) {
-        const message = ensureAssistant(id);
+        const message = ensureAssistant(id, itemTimestamp);
         const activity = normalizeCodexActivity(item, true);
-        message.toolCalls = upsertTranscriptActivity(message.toolCalls, activity);
-        appendTranscriptTimeline(message, { kind: "tool", id: activity.id, activity });
+        const isFileChange = activity.kind === "fileChange" || activity.name === "fileChange";
+        if (isFileChange) {
+          // 文件修改由 fileChange 段表达（P1：tool 段不带 fileChanges）。
+          for (const change of extractFileChanges(item)) {
+            appendSegment(message, {
+              kind: "fileChange",
+              path: change.path,
+              ...(change.additions !== undefined ? { additions: change.additions } : {}),
+              ...(change.deletions !== undefined ? { deletions: change.deletions } : {}),
+              status: activity.status,
+            });
+          }
+        } else {
+          appendSegment(message, activityToToolSegment(activity));
+        }
       }
     }
 
     if (unphasedMessages.length) {
-      unphasedMessages.forEach(({ id, text }) => {
-        const message = ensureAssistant(id);
-        appendCodexContent(message, text);
+      unphasedMessages.forEach(({ id, text, timestamp }) => {
+        const message = ensureAssistant(id, timestamp);
+        appendSegment(message, { kind: "content", content: text });
       });
     }
 
-    if (assistant && hasTranscriptContent(assistant)) history.push(assistant);
+    if (assistant && hasAssistantSegments(assistant)) history.push(assistant);
   }
 
   return normalizeTranscriptHistory(history);
 }
 
-function appendCodexContent(message: TranscriptMessage, text: string): void {
-  message.content = appendTranscriptText(message.content, text, "\n\n");
-  const previous = message.timeline?.at(-1);
-  appendTranscriptTimeline(message, {
-    kind: "content",
-    id: `content-${message.id}`,
-    content: previous?.kind === "content" ? `\n\n${text}` : text,
-  });
+/** 相邻 content/reasoning 段合并，其余按序追加。 */
+function appendSegment(message: AssistantMessage, segment: TranscriptSegment): void {
+  const segments = message.segments;
+  const previous = segments.at(-1);
+  if (
+    (segment.kind === "content" || segment.kind === "reasoning") &&
+    previous?.kind === segment.kind
+  ) {
+    const merged =
+      previous.kind === "content" && segment.kind === "content"
+        ? `${previous.content}\n\n${segment.content}`
+        : `${previous.content}${segment.content}`;
+    segments[segments.length - 1] = { ...previous, content: merged } as TranscriptSegment;
+  } else {
+    segments.push(segment);
+  }
 }
 
+/** plan 段唯一，后到者覆盖。 */
+function upsertPlanSegment(
+  message: AssistantMessage,
+  entries: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>,
+): void {
+  const index = message.segments.findIndex((segment) => segment.kind === "plan");
+  const segment: TranscriptSegment = { kind: "plan", entries };
+  if (index === -1) message.segments.push(segment);
+  else message.segments[index] = segment;
+}
+
+function hasAssistantSegments(message: AssistantMessage): boolean {
+  return message.segments.length > 0;
+}
+
+function activityToToolSegment(
+  activity: ReturnType<typeof normalizeCodexActivity>,
+): TranscriptSegment {
+  return {
+    kind: "tool",
+    id: activity.id,
+    name: activity.name,
+    status: activity.status,
+    ...(activity.kind ? { providerKind: activity.kind } : {}),
+    ...(activity.input !== undefined ? { input: activity.input } : {}),
+    ...(activity.output !== undefined ? { output: activity.output } : {}),
+    ...(activity.error !== undefined ? { error: activity.error } : {}),
+    ...(activity.durationMs !== undefined ? { durationMs: activity.durationMs } : {}),
+    ...(activity.displayTarget !== undefined ? { displayTarget: activity.displayTarget } : {}),
+  };
+}
+
+/** 工具活动 payload（live native_event 契约继续使用 TranscriptActivity）。 */
 export function normalizeCodexActivity(
   item: Record<string, unknown>,
   complete: boolean,
@@ -185,15 +232,23 @@ export function normalizeCodexActivity(
   };
 }
 
-function extractFileChanges(item: Record<string, unknown>): TranscriptFileChange[] {
+function extractFileChanges(item: Record<string, unknown>): Array<{
+  path: string;
+  additions?: number;
+  deletions?: number;
+}> {
   const source =
     item.arguments ?? item.input ?? item.changes ?? item.fileChanges ?? item.file_changes;
-  const changes: TranscriptFileChange[] = [];
+  const changes: Array<{ path: string; additions?: number; deletions?: number }> = [];
   collectFileChanges(source, changes, 0);
   return dedupeFileChanges(changes);
 }
 
-function collectFileChanges(value: unknown, changes: TranscriptFileChange[], depth: number): void {
+function collectFileChanges(
+  value: unknown,
+  changes: Array<{ path: string; additions?: number; deletions?: number }>,
+  depth: number,
+): void {
   if (depth > 5 || value === null || value === undefined) return;
   if (typeof value === "string") {
     try {
@@ -233,7 +288,10 @@ function collectFileChanges(value: unknown, changes: TranscriptFileChange[], dep
   }
 }
 
-function collectPatchChanges(patch: string, changes: TranscriptFileChange[]): void {
+function collectPatchChanges(
+  patch: string,
+  changes: Array<{ path: string; additions?: number; deletions?: number }>,
+): void {
   const paths = [...patch.matchAll(/^\+\+\+\s+(?:b\/)?(.+)$/gm)].map((match) => match[1]?.trim());
   const counts = countPatchChanges(patch);
   for (const path of paths) {
@@ -255,8 +313,10 @@ function countPatchChanges(diff: string): { additions?: number; deletions?: numb
   };
 }
 
-function dedupeFileChanges(changes: TranscriptFileChange[]): TranscriptFileChange[] {
-  const result: TranscriptFileChange[] = [];
+function dedupeFileChanges(
+  changes: Array<{ path: string; additions?: number; deletions?: number }>,
+): Array<{ path: string; additions?: number; deletions?: number }> {
+  const result: Array<{ path: string; additions?: number; deletions?: number }> = [];
   for (const change of changes) {
     const previous = result.find((entry) => entry.path === change.path);
     if (!previous) result.push(change);
