@@ -1,9 +1,13 @@
 import type {
-  AssistantMessage,
+  ContentMessage,
+  FileChangeMessage,
+  PlanMessage,
+  ReasoningMessage,
+  ToolMessage,
   TranscriptHistoryCollector,
   TranscriptMessage,
   TranscriptRole,
-  TranscriptSegment,
+  WorkspaceMessage,
 } from "./types";
 
 // ─────────────────────────────────────────────────────────────
@@ -26,83 +30,117 @@ export function transcriptMessageFor(
 
   const timestamp = Date.now();
   const id = `${idPrefix}-${collector.nextId++}`;
-  const message: TranscriptMessage =
-    role === "user"
-      ? { id, timestamp, role: "user", content: "" }
-      : { id, timestamp, role: "assistant", segments: [] };
+  const message = createMessage(role, id, timestamp);
   collector.messages.push(message);
   collector.activeRole = role;
   return message;
 }
 
-// ─────────────────────────────────────────────────────────────
-// 扁平 segments 操作。
-// ─────────────────────────────────────────────────────────────
-
-/** 相邻 content 段合并（块之间用空行），否则追加。 */
-export function appendContentSegment(message: AssistantMessage, text: string): void {
-  appendSegment(message, { kind: "content", content: text });
-}
-
-/** 相邻 reasoning 段合并，否则追加。 */
-export function appendReasoningSegment(message: AssistantMessage, text: string): void {
-  appendSegment(message, { kind: "reasoning", content: text });
-}
-
-export function appendSegment(message: AssistantMessage, segment: TranscriptSegment): void {
-  const segments = message.segments;
-  const previous = segments.at(-1);
-  if (
-    (segment.kind === "content" || segment.kind === "reasoning") &&
-    previous?.kind === segment.kind
-  ) {
-    const merged =
-      previous.kind === "content" && segment.kind === "content"
-        ? `${previous.content}\n\n${segment.content}`
-        : `${previous.content}${segment.content}`;
-    segments[segments.length - 1] = { ...previous, content: merged } as TranscriptSegment;
-  } else {
-    segments.push(segment);
+function createMessage(role: TranscriptRole, id: string, timestamp: number): TranscriptMessage {
+  switch (role) {
+    case "user":
+      return { id, timestamp, role: "user", content: "" };
+    case "reasoning":
+      return { id, timestamp, role: "reasoning", content: "" };
+    case "content":
+      return { id, timestamp, role: "content", content: "" };
+    case "tool":
+      return { id, timestamp, role: "tool", name: "", status: "pending" };
+    case "plan":
+      return { id, timestamp, role: "plan", entries: [] };
+    case "fileChange":
+      return { id, timestamp, role: "fileChange", path: "" };
+    case "workspace":
+      return { id, timestamp, role: "workspace", files: [], errors: [] };
   }
 }
 
-/** 工具段按 id upsert（后到状态覆盖旧状态）。 */
-export function upsertToolSegment(
-  message: AssistantMessage,
-  tool: Extract<TranscriptSegment, { kind: "tool" }>,
+// ─────────────────────────────────────────────────────────────
+// 扁平消息操作。
+// ─────────────────────────────────────────────────────────────
+
+/** 相邻 content 消息合并（块之间用空行），否则追加。 */
+export function appendContentMessage(
+  messages: TranscriptMessage[],
+  id: string,
+  timestamp: number,
+  text: string,
 ): void {
-  const index = message.segments.findIndex(
-    (segment) => segment.kind === "tool" && segment.id === tool.id,
-  );
-  if (index === -1) message.segments.push(tool);
-  else message.segments[index] = { ...message.segments[index], ...tool };
+  if (!text) return;
+  const previous = messages.at(-1);
+  if (previous?.role === "content") {
+    messages[messages.length - 1] = {
+      ...previous,
+      content: `${previous.content}\n\n${text}`,
+    };
+  } else {
+    messages.push({ id, timestamp, role: "content", content: text });
+  }
 }
 
-/** plan 段唯一，后到者覆盖。 */
-export function upsertPlanSegment(
-  message: AssistantMessage,
-  entries: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>,
+/** 相邻 reasoning 消息合并，否则追加。 */
+export function appendReasoningMessage(
+  messages: TranscriptMessage[],
+  id: string,
+  timestamp: number,
+  text: string,
 ): void {
-  const index = message.segments.findIndex((segment) => segment.kind === "plan");
-  const segment: TranscriptSegment = { kind: "plan", entries };
-  if (index === -1) message.segments.push(segment);
-  else message.segments[index] = segment;
+  if (!text) return;
+  const previous = messages.at(-1);
+  if (previous?.role === "reasoning") {
+    messages[messages.length - 1] = {
+      ...previous,
+      content: `${previous.content}${text}`,
+    };
+  } else {
+    messages.push({ id, timestamp, role: "reasoning", content: text });
+  }
 }
 
-/** 文件修改段按 path upsert。 */
-export function upsertFileChangeSegment(
-  message: AssistantMessage,
-  change: Extract<TranscriptSegment, { kind: "fileChange" }>,
+/** 工具消息按 id upsert（后到状态覆盖旧状态）。 */
+export function upsertToolMessage(messages: TranscriptMessage[], tool: ToolMessage): void {
+  const index = messages.findIndex((message) => message.role === "tool" && message.id === tool.id);
+  if (index === -1) messages.push(tool);
+  else messages[index] = { ...(messages[index] as ToolMessage), ...tool };
+}
+
+/** plan 消息唯一，后到者覆盖。 */
+export function upsertPlanMessage(
+  messages: TranscriptMessage[],
+  id: string,
+  timestamp: number,
+  entries: PlanMessage["entries"],
 ): void {
-  const index = message.segments.findIndex(
-    (segment) => segment.kind === "fileChange" && segment.path === change.path,
+  const index = messages.findIndex((message) => message.role === "plan");
+  const message: PlanMessage = { id, timestamp, role: "plan", entries };
+  if (index === -1) messages.push(message);
+  else messages[index] = message;
+}
+
+/** 文件修改消息按 path upsert。 */
+export function upsertFileChangeMessage(
+  messages: TranscriptMessage[],
+  change: FileChangeMessage,
+): void {
+  const index = messages.findIndex(
+    (message) => message.role === "fileChange" && message.path === change.path,
   );
-  if (index === -1) message.segments.push(change);
-  else message.segments[index] = { ...message.segments[index], ...change };
+  if (index === -1) messages.push(change);
+  else messages[index] = { ...(messages[index] as FileChangeMessage), ...change };
+}
+
+/** workspace 消息唯一，后到者覆盖。 */
+export function upsertWorkspaceMessage(
+  messages: TranscriptMessage[],
+  workspace: WorkspaceMessage,
+): void {
+  const index = messages.findIndex((message) => message.role === "workspace");
+  if (index === -1) messages.push(workspace);
+  else messages[index] = workspace;
 }
 
 /**
- * 扁平历史规范化：合并相邻 assistant 消息（拼接 segments，相邻同种段再合并），
+ * 扁平历史规范化：合并相邻同种 content/reasoning 消息，去掉空 assistant 侧消息。
  * user 消息边界保持权威。
  */
 export function normalizeTranscriptHistory(messages: TranscriptMessage[]): TranscriptMessage[] {
@@ -112,10 +150,19 @@ export function normalizeTranscriptHistory(messages: TranscriptMessage[]): Trans
       history.push(message);
       continue;
     }
-    if (!message.segments.length) continue;
+    if (isEmptyAssistantMessage(message)) continue;
     const previous = history.at(-1);
-    if (previous?.role === "assistant") {
-      for (const segment of message.segments) appendSegment(previous, segment);
+    if (
+      previous?.role === message.role &&
+      (message.role === "content" || message.role === "reasoning")
+    ) {
+      const prev = previous as ContentMessage | ReasoningMessage;
+      const current = message as ContentMessage | ReasoningMessage;
+      const merged =
+        message.role === "content"
+          ? `${prev.content}\n\n${current.content}`
+          : `${prev.content}${current.content}`;
+      history[history.length - 1] = { ...prev, content: merged };
     } else {
       history.push(message);
     }
@@ -123,7 +170,21 @@ export function normalizeTranscriptHistory(messages: TranscriptMessage[]): Trans
   return history;
 }
 
-/** 判断扁平 assistant 消息是否有内容（有任意 segment 即算）。 */
-export function hasAssistantSegments(message: AssistantMessage): boolean {
-  return message.segments.length > 0;
+function isEmptyAssistantMessage(message: TranscriptMessage): boolean {
+  switch (message.role) {
+    case "content":
+    case "reasoning":
+      return !message.content.trim();
+    case "plan":
+      return message.entries.length === 0;
+    case "workspace":
+      return message.files.length === 0 && message.errors.length === 0;
+    default:
+      return false;
+  }
+}
+
+/** 判断扁平消息列表是否有 assistant 侧内容（非 user 消息）。 */
+export function hasAssistantContent(messages: readonly TranscriptMessage[]): boolean {
+  return messages.some((message) => message.role !== "user");
 }

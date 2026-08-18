@@ -16,16 +16,21 @@ import { XMarkdown } from "@antdv-next/x-markdown";
 import {
   fileChangeTitle,
   formatActivitySummary,
-  summarizeActivities,
+  summarizeMessages,
   toolTitle,
 } from "@cc-heart/open-chat-types";
-import type { FileChangeSegment, ToolSegment, TranscriptSegment } from "@cc-heart/open-chat-types";
+import type {
+  FileChangeMessage,
+  SegmentStatus,
+  ToolMessage,
+  TranscriptMessage,
+} from "@cc-heart/open-chat-types";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 import { formatWorkedDuration } from "../../utils/chatDuration";
 
 interface Props {
-  segments: TranscriptSegment[];
+  messages: TranscriptMessage[];
   streaming: boolean;
   /** 思考是否已完成（streaming 中 false 时显示"正在思考"）。 */
   reasoningDone?: boolean;
@@ -103,7 +108,7 @@ const normalizeEntryIds = (items: ActivityEntry[]): ActivityEntry[] => {
 
 const reasoningRunning = computed(() => props.streaming && props.reasoningDone !== true);
 
-const segmentStatus = (status: ToolSegment["status"]): ActivityEntry["status"] =>
+const segmentStatus = (status: SegmentStatus): ActivityEntry["status"] =>
   status === "completed"
     ? "success"
     : status === "error"
@@ -114,7 +119,7 @@ const segmentStatus = (status: ToolSegment["status"]): ActivityEntry["status"] =
 
 const fileName = (path: string): string => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 
-function toolActivityEntry(tool: ToolSegment): ActivityEntry {
+function toolActivityEntry(tool: ToolMessage): ActivityEntry {
   const sections: Array<{ label: string; content: string; copyable?: boolean }> = [];
   if (tool.input !== undefined) {
     sections.push({ label: "参数", content: formatToolDetail(tool.input, 2000), copyable: true });
@@ -145,7 +150,7 @@ function toolActivityEntry(tool: ToolSegment): ActivityEntry {
   };
 }
 
-function fileChangeActivityEntry(change: FileChangeSegment): ActivityEntry {
+function fileChangeActivityEntry(change: FileChangeMessage): ActivityEntry {
   const status = segmentStatus(change.status ?? "completed");
   const title = fileChangeTitle(change.path, change.status);
   const preview =
@@ -181,8 +186,8 @@ function fileChangeActivityEntry(change: FileChangeSegment): ActivityEntry {
 const entries = computed<ActivityEntry[]>(() => {
   const list: ActivityEntry[] = [];
 
-  for (const segment of props.segments) {
-    if (segment.kind === "reasoning") {
+  for (const message of props.messages) {
+    if (message.role === "reasoning") {
       list.push({
         id: `reasoning-${list.length}`,
         kind: "reasoning",
@@ -194,14 +199,14 @@ const entries = computed<ActivityEntry[]>(() => {
             : "思考过程",
         preview: "",
         status: reasoningRunning.value ? "running" : "success",
-        content: segment.content,
+        content: message.content,
       });
-    } else if (segment.kind === "tool") {
-      list.push(toolActivityEntry(segment));
-    } else if (segment.kind === "fileChange") {
-      list.push(fileChangeActivityEntry(segment));
-    } else if (segment.kind === "plan") {
-      for (const [index, entry] of segment.entries.entries()) {
+    } else if (message.role === "tool") {
+      list.push(toolActivityEntry(message));
+    } else if (message.role === "fileChange") {
+      list.push(fileChangeActivityEntry(message));
+    } else if (message.role === "plan") {
+      for (const [index, entry] of message.entries.entries()) {
         const status: ActivityEntry["status"] =
           entry.status === "completed"
             ? "success"
@@ -222,8 +227,8 @@ const entries = computed<ActivityEntry[]>(() => {
           status,
         });
       }
-    } else if (segment.kind === "workspace") {
-      for (const file of segment.files) {
+    } else if (message.role === "workspace") {
+      for (const file of message.files) {
         const writing = file.status === "streaming" && props.streaming;
         list.push({
           id: `file-${file.path}`,
@@ -234,7 +239,7 @@ const entries = computed<ActivityEntry[]>(() => {
           status: writing ? "running" : "success",
         });
       }
-      for (const [index, error] of segment.errors.entries()) {
+      for (const [index, error] of message.errors.entries()) {
         list.push({
           id: `workspace-error-${index}`,
           kind: "workspace",
@@ -251,7 +256,7 @@ const entries = computed<ActivityEntry[]>(() => {
 });
 
 /** 活动摘要："正在执行：N 次命令，M 次思考" / "已执行：…"。 */
-const summary = computed(() => summarizeActivities(props.segments));
+const summary = computed(() => summarizeMessages(props.messages));
 const anyRunning = computed(() => entries.value.some((entry) => entry.status === "running"));
 const summaryLabel = computed(() =>
   formatActivitySummary(summary.value, { running: anyRunning.value }),
@@ -386,11 +391,11 @@ onBeforeUnmount(() => {
               class="flex-none font-mono text-[10.5px] text-brand-danger"
               >-{{ entry.fileStats.deletions }}</span
             >
-            <span
-              v-if="!isItemExpanded(entry.id) && entry.preview"
-              class="min-w-0 flex-1 overflow-hidden truncate text-[11px] text-brand-ghost"
-              >{{ entry.preview }}</span
-            >
+            <!-- <span -->
+            <!--   v-if="!isItemExpanded(entry.id) && entry.preview" -->
+            <!--   class="min-w-0 flex-1 overflow-hidden truncate text-[11px] text-brand-ghost" -->
+            <!--   >{{ entry.preview }}</span -->
+            <!-- > -->
           </div>
           <span class="inline-flex flex-none items-center" aria-hidden="true">
             <X v-if="entry.status === 'error'" class="h-2.5 w-2.5 text-brand-danger" />

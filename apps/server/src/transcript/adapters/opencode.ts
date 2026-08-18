@@ -1,13 +1,13 @@
 import {
-  appendContentSegment,
-  appendReasoningSegment,
+  appendContentMessage,
+  appendReasoningMessage,
   normalizeTranscriptHistory,
-  upsertToolSegment,
+  upsertToolMessage,
 } from "../core";
-import type { AssistantMessage, ToolSegment, TranscriptMessage, UserMessage } from "../types";
+import type { ToolMessage, TranscriptMessage, UserMessage } from "../types";
 import { asRecord, extractTimestamp, stringifyValue, stringValue } from "../value";
 
-/** 把 opencode 会话历史转换为扁平消息模型（segments + id/timestamp）。 */
+/** 把 opencode 会话历史转换为扁平消息模型（每条消息带 id + timestamp + role）。 */
 export function convertOpenCodeHistory(values: unknown[]): TranscriptMessage[] {
   const history: TranscriptMessage[] = [];
   for (const value of values) {
@@ -40,7 +40,7 @@ export function convertOpenCodeHistory(values: unknown[]): TranscriptMessage[] {
 
     let content = "";
     let reasoningContent = "";
-    const toolCalls: ToolSegment[] = [];
+    const toolCalls: ToolMessage[] = [];
     for (const partValue of parts) {
       const part = asRecord(partValue);
       if (!part) continue;
@@ -48,32 +48,30 @@ export function convertOpenCodeHistory(values: unknown[]): TranscriptMessage[] {
       if (part.type === "reasoning" || part.type === "thinking") {
         reasoningContent += stringValue(part.text);
       }
-      if (part.type === "tool") toolCalls.push(normalizeOpenCodeActivity(part));
+      if (part.type === "tool") toolCalls.push(normalizeOpenCodeActivity(part, timestamp));
     }
     if (!content) content = stringValue(info.content);
     if (!content && !reasoningContent && toolCalls.length === 0) continue;
 
-    const assistant: AssistantMessage = { id, timestamp, role: "assistant", segments: [] };
     for (const partValue of parts) {
       const part = asRecord(partValue);
       if (!part) continue;
       const type = stringValue(part.type);
       if (type === "text") {
         const text = stringValue(part.text);
-        if (text) appendContentSegment(assistant, text);
+        if (text) appendContentMessage(history, `${id}:c`, timestamp, text);
       } else if (type === "reasoning" || type === "thinking") {
         const text = stringValue(part.text);
-        if (text) appendReasoningSegment(assistant, text);
+        if (text) appendReasoningMessage(history, `${id}:r`, timestamp, text);
       } else if (type === "tool") {
-        upsertToolSegment(assistant, normalizeOpenCodeActivity(part));
+        upsertToolMessage(history, normalizeOpenCodeActivity(part, timestamp));
       }
     }
-    history.push(assistant);
   }
   return normalizeTranscriptHistory(history);
 }
 
-function normalizeOpenCodeActivity(part: Record<string, unknown>): ToolSegment {
+function normalizeOpenCodeActivity(part: Record<string, unknown>, timestamp: number): ToolMessage {
   const state = asRecord(part.state) ?? {};
   const rawStatus = stringValue(state.status || part.status);
   const status =
@@ -86,8 +84,9 @@ function normalizeOpenCodeActivity(part: Record<string, unknown>): ToolSegment {
           : "running";
   const id = stringValue(part.callID || part.callId || part.id) || `tool-${stringValue(part.name)}`;
   return {
-    kind: "tool",
     id,
+    timestamp,
+    role: "tool",
     name: stringValue(part.name || part.tool) || "工具调用",
     status,
     ...(state.input !== undefined || part.input !== undefined

@@ -1,15 +1,9 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import {
-  appendContentSegment,
-  appendReasoningSegment,
-  transcriptMessageFor,
-  upsertPlanSegment,
-  upsertToolSegment,
-} from "../core";
+import { transcriptMessageFor, upsertPlanMessage, upsertToolMessage } from "../core";
 import type { TranscriptHistoryCollector, TranscriptPlan } from "../types";
 import { stringifyValue } from "../value";
 
-/** 把 ACP 会话更新累积到扁平 collector（segments + id/timestamp）。 */
+/** 把 ACP 会话更新累积到扁平 collector（每条消息带 id/timestamp/role）。 */
 export function collectAcpHistoryUpdate(
   collector: TranscriptHistoryCollector,
   update: SessionUpdate,
@@ -26,42 +20,42 @@ export function collectAcpHistoryUpdate(
     case "agent_message_chunk": {
       const text = acpContentText(update.content);
       if (text) {
-        const message = transcriptMessageFor(collector, "assistant", "acp-history");
-        if (message.role === "assistant") appendContentSegment(message, text);
+        const message = transcriptMessageFor(collector, "content", "acp-history");
+        if (message.role === "content") message.content += text;
       }
       break;
     }
     case "agent_thought_chunk": {
       const text = acpContentText(update.content);
       if (text) {
-        const message = transcriptMessageFor(collector, "assistant", "acp-history");
-        if (message.role === "assistant") appendReasoningSegment(message, text);
+        const message = transcriptMessageFor(collector, "reasoning", "acp-history");
+        if (message.role === "reasoning") message.content += text;
       }
       break;
     }
     case "tool_call":
     case "tool_call_update": {
-      const message = transcriptMessageFor(collector, "assistant", "acp-history");
-      if (message.role === "assistant") {
-        const activity = normalizeAcpActivity(update);
-        upsertToolSegment(message, {
-          kind: "tool",
-          id: activity.id,
-          name: activity.name,
-          status: activity.status,
-          ...(activity.input !== undefined ? { input: activity.input } : {}),
-          ...(activity.output !== undefined ? { output: activity.output } : {}),
-          ...(activity.error !== undefined ? { error: activity.error } : {}),
-        });
-      }
+      const activity = normalizeAcpActivity(update);
+      upsertToolMessage(collector.messages, {
+        id: activity.id,
+        timestamp: Date.now(),
+        role: "tool",
+        name: activity.name,
+        status: activity.status,
+        ...(activity.input !== undefined ? { input: activity.input } : {}),
+        ...(activity.output !== undefined ? { output: activity.output } : {}),
+        ...(activity.error !== undefined ? { error: activity.error } : {}),
+      });
       break;
     }
     case "plan":
     case "plan_update":
-      const message = transcriptMessageFor(collector, "assistant", "acp-history");
-      if (message.role === "assistant") {
-        upsertPlanSegment(message, normalizeAcpPlan(update).entries ?? []);
-      }
+      upsertPlanMessage(
+        collector.messages,
+        "acp-plan",
+        Date.now(),
+        normalizeAcpPlan(update).entries ?? [],
+      );
       break;
     default:
       break;

@@ -27,8 +27,6 @@ import { defaultWorkspaceDir } from "./attachments";
 import { createTranscriptCollector } from "./transcript/core";
 import { writeTranscriptCustomEvent } from "./transcript/stream";
 import { writeNativeEvent } from "./nativeEvents";
-import { flattenHistory } from "@cc-heart/open-chat-types";
-import type { HistoryRecord } from "@cc-heart/open-chat-types";
 import type { TranscriptHistoryCollector, TranscriptMessage } from "./transcript/types";
 
 export interface AcpAgentView {
@@ -50,7 +48,7 @@ export interface AcpSessionStateView {
   sessionId: string;
   configOptions: SessionConfigOption[];
   modes: NewSessionResponse["modes"];
-  history: HistoryRecord[];
+  messages: TranscriptMessage[];
   loadSupported: boolean;
   /** 该 ACP 会话当前是否正在运行（服务端 activeRuns，回合进行中为 true）。 */
   running: boolean;
@@ -794,7 +792,7 @@ function sessionStateView(
     sessionId: session.sessionId,
     configOptions: session.response.configOptions ?? [],
     modes: session.response.modes ?? null,
-    history: flattenHistory(session.history),
+    messages: session.history,
     loadSupported,
     running,
   };

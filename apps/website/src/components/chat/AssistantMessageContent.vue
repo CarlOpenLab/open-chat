@@ -6,34 +6,20 @@ import { Globe2, TriangleAlert } from "@lucide/vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
-import type { TranscriptSegment } from "@cc-heart/open-chat-types";
 import { formatWorkingElapsed } from "../../utils/chatDuration";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
-import ActivityList from "./ActivityList.vue";
 
 interface Props {
   item: BubbleItemType;
   content: string;
   markdownClassName: string;
   streaming: boolean;
-  /** 活动列表摘要行是否展开。 */
-  summaryExpanded: boolean;
-  /** 已展开的条目 id（思考 / 工具 / 计划 / 文件）。 */
-  itemExpandedIds: string[];
-  /** 整个回合的耗时（用于分割线"用时 Xs"）。 */
-  turnDurationMs?: number;
-  /** 思考阶段的耗时（用于"思考用时 Xs"）。 */
-  reasoningDurationMs?: number;
   /** 回合开始时间戳（用于底部"工作中 · Xs"跳动）。 */
   startedAtMs?: number;
   searchResults: WebSearchSourceItem[];
 }
 
 const props = defineProps<Props>();
-const emit = defineEmits<{
-  (e: "update:summaryExpanded", expanded: boolean): void;
-  (e: "update:itemExpandedIds", ids: string[]): void;
-}>();
 
 const markdownComponents: Record<string, Component> = {
   code: MarkdownCodeRenderer,
@@ -44,18 +30,6 @@ const markdownStreaming = computed(() => ({
   enableAnimation: props.streaming,
   tail: false,
 }));
-
-const segments = computed<TranscriptSegment[]>(() => {
-  const value = props.item.extraInfo?.segments;
-  return Array.isArray(value) ? (value as TranscriptSegment[]) : [];
-});
-const reasoningDone = computed(() => props.item.extraInfo?.reasoningDone === true);
-/** 活动列表只承载思考/工具/计划/文件等"活动"，正文由下方 XMarkdown 单独渲染。 */
-const activitySegments = computed(() =>
-  segments.value.filter((segment) => segment.kind !== "content"),
-);
-
-const hasActivities = computed(() => activitySegments.value.length > 0);
 
 /** 底部"工作中 · Xs"跳动计时。 */
 const nowMs = ref(Date.now());
@@ -114,19 +88,6 @@ const onFaviconError = (url: string) => {
         <span>{{ notice }}</span>
       </span>
     </div>
-
-    <!-- 活动摘要行 + 可展开列表：默认折叠为"已执行：N 次命令，M 次思考"，点击展开 -->
-    <ActivityList
-      v-if="hasActivities"
-      :segments="activitySegments"
-      :streaming="streaming"
-      :reasoning-done="reasoningDone"
-      :summary-expanded="summaryExpanded"
-      :item-expanded-ids="itemExpandedIds"
-      :reasoning-duration-ms="reasoningDurationMs"
-      @update:summary-expanded="emit('update:summaryExpanded', $event)"
-      @update:item-expanded-ids="emit('update:itemExpandedIds', $event)"
-    />
 
     <!-- 正文始终单独渲染 -->
     <XMarkdown

@@ -1,26 +1,25 @@
 // transcript/adapters/sessionEvents.ts — 会话事件日志 → 规范历史
 //
 // 把会话事件日志（每行一个 JSON 事件，已解析的行数组）还原为 open-chat 扁平规范历史
-// TranscriptMessage[]（segments + id/timestamp），供历史加载 / 渲染 / 续聊使用。
+// TranscriptMessage[]（每条消息带 id/timestamp/role），供历史加载 / 渲染 / 续聊使用。
 // 与 sessionEvents.ts 的合成器互为逆向。
 //
 // 还原规则：
 //   - user/message → user 消息（text 块拼接）；
-//   - assistant/message → assistant 消息（text → content 段、reasoning → reasoning 段、
-//     tool-call 块 → tool 段）；
+//   - assistant/message → 平铺为 reasoning / content / tool 消息；
 //   - tool/call 事件补充 tool-call 块缺失的 name/arguments（部分源只写块不带参数）；
-//   - tool/result → 找到最近的 assistant 消息，按 toolCallId upsert 对应 tool 段
-//     的 output / status / error（与 claude.ts / pi.ts 相同的 activity-upsert 纪律）；
+//   - tool/result → 按 toolCallId upsert 对应 tool 消息的 output / status / error
+//     （与 claude.ts / pi.ts 相同的 activity-upsert 纪律）；
 //   - 其余事件（turn/start、step/start、session/title 等）不进入历史。
 
 import { randomUUID } from "node:crypto";
 import {
-  appendContentSegment,
-  appendReasoningSegment,
+  appendContentMessage,
+  appendReasoningMessage,
   normalizeTranscriptHistory,
-  upsertToolSegment,
+  upsertToolMessage,
 } from "../core";
-import type { AssistantMessage, ToolSegment, TranscriptMessage, UserMessage } from "../types";
+import type { ToolMessage, TranscriptMessage, UserMessage } from "../types";
 import { asRecord, contentText, extractTimestamp, stringValue } from "../value";
 
 /** 把 arguments JSON 字符串解析回 input 对象（非 JSON / 空串返回原字符串）。 */
@@ -96,29 +95,23 @@ export function convertSessionEventsHistory(
     const toolCalls = blocks
       .map(asRecord)
       .filter((block) => block && stringValue(block.type) === "tool-call")
-      .map((block) => normalizeToolCall(block!, callById));
+      .map((block) => normalizeToolCall(block!, callById, timestamp));
     if (!text && !reasoning && !toolCalls.length) continue;
-    const assistant: AssistantMessage = {
-      id: stringValue(message?.id) || randomUUID(),
-      timestamp,
-      role: "assistant",
-      segments: [],
-    };
+    const baseId = stringValue(message?.id) || randomUUID();
     for (const blockValue of blocks) {
       const block = asRecord(blockValue);
       if (!block) continue;
       const blockType = stringValue(block.type);
       if (blockType === "reasoning") {
         const blockText = stringValue(block.text) || stringValue(block.thinking);
-        if (blockText) appendReasoningSegment(assistant, blockText);
+        if (blockText) appendReasoningMessage(history, `${baseId}:r`, timestamp, blockText);
       } else if (blockType === "tool-call") {
-        upsertToolSegment(assistant, normalizeToolCall(block, callById));
+        upsertToolMessage(history, normalizeToolCall(block, callById, timestamp));
       } else if (blockType === "text") {
         const blockText = stringValue(block.text);
-        if (blockText) appendContentSegment(assistant, blockText);
+        if (blockText) appendContentMessage(history, `${baseId}:c`, timestamp, blockText);
       }
     }
-    history.push(assistant);
   }
 
   return normalizeTranscriptHistory(history);
@@ -127,12 +120,14 @@ export function convertSessionEventsHistory(
 function normalizeToolCall(
   block: Record<string, unknown>,
   callById: Map<string, { name: string; argumentsValue: unknown }>,
-): ToolSegment {
+  timestamp: number,
+): ToolMessage {
   const id = stringValue(block.id);
   const known = id ? callById.get(id) : undefined;
   return {
-    kind: "tool",
     id: id || randomUUID(),
+    timestamp,
+    role: "tool",
     name: stringValue(block.name) || known?.name || "工具调用",
     status: "running",
     ...(block.arguments !== undefined || known?.argumentsValue !== undefined
@@ -141,7 +136,7 @@ function normalizeToolCall(
   };
 }
 
-/** 把单个 tool/result 事件按 toolCallId 挂到最近的 assistant 消息（activity-upsert）。 */
+/** 把单个 tool/result 事件按 toolCallId 挂到最近的 tool 消息（activity-upsert）。 */
 function applyToolResults(history: TranscriptMessage[], data: Record<string, unknown>): void {
   const message = asRecord(data.message);
   const blocks = Array.isArray(message?.content) ? message.content : [];
@@ -152,16 +147,14 @@ function applyToolResults(history: TranscriptMessage[], data: Record<string, unk
     if (!toolCallId) continue;
     const error = block.isError === true;
     const output = contentText(block.content);
-    const assistant = [...history].reverse().find((item) => item.role === "assistant");
-    if (!assistant || assistant.role !== "assistant") continue;
-    const existing = assistant.segments.find(
-      (segment): segment is Extract<ToolSegment, { kind: "tool" }> =>
-        segment.kind === "tool" && segment.id === toolCallId,
-    );
+    const existing = [...history]
+      .reverse()
+      .find((item): item is ToolMessage => item.role === "tool" && item.id === toolCallId);
     const name = existing?.name || "工具调用";
-    upsertToolSegment(assistant, {
-      kind: "tool",
+    upsertToolMessage(history, {
       id: toolCallId,
+      timestamp: existing?.timestamp ?? Date.now(),
+      role: "tool",
       name,
       status: error ? "error" : "completed",
       ...(output ? { output } : {}),

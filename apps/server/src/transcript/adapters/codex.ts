@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { normalizeTranscriptHistory } from "../core";
+import {
+  appendContentMessage,
+  appendReasoningMessage,
+  normalizeTranscriptHistory,
+  upsertFileChangeMessage,
+  upsertPlanMessage,
+  upsertToolMessage,
+} from "../core";
 import type {
-  AssistantMessage,
+  ToolMessage,
   TranscriptActivity,
   TranscriptAttachment,
   TranscriptMessage,
-  TranscriptSegment,
 } from "../types";
 import { asRecord, contentText, extractTimestamp, stringifyValue, stringValue } from "../value";
 
@@ -30,8 +36,8 @@ export interface CodexConvertOptions {
 /**
  * 把 codex thread 的 turns 转换为扁平消息模型：
  * - 每条消息带 `id` + `timestamp`；
- * - assistant 消息只有 `segments`（reasoning/content/tool/fileChange/plan），
- *   正文由前端合并 content 段得出，不再有平行的 content/reasoningContent/toolCalls/timeline。
+ * - assistant 输出平铺为独立消息（reasoning / content / tool / plan / fileChange），
+ *   不再聚合进 assistant segments。
  */
 export function convertCodexThreadHistory(
   turns: unknown[],
@@ -43,17 +49,7 @@ export function convertCodexThreadHistory(
     const turn = asRecord(turnValue);
     const items = Array.isArray(turn?.items) ? turn.items : [];
     const turnTimestamp = extractTimestamp(turn?.timestamp);
-    let assistant: AssistantMessage | undefined;
     const unphasedMessages: Array<{ id: string; text: string; timestamp: number }> = [];
-    const ensureAssistant = (id: string, timestamp?: number) => {
-      assistant ??= {
-        id: `${id}:assistant`,
-        timestamp: timestamp ?? turnTimestamp,
-        role: "assistant",
-        segments: [],
-      };
-      return assistant;
-    };
 
     for (const itemValue of items) {
       const item = asRecord(itemValue);
@@ -90,8 +86,7 @@ export function convertCodexThreadHistory(
         if (!text) continue;
         const phase = stringValue(item.phase);
         if (phase === "commentary" || phase === "final_answer") {
-          const message = ensureAssistant(id, itemTimestamp);
-          appendSegment(message, { kind: "content", content: text });
+          appendContentMessage(history, id, itemTimestamp, text);
         } else {
           unphasedMessages.push({ id, text, timestamp: itemTimestamp });
         }
@@ -101,28 +96,27 @@ export function convertCodexThreadHistory(
       if (type === "reasoning") {
         const reasoning = contentText(item.summary) || contentText(item.content);
         if (!reasoning) continue;
-        const message = ensureAssistant(id, itemTimestamp);
-        appendSegment(message, { kind: "reasoning", content: reasoning });
+        appendReasoningMessage(history, id, itemTimestamp, reasoning);
         continue;
       }
 
       if (type === "plan") {
         const text = stringValue(item.text) || contentText(item.content);
         if (!text) continue;
-        const message = ensureAssistant(id, itemTimestamp);
-        upsertPlanSegment(message, [{ content: text, status: "completed" }]);
+        upsertPlanMessage(history, id, itemTimestamp, [{ content: text, status: "completed" }]);
         continue;
       }
 
       if (ACTIVITY_TYPES.has(type)) {
-        const message = ensureAssistant(id, itemTimestamp);
         const activity = normalizeCodexActivity(item, true);
         const isFileChange = activity.kind === "fileChange" || activity.name === "fileChange";
         if (isFileChange) {
-          // 文件修改由 fileChange 段表达（P1：tool 段不带 fileChanges）。
+          // 文件修改由 fileChange 消息表达（P1：tool 消息不带 fileChanges）。
           for (const change of extractFileChanges(item)) {
-            appendSegment(message, {
-              kind: "fileChange",
+            upsertFileChangeMessage(history, {
+              id: `fc:${change.path}`,
+              timestamp: itemTimestamp,
+              role: "fileChange",
               path: change.path,
               ...(change.additions !== undefined ? { additions: change.additions } : {}),
               ...(change.deletions !== undefined ? { deletions: change.deletions } : {}),
@@ -130,63 +124,27 @@ export function convertCodexThreadHistory(
             });
           }
         } else {
-          appendSegment(message, activityToToolSegment(activity));
+          upsertToolMessage(history, activityToToolMessage(activity, itemTimestamp));
         }
       }
     }
 
-    if (unphasedMessages.length) {
-      unphasedMessages.forEach(({ id, text, timestamp }) => {
-        const message = ensureAssistant(id, timestamp);
-        appendSegment(message, { kind: "content", content: text });
-      });
-    }
-
-    if (assistant && hasAssistantSegments(assistant)) history.push(assistant);
+    unphasedMessages.forEach(({ id, text, timestamp }) => {
+      appendContentMessage(history, id, timestamp, text);
+    });
   }
 
   return normalizeTranscriptHistory(history);
 }
 
-/** 相邻 content/reasoning 段合并，其余按序追加。 */
-function appendSegment(message: AssistantMessage, segment: TranscriptSegment): void {
-  const segments = message.segments;
-  const previous = segments.at(-1);
-  if (
-    (segment.kind === "content" || segment.kind === "reasoning") &&
-    previous?.kind === segment.kind
-  ) {
-    const merged =
-      previous.kind === "content" && segment.kind === "content"
-        ? `${previous.content}\n\n${segment.content}`
-        : `${previous.content}${segment.content}`;
-    segments[segments.length - 1] = { ...previous, content: merged } as TranscriptSegment;
-  } else {
-    segments.push(segment);
-  }
-}
-
-/** plan 段唯一，后到者覆盖。 */
-function upsertPlanSegment(
-  message: AssistantMessage,
-  entries: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>,
-): void {
-  const index = message.segments.findIndex((segment) => segment.kind === "plan");
-  const segment: TranscriptSegment = { kind: "plan", entries };
-  if (index === -1) message.segments.push(segment);
-  else message.segments[index] = segment;
-}
-
-function hasAssistantSegments(message: AssistantMessage): boolean {
-  return message.segments.length > 0;
-}
-
-function activityToToolSegment(
+function activityToToolMessage(
   activity: ReturnType<typeof normalizeCodexActivity>,
-): TranscriptSegment {
+  timestamp: number,
+): ToolMessage {
   return {
-    kind: "tool",
     id: activity.id,
+    timestamp,
+    role: "tool",
     name: activity.name,
     status: activity.status,
     ...(activity.kind ? { providerKind: activity.kind } : {}),

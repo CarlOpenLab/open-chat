@@ -1,5 +1,5 @@
 import { extractWorkspaceFromContent } from "@cc-heart/open-chat-types";
-import type { TranscriptSegment } from "@cc-heart/open-chat-types";
+import type { TranscriptMessage } from "@cc-heart/open-chat-types";
 
 type WorkspaceFileStatus = "streaming" | "complete";
 
@@ -98,8 +98,8 @@ interface FileWorkspaceConversationItem {
   id?: string | number;
   role: string;
   content: unknown;
-  /** 扁平活动段（含 workspace 段，历史路径由 segmentHistory 提取）。 */
-  segments?: TranscriptSegment[];
+  /** 扁平消息片段（含 workspace 消息）。 */
+  messages?: TranscriptMessage[];
 }
 
 interface FileWorkspaceState {
@@ -122,15 +122,15 @@ export function collectFileWorkspaceState(
   let pending = false;
 
   for (const item of items) {
-    if (item.role !== "assistant") continue;
-    const segments = item.segments ?? [];
-    const workspaceSegments = segments.filter(
-      (segment): segment is Extract<TranscriptSegment, { kind: "workspace" }> =>
-        segment.kind === "workspace",
+    if (item.role === "user") continue;
+    const messages = item.messages ?? [];
+    const workspaceMessages = messages.filter(
+      (message): message is Extract<TranscriptMessage, { role: "workspace" }> =>
+        message.role === "workspace",
     );
-    if (workspaceSegments.length) {
+    if (workspaceMessages.length) {
       hasWorkspace = true;
-      for (const workspace of workspaceSegments) {
+      for (const workspace of workspaceMessages) {
         if (workspace.hasPendingBlock === true) pending = true;
         errors.push(...workspace.errors);
         for (const file of workspace.files) {

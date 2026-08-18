@@ -6,10 +6,15 @@ import type {
   XRequestConfigOptions,
 } from "@antdv-next/x-sdk";
 import { DeepSeekChatProvider } from "@antdv-next/x-sdk";
-import { activityToSegments, applySegmentDelta } from "@cc-heart/open-chat-types";
-import type { TranscriptSegment } from "@cc-heart/open-chat-types";
+import {
+  activityToMessages,
+  applyMessageDelta,
+  mergeContentMessages,
+} from "@cc-heart/open-chat-types";
+import type { TranscriptMessage } from "@cc-heart/open-chat-types";
 import type { WebSearchSourceItem } from "./ai";
 import type { TranscriptActivity, TranscriptPlan } from "./transcript";
+import type { ChatModelMessage } from "./transcript";
 
 /** Transient placeholder shown in the assistant bubble while the gateway runs
  * a web search round. Replaced by real text/reasoning as soon as it arrives. */
@@ -143,7 +148,7 @@ export class OpenChatProvider extends DeepSeekChatProvider<
     // useXChat calls transformMessage with no chunk when the stream succeeds.
     // Preserve the accumulated message, including a search marker when the
     // model finished without emitting answer text; also finalize any unclosed
-    // <think> block so the Think panel stops showing as "思考中".
+    // thinking block so the Think panel stops showing as "思考中".
     if (chunk === undefined) {
       const origin = info.originMessage ?? { content: "", role: "assistant" };
       const content = typeof origin.content === "string" ? origin.content : "";
@@ -162,7 +167,6 @@ export class OpenChatProvider extends DeepSeekChatProvider<
 
     // Native events normally carry the `native_event` SSE name. Accept the
     // normalized event payload when an intermediary drops the SSE event name.
-    // This keeps Codex/ACP output renderable even when only `data:` survives.
     const nativeType = typeof parsedChunk?.type === "string" ? parsedChunk.type : "";
     const isNativeEvent =
       chunk?.event === "native_event" ||
@@ -180,6 +184,18 @@ export class OpenChatProvider extends DeepSeekChatProvider<
         );
       } catch (err) {
         console.error("Failed to parse native CLI event:", err);
+      }
+      return info.originMessage ?? { role: "assistant", content: "" };
+    }
+
+    // 服务端平铺消息帧（全量 TranscriptMessage）：按 id/role upsert 进 fragments。
+    if (chunk?.event === "transcript_message" && parsedChunk) {
+      try {
+        const fragment = parsedChunk as unknown as TranscriptMessage;
+        const origin = info.originMessage ?? { role: "assistant", content: "", fragments: [] };
+        return applyMessageFragment(origin, fragment);
+      } catch (err) {
+        console.error("Failed to parse transcript_message event:", err);
       }
       return info.originMessage ?? { role: "assistant", content: "" };
     }
@@ -257,7 +273,6 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       } catch (err) {
         console.error("Failed to parse web_search event:", err);
       }
-      // Show a searching indicator while the model consumes the results.
       const origin = info.originMessage;
       const originContent = typeof origin?.content === "string" ? origin.content : "";
       return preserveMessageMeta(origin, {
@@ -281,12 +296,7 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       return transformedContent ? preserveMessageMeta(origin, transformed) : origin;
     }
 
-    // 直接解析当前 chunk 的 delta，content / reasoning_content 各自精确累积，
-    // 避免经 <think> 往返重建导致 chunk 边界换行被 trim / 无分隔拼接丢失。
-    const originContent = getMessageText(origin?.content);
-    const originReasoning =
-      typeof origin?.reasoningContent === "string" ? origin.reasoningContent : "";
-
+    // 上游 OpenAI 增量：content / reasoning_content 各自精确累积为独立片段。
     let deltaContent = "";
     let deltaReasoning = "";
     try {
@@ -307,94 +317,67 @@ export class OpenChatProvider extends DeepSeekChatProvider<
       console.error("Failed to parse stream chunk:", err);
     }
 
-    const accumulatedContent = `${originContent}${deltaContent}`;
-    const accumulatedReasoning = `${originReasoning}${deltaReasoning}`;
-    // 兼容模型直接在 content 里输出  thinking 标签（DeepSeek 原生风格）。
-    const split = splitReasoningContent(accumulatedContent);
-    const originSegments = Array.isArray(
-      (origin as (XModelMessage & { segments?: TranscriptSegment[] }) | undefined)?.segments,
-    )
-      ? (origin as XModelMessage & { segments: TranscriptSegment[] }).segments
-      : [];
-    const nextSegments: TranscriptSegment[] = split.hasThink
-      ? split.reasoningContent
-        ? [
-            ...originSegments.filter((segment) => segment.kind !== "reasoning"),
-            { kind: "reasoning", content: split.reasoningContent },
-          ]
-        : originSegments
-      : (() => {
-          let segments = originSegments;
-          if (deltaReasoning) {
-            segments = applySegmentDelta(segments, { kind: "reasoning", content: deltaReasoning });
-          }
-          if (deltaContent) {
-            segments = applySegmentDelta(segments, { kind: "content", content: deltaContent });
-          }
-          return segments;
-        })();
-    const next: XModelMessage = {
-      role: origin?.role || "assistant",
-      content: split.hasThink ? split.answerContent : accumulatedContent,
-      ...(split.reasoningContent || accumulatedReasoning
-        ? { reasoningContent: split.reasoningContent || accumulatedReasoning }
-        : {}),
-      ...(nextSegments.length ? { segments: nextSegments } : {}),
-    };
-    // 思考结束判定：<think> 闭合，或思考结束后开始输出正文。
-    if (split.hasThink) {
-      next.reasoningDone = split.reasoningDone;
-    } else if (deltaContent && accumulatedReasoning) {
-      next.reasoningDone = true;
+    const base = origin ?? { role: "assistant", content: "", fragments: [] };
+    let fragments = getFragments(base);
+    if (deltaReasoning) {
+      fragments = applyMessageDelta(fragments, {
+        id: `${base.id ?? "assistant"}-r`,
+        timestamp: base.timestamp ?? Date.now(),
+        role: "reasoning",
+        content: deltaReasoning,
+      });
     }
-    return preserveMessageMeta(origin, next);
+    if (deltaContent) {
+      fragments = applyMessageDelta(fragments, {
+        id: `${base.id ?? "assistant"}-c`,
+        timestamp: base.timestamp ?? Date.now(),
+        role: "content",
+        content: deltaContent,
+      });
+    }
+    const next: XModelMessage & { fragments: TranscriptMessage[]; reasoningDone?: boolean } = {
+      ...base,
+      role: "assistant",
+      content: mergeContentMessages(fragments),
+      fragments,
+    };
+    if (deltaContent && deltaReasoning) next.reasoningDone = true;
+    return preserveMessageMeta(base, next);
   }
 
   private applyNativeEvent(origin: XModelMessage, event: NativeCliEvent): XModelMessage {
-    const base = origin ?? { role: "assistant", content: "" };
-    const segments = Array.isArray(
-      (base as XModelMessage & { segments?: TranscriptSegment[] }).segments,
-    )
-      ? (base as XModelMessage & { segments: TranscriptSegment[] }).segments
-      : [];
+    const base = origin ?? { role: "assistant", content: "", fragments: [] };
+    const fragments = getFragments(base);
     switch (event.type) {
-      case "content.delta": {
-        const content = `${getMessageText(base.content)}${event.content}`;
-        return preserveMessageMeta(base, {
-          ...base,
-          role: "assistant",
-          content,
-          segments: applySegmentDelta(segments, { kind: "content", content: event.content }),
-          ...(base.reasoningContent ? { reasoningDone: true } : {}),
+      case "content.delta":
+        return applyMessageFragment(base, {
+          id: `${base.id ?? "assistant"}-c`,
+          timestamp: base.timestamp ?? Date.now(),
+          role: "content",
+          content: event.content,
         });
-      }
-      case "reasoning.delta": {
-        const reasoningContent = `${base.reasoningContent || ""}${event.content}`;
-        return preserveMessageMeta(base, {
-          ...base,
-          role: "assistant",
-          reasoningContent,
-          reasoningDone: false,
-          segments: applySegmentDelta(segments, { kind: "reasoning", content: event.content }),
+      case "reasoning.delta":
+        return applyMessageFragment(base, {
+          id: `${base.id ?? "assistant"}-r`,
+          timestamp: base.timestamp ?? Date.now(),
+          role: "reasoning",
+          content: event.content,
         });
-      }
-      case "activity.upsert":
+      case "activity.upsert": {
         this.onToolCall?.(event.activity);
-        return preserveMessageMeta(base, {
-          ...base,
-          role: "assistant",
-          segments: applyActivitySegments(segments, event.activity),
-          ...(base.reasoningContent ? { reasoningDone: true } : {}),
-        });
+        const messages = activityToMessages(event.activity);
+        const next = messages.reduce<TranscriptMessage[]>(
+          (acc, message) => applyMessageDelta(acc, message),
+          fragments,
+        );
+        return withFragments(base, next);
+      }
       case "plan.updated":
-        return preserveMessageMeta(base, {
-          ...base,
-          role: "assistant",
-          segments: applySegmentDelta(segments, {
-            kind: "plan",
-            entries: event.plan.entries ?? [],
-          }),
-          ...(base.reasoningContent ? { reasoningDone: true } : {}),
+        return applyMessageFragment(base, {
+          id: `${base.id ?? "assistant"}-plan`,
+          timestamp: base.timestamp ?? Date.now(),
+          role: "plan",
+          entries: event.plan.entries ?? [],
         });
       case "turn.completed":
         return preserveMessageMeta(base, {
@@ -406,8 +389,6 @@ export class OpenChatProvider extends DeepSeekChatProvider<
         this.onChatError?.(event.message);
         return preserveMessageMeta(base, { ...base, role: "assistant", chatError: event.message });
       default:
-        // Metadata events can arrive between text deltas. Keep the current
-        // message instead of returning undefined and breaking the chat store.
         return preserveMessageMeta(base, base);
     }
   }
@@ -437,6 +418,30 @@ export class OpenChatProvider extends DeepSeekChatProvider<
         : messages,
     };
   }
+}
+
+/** 取消息上的扁平片段列表（无则空数组）。 */
+function getFragments(origin: XModelMessage | undefined): TranscriptMessage[] {
+  const chat = origin as ChatModelMessage | undefined;
+  return Array.isArray(chat?.fragments) ? chat.fragments : [];
+}
+
+/** 把一条扁平片段合并进消息 fragments，并刷新 content。 */
+function applyMessageFragment(origin: XModelMessage, fragment: TranscriptMessage): XModelMessage {
+  const base = origin ?? { role: "assistant", content: "" };
+  const next = applyMessageDelta(getFragments(base), fragment);
+  return withFragments(base, next);
+}
+
+/** 用新 fragments 重建 assistant 消息（合并 content 为正文，保留 meta）。 */
+function withFragments(origin: XModelMessage, fragments: TranscriptMessage[]): XModelMessage {
+  const base = origin ?? { role: "assistant", content: "" };
+  return preserveMessageMeta(base, {
+    ...base,
+    role: "assistant",
+    content: mergeContentMessages(fragments),
+    fragments,
+  });
 }
 
 /** 把消息上累积的工具调用 / 错误 / 提示 / 权限字段回接到转换后的消息上（super 只返回 content/role）。 */
@@ -527,22 +532,11 @@ function stripLocalMessageFields(message: XModelMessage): XModelMessage {
   delete next.chatNotices;
   delete next.pendingPermissions;
   delete next.openChatLocalOnly;
-  delete (next as Record<string, unknown>).segments;
+  delete (next as Record<string, unknown>).fragments;
   return next;
 }
 
-/** 把 native activity 事件映射为 segments（P1：tool 不带 fileChanges，文件修改用 fileChange 段）。 */
-function applyActivitySegments(
-  segments: TranscriptSegment[],
-  activity: TranscriptActivity,
-): TranscriptSegment[] {
-  return activityToSegments(activity).reduce<TranscriptSegment[]>(
-    (acc, segment) => applySegmentDelta(acc, segment),
-    segments,
-  );
-}
-
-/** 流结束时把未闭合的 `<think>` 标记为完成并补上闭合标签。 */
+/** 流结束时把未闭合的 thinking 标记为完成并补上闭合标签。 */
 function closeOpenThink(content: string): string {
   if (!/<think\b/i.test(content)) return content;
   const openMatch = content.match(/<think(?:\s+status\s*=\s*["']?([^"'>\s]+)["']?)?\s*>/i);
@@ -553,5 +547,5 @@ function closeOpenThink(content: string): string {
   if (status === "done" || hasCloseTag) {
     return content;
   }
-  return content.replace(/<think([^>]*)>/i, `<think$1 status="done">`) + "</think>";
+  return content.replace(/<think([^>]*)>/i, `<think$1 status="done">`) + " response";
 }

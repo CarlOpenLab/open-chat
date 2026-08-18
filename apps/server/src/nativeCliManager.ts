@@ -15,8 +15,6 @@ import { convertClaudeHistory } from "./transcript/adapters/claude";
 import { convertCodexThreadHistory, normalizeCodexActivity } from "./transcript/adapters/codex";
 import { readCodexRolloutTurns } from "./codexRollout";
 import { convertPiHistory } from "./transcript/adapters/pi";
-import { flattenHistory } from "@cc-heart/open-chat-types";
-import type { HistoryRecord } from "@cc-heart/open-chat-types";
 import type { TranscriptMessage, TranscriptAttachment } from "./transcript/types";
 import { writeTranscriptCustomEvent } from "./transcript/stream";
 import { writeNativeEvent } from "./nativeEvents";
@@ -43,7 +41,7 @@ export interface NativeSessionStateView {
   sessionId: string;
   configOptions: SessionConfigOption[];
   modes: null;
-  history?: HistoryRecord[];
+  messages?: TranscriptMessage[];
 }
 
 interface NativeProviderSessionView {
@@ -1976,7 +1974,7 @@ function sessionView(
     sessionId: session.sessionId,
     configOptions,
     modes: null,
-    ...(history.length > 0 ? { history: flattenHistory(history) } : {}),
+    ...(history.length > 0 ? { messages: history } : {}),
   };
 }
 

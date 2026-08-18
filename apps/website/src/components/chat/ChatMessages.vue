@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import type { BubbleItemType, BubbleListProps, ItemType } from "@antdv-next/x";
-import { Actions, BubbleList } from "@antdv-next/x";
+import type { BubbleItemType, ItemType } from "@antdv-next/x";
+import { Actions, Bubble } from "@antdv-next/x";
 import { ArrowDown, Copy, RotateCcw } from "@lucide/vue";
 import { computed, h, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import type { WebSearchSourceItem, UploadedAttachment } from "../../services/ai";
 import { attachmentUrl } from "../../services/ai";
-import type { TranscriptSegment } from "@cc-heart/open-chat-types";
+import type { TranscriptMessage } from "@cc-heart/open-chat-types";
 import AssistantMessageContent from "./AssistantMessageContent.vue";
+import ActivityList from "./ActivityList.vue";
 import EmptyState from "./EmptyState.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import { Image } from "antdv-next";
-import { javascript } from "@codemirror/lang-javascript";
 
 interface Props {
   showWelcome: boolean;
@@ -67,16 +67,9 @@ const updateScrollState = () => {
 const bindScrollBox = async () => {
   await nextTick();
   if (scrollBox) scrollBox.removeEventListener("scroll", updateScrollState);
-  scrollBox =
-    messagesRoot.value?.querySelector<HTMLElement>(".antd-bubble-list-scroll-box") ?? null;
+  scrollBox = messagesRoot.value?.querySelector<HTMLElement>(".chat-scroll-box") ?? null;
   scrollBox?.addEventListener("scroll", updateScrollState, { passive: true });
   updateScrollState();
-};
-
-const scrollToBottom = () => {
-  if (!scrollBox) return;
-  scrollBox.scrollTo({ top: scrollBox.scrollHeight, behavior: "smooth" });
-  showScrollToBottom.value = false;
 };
 
 /** 展开/收起活动详情会改变气泡高度，动画期间保持当前滚动锚点。 */
@@ -129,51 +122,45 @@ const lastStreamingMap = ref<Record<string, boolean>>({});
 const isStreamingStatus = (status: unknown): boolean =>
   status === "loading" || status === "updating";
 
-const roleConfig: BubbleListProps["role"] = {
-  // Assistant content is already structured (markdown, thinking, tools). Removing
-  // the extra filled container gives those blocks room to breathe and keeps the
-  // user's message visually distinct.
-  assistant: {
-    placement: "start",
-    variant: "borderless",
-    class: "assistant-bubble",
-  },
-  user: {
-    placement: "end",
-    variant: "filled",
-    shape: "round",
-    class: "user-bubble",
-  },
-};
-
-/** 消息里的扁平活动段（assistant）。 */
-const messageSegments = (item: BubbleItemType): TranscriptSegment[] => {
-  const value = item.extraInfo?.segments;
-  return Array.isArray(value) ? (value as TranscriptSegment[]) : [];
-};
+/** 气泡对应的扁平消息片段（assistant）。 */
+const messageFragment = (item: BubbleItemType): TranscriptMessage | undefined =>
+  item.extraInfo?.message as TranscriptMessage | undefined;
 
 /**
- * 丢弃完全空白的 assistant 消息（无正文、无活动、无错误/提示）。
+ * 丢弃完全空白的 assistant 气泡（无正文、无活动、无错误/提示）。
  * 内容清洗（think/workspace 剥离）已上移到数据层，这里不再做字符串解析。
  */
 const displayItems = computed<BubbleItemType[]>(() =>
   props.bubbleItems.filter((item) => {
     if (item.role !== "assistant" || isStreamingStatus(item.status)) return true;
     const hasContent = typeof item.content === "string" && item.content.trim().length > 0;
-    const hasSegments = messageSegments(item).length > 0;
+    const hasFragment = Boolean(messageFragment(item));
     const hasMeta =
       Boolean(item.extraInfo?.chatError) ||
       (Array.isArray(item.extraInfo?.chatNotices) && item.extraInfo.chatNotices.length > 0);
-    return hasContent || hasSegments || hasMeta;
+    return hasContent || hasFragment || hasMeta;
   }),
 );
 
 const lastAssistantMessageKey = computed(
-  () => [...displayItems.value].reverse().find((item) => item.role === "assistant")?.key,
+  () =>
+    [...displayItems.value]
+      .reverse()
+      .find((item) => item.role === "assistant" && item.extraInfo?.messageRole === "content")?.key,
 );
-const autoScroll = computed(() =>
-  displayItems.value.some((item) => isStreamingStatus(item.status)),
-);
+
+/** 流式中保持吸底：有消息仍在进行时，随内容增长滚动到底部。 */
+const scrollToBottom = () => {
+  if (!scrollBox) return;
+  scrollBox.scrollTo({ top: scrollBox.scrollHeight, behavior: "smooth" });
+  showScrollToBottom.value = false;
+};
+const autoScrollOnStream = () => {
+  if (!scrollBox) return;
+  if (displayItems.value.some((item) => isStreamingStatus(item.status))) {
+    scrollBox.scrollTo({ top: scrollBox.scrollHeight, behavior: "auto" });
+  }
+};
 
 const getThinkKey = (messageId: string | number) =>
   `${props.conversationKey || "__draft__"}::${String(messageId)}`;
@@ -194,7 +181,7 @@ const isSummaryExpanded = (messageId: string | number, streaming: boolean): bool
 const isItemExpandedIds = (item: BubbleItemType): string[] => {
   const key = getThinkKey(item.key);
   const saved = itemExpandedMap.value[key] ?? [];
-  const hasReasoning = messageSegments(item).some((segment) => segment.kind === "reasoning");
+  const hasReasoning = messageFragment(item)?.role === "reasoning";
   const reasoningLive =
     isStreamingStatus(item.status) &&
     hasReasoning &&
@@ -282,7 +269,7 @@ watch(
       }
 
       // 思考计时。
-      const hasReasoning = messageSegments(item).some((segment) => segment.kind === "reasoning");
+      const hasReasoning = messageFragment(item)?.role === "reasoning";
       if (hasReasoning) {
         if (!reasoningStartMap.value[key]) reasoningStartMap.value[key] = now;
         if (item.extraInfo?.reasoningDone === true && !reasoningDurationMap.value[key]) {
@@ -303,6 +290,7 @@ watch(
 
     summaryExpandedMap.value = nextSummary;
     void bindScrollBox();
+    autoScrollOnStream();
   },
   { immediate: true },
 );
@@ -336,59 +324,80 @@ onBeforeUnmount(() => {
       <EmptyState />
     </section>
 
-    <!-- 转录无头像列，消息贴左/右缘渲染 -->
-    <BubbleList
-      v-else
-      class="h-full"
-      :role="roleConfig"
-      :items="displayItems"
-      :auto-scroll="autoScroll"
-    >
-      <template #contentRender="{ content, item }">
-        <AssistantMessageContent
-          v-if="item.role === 'assistant'"
-          :item="item"
-          :content="String(content)"
-          :markdown-class-name="markdownClassName"
-          :streaming="isStreamingStatus(item.status)"
-          :summary-expanded="isSummaryExpanded(item.key, isStreamingStatus(item.status))"
-          :item-expanded-ids="isItemExpandedIds(item)"
-          :turn-duration-ms="turnDurationMap[getThinkKey(item.key)]"
-          :reasoning-duration-ms="reasoningDurationMap[getThinkKey(item.key)]"
-          :started-at-ms="props.workingStartedAtMs ?? messageStartMap[getThinkKey(item.key)]"
-          :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
-          @update:summary-expanded="setSummaryExpanded(item.key, $event)"
-          @update:item-expanded-ids="setItemExpandedIds(item.key, $event)"
-        />
-        <template v-else>
-          <!-- 图片附件按 codex 展示顺序放在正文上方 -->
-          <div v-if="userMessageAttachments(item).length" class="user-attachments">
-            <div
-              v-for="att in userMessageAttachments(item)"
-              :key="att.reference"
-              class="user-attachment-link"
+    <div v-else class="chat-scroll-box h-full min-h-0 overflow-y-auto overscroll-contain">
+      <div
+        class="chat-list mx-auto flex w-full min-w-0 max-w-[min(100%,820px)] flex-col gap-2 px-[clamp(4px,1.5vw,16px)] py-6"
+      >
+        <template v-for="item in displayItems" :key="item.key">
+          <!-- 用户消息气泡（Bubble 组件） -->
+          <div v-if="item.role === 'user'" class="flex w-full justify-end">
+            <Bubble
+              class="user-bubble"
+              placement="end"
+              variant="filled"
+              shape="round"
+              :content="String(item.content ?? '')"
             >
-              <Image
-                :src="attachmentUrl(att.reference, att.name)"
-                :alt="att.name"
-                class="user-attachment-image"
+              <template #contentRender="{ content }">
+                <div v-if="userMessageAttachments(item).length" class="user-attachments">
+                  <div
+                    v-for="att in userMessageAttachments(item)"
+                    :key="att.reference"
+                    class="user-attachment-link"
+                  >
+                    <Image
+                      :src="attachmentUrl(att.reference, att.name)"
+                      :alt="att.name"
+                      class="user-attachment-image"
+                    />
+                  </div>
+                </div>
+                <span class="whitespace-pre-wrap break-words">{{ content }}</span>
+              </template>
+            </Bubble>
+          </div>
+
+          <!-- 正文气泡（assistant content → markdown） -->
+          <div
+            v-else-if="item.extraInfo?.messageRole === 'content'"
+            class="flex w-full justify-start"
+          >
+            <div class="assistant-bubble w-full min-w-0 max-w-full">
+              <AssistantMessageContent
+                :item="item"
+                :content="String(item.content ?? '')"
+                :markdown-class-name="markdownClassName"
+                :streaming="isStreamingStatus(item.status)"
+                :started-at-ms="props.workingStartedAtMs ?? messageStartMap[getThinkKey(item.key)]"
+                :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
               />
+              <div
+                v-if="item.status === 'success' && item.key === lastAssistantMessageKey"
+                class="message-actions"
+              >
+                <Actions :items="buildMessageActions(item)" />
+              </div>
             </div>
           </div>
-          <span class="whitespace-pre-wrap break-words">{{ content }}</span>
-        </template>
-      </template>
 
-      <template #footer="{ item }">
-        <template v-if="item.role === 'assistant'">
-          <Actions
-            v-if="item.status === 'success' && item.key === lastAssistantMessageKey"
-            class="message-actions"
-            :items="buildMessageActions(item)"
-          />
+          <!-- 活动行（思考/工具/计划/文件/工作区）：非气泡，平铺展示 -->
+          <div v-else class="activity-row w-full min-w-0 max-w-full">
+            <ActivityList
+              :messages="
+                item.extraInfo?.message ? [item.extraInfo.message as TranscriptMessage] : []
+              "
+              :streaming="isStreamingStatus(item.status)"
+              :reasoning-done="item.extraInfo?.reasoningDone !== false"
+              :summary-expanded="isSummaryExpanded(item.key, isStreamingStatus(item.status))"
+              :item-expanded-ids="isItemExpandedIds(item)"
+              :reasoning-duration-ms="reasoningDurationMap[getThinkKey(item.key)]"
+              @update:summary-expanded="setSummaryExpanded(item.key, $event)"
+              @update:item-expanded-ids="setItemExpandedIds(item.key, $event)"
+            />
+          </div>
         </template>
-      </template>
-    </BubbleList>
+      </div>
+    </div>
 
     <button
       v-if="!showWelcome && showScrollToBottom"
@@ -408,21 +417,46 @@ onBeforeUnmount(() => {
   animation: empty-in 360ms ease-out both;
 }
 
-.messages-wrapper :deep(.antd-bubble-list) {
-  width: 100%;
-  max-width: min(100%, 820px);
+.chat-scroll-box {
+  scrollbar-width: thin;
+  overscroll-behavior-y: contain;
+}
+
+.chat-list {
   min-width: 0;
-  margin: 0 auto;
 }
-.messages-wrapper :deep(.antd-bubble-list-scroll-box) {
-  overflow-x: hidden;
-  overscroll-behavior-x: none;
+
+.user-bubble {
+  max-width: 85%;
+  animation: message-in 260ms cubic-bezier(0.2, 0, 0, 1) both;
 }
+
+.assistant-bubble {
+  animation: message-in 260ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+.assistant-bubble :deep(.assistant-message) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.activity-row {
+  animation: activity-in 220ms ease-out both;
+}
+
+.message-actions {
+  display: flex;
+  margin-top: 4px;
+}
+.message-actions :deep(.antd-actions) {
+  justify-content: flex-end;
+}
+
 .user-attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 6px;
+  margin-bottom: 6px;
 }
 .user-attachment-link {
   display: block;
@@ -442,22 +476,7 @@ onBeforeUnmount(() => {
 .user-attachment-link:hover .user-attachment-image {
   transform: scale(1.02);
 }
-.messages-wrapper :deep(.antd-bubble-list-scroll-content) {
-  padding-inline: clamp(4px, 1.5vw, 16px);
-}
-.messages-wrapper :deep(.antd-bubble) {
-  animation: message-in 260ms cubic-bezier(0.2, 0, 0, 1) both;
-}
-.messages-wrapper :deep(.assistant-bubble .antd-bubble-body),
-.messages-wrapper :deep(.assistant-bubble .antd-bubble-content),
-.messages-wrapper :deep(.assistant-bubble .antd-bubble-content-box) {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-}
-.messages-wrapper :deep(.antd-thought-chain) {
-  animation: activity-in 220ms ease-out both;
-}
+
 .messages-wrapper :deep(.chat-markdown) {
   min-width: 0;
   max-width: 100%;

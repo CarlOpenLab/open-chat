@@ -1,20 +1,6 @@
 import type { BubbleItemType } from "@antdv-next/x";
 import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
-import {
-  applySegmentDelta,
-  extractWorkspaceFromContent,
-  legacyToSegments,
-  mergeContentSegments,
-  mergeReasoningContent,
-  segmentHistory,
-} from "@cc-heart/open-chat-types";
-import type {
-  HistoryRecord,
-  TranscriptMessage,
-  TranscriptSegment,
-  TranscriptTimelineItem,
-  WorkspaceSegment,
-} from "@cc-heart/open-chat-types";
+import type { TranscriptMessage, TranscriptRole } from "@cc-heart/open-chat-types";
 
 export type {
   TranscriptActivity,
@@ -23,14 +9,13 @@ export type {
   TranscriptTimelineItem,
 } from "@cc-heart/open-chat-types";
 
-/** 接口返回的扁平记录 → 模型消息（先共享 segmentation 重组，再映射）。 */
-export function recordsToModelMessages(
-  records: HistoryRecord[],
-): DefaultMessageInfo<XModelMessage>[] {
-  return transcriptHistoryToModelMessages(segmentHistory(records));
+/** 网站侧消息：XModelMessage 基础上携带平铺片段（assistant 消息的 fragments）。 */
+export interface ChatModelMessage extends XModelMessage {
+  /** 该条 UI 消息携带的扁平片段（assistant 流式/历史；user 消息为单条）。 */
+  fragments: TranscriptMessage[];
 }
 
-/** 扁平消息 → 模型消息（useXChat 使用）。 */
+/** 扁平消息 → 模型消息（useXChat 使用）：一条消息对应一条 UI 消息。 */
 export function transcriptHistoryToModelMessages(
   history: TranscriptMessage[],
 ): DefaultMessageInfo<XModelMessage>[] {
@@ -41,161 +26,119 @@ export function transcriptHistoryToModelMessages(
   }));
 }
 
-export function transcriptToModelMessage(item: TranscriptMessage): XModelMessage {
+export function transcriptToModelMessage(item: TranscriptMessage): ChatModelMessage {
+  const base: ChatModelMessage = {
+    id: item.id,
+    timestamp: item.timestamp,
+    fragments: [item],
+    role: item.role === "user" ? "user" : "assistant",
+    content: "",
+  };
   if (item.role === "user") {
     return {
-      role: "user",
+      ...base,
       content: item.content,
       ...(item.attachments?.length ? { attachments: item.attachments } : {}),
       ...(item.hidden === true ? { openChatLocalOnly: true, hidden: true } : {}),
     };
   }
-
-  const segments = item.segments;
-  return {
-    role: "assistant",
-    content: mergeContentSegments(segments),
-    ...(mergeReasoningContent(segments)
-      ? { reasoningContent: mergeReasoningContent(segments) }
-      : {}),
-    ...(segments.length ? { segments } : {}),
-    ...(item.attachments?.length ? { attachments: item.attachments } : {}),
-  };
+  if (item.role === "content") {
+    return { ...base, content: item.content };
+  }
+  return base;
 }
 
+/** 把模型消息（可能携带多片段）追加/合并一条扁平消息（流式 transcript_message 用）。 */
 export function appendTranscriptMessageToModelMessages(
   messages: DefaultMessageInfo<XModelMessage>[],
   item: TranscriptMessage,
 ): DefaultMessageInfo<XModelMessage>[] {
   const incoming = transcriptToModelMessage(item);
   const last = messages.at(-1);
-  if (item.role !== "assistant" || last?.message.role !== "assistant") {
+  if (!last || (last.message as ChatModelMessage).fragments?.[0]?.role === "user") {
     return [...messages, { id: item.id, status: "success", message: incoming }];
   }
-
-  const previous = last.message;
-  const previousSegments = toMessageSegments(previous);
-  const incomingSegments = toMessageSegments(incoming);
-  const segments = incomingSegments.reduce<TranscriptSegment[]>(
-    (acc, segment) => applySegmentDelta(acc, segment),
-    previousSegments,
-  );
+  const previous = last.message as ChatModelMessage;
+  const fragments = [...(previous.fragments ?? []), item];
   return [
     ...messages.slice(0, -1),
     {
       ...last,
+      id: item.id,
       status: "success",
       message: {
         ...previous,
-        content: appendTranscriptField(previous.content, incoming.content),
-        reasoningContent: appendTranscriptField(
-          previous.reasoningContent,
-          incoming.reasoningContent,
-        ),
-        ...(segments.length ? { segments } : {}),
-        ...(incoming.reasoningContent ? { reasoningDone: false } : {}),
-        ...(incoming.content && incoming.reasoningContent ? { reasoningDone: true } : {}),
-      },
+        ...(item.role === "content" ? { content: item.content } : {}),
+        fragments,
+      } as ChatModelMessage,
     },
   ];
 }
 
+/** 模型消息 → 气泡项：按 fragment role 平铺成独立气泡（前端按 role 分派渲染）。 */
 export function modelMessagesToBubbleItems(
   messages: DefaultMessageInfo<XModelMessage>[],
 ): BubbleItemType[] {
-  return messages
-    .filter(({ message, extraInfo }) => !isHiddenModelMessage(message, extraInfo))
-    .map(({ id, message, status, extraInfo }, index) => {
-      // Antdv's `loading` prop replaces the content renderer with its own
-      // skeleton. Keep assistant waiting rows in the same renderer as the
-      // streaming response so the existing "工作中" indicator is visible
-      // immediately after submission.
-      const assistantWaiting = message.role === "assistant" && status === "loading";
-      const timing = extraInfo as
-        | { turnStartedAtMs?: unknown; turnDurationMs?: unknown }
-        | undefined;
-      const rawContent = typeof message.content === "string" ? message.content : "";
-      let displayContent = rawContent;
-      let segments = toMessageSegments(message);
-      // live 路径的工作区块尚未提取：展示层剥离，并补一个 workspace 段。
-      if (message.role === "assistant" && typeof message.content === "string") {
-        const extracted = extractWorkspaceFromContent(message.content);
-        if (extracted.hasWorkspaceBlock) {
-          displayContent = extracted.markdown;
-          segments = mergeDisplayWorkspace(segments, extracted);
-        }
-      }
-      return {
-        key: id ?? `message-${index}`,
-        role: message.role,
+  const items: BubbleItemType[] = [];
+  for (const { id, message, status, extraInfo } of messages) {
+    if (isHiddenModelMessage(message, extraInfo)) continue;
+    const chatMessage = message as ChatModelMessage;
+    const fragments = chatMessage.fragments ?? [toSingleFragment(chatMessage)];
+    // Antdv 的 loading prop 会替换内容渲染器为骨架屏；保持 loading 行用同一渲染器。
+    const assistantWaiting = message.role === "assistant" && status === "loading";
+    const timing = extraInfo as { turnStartedAtMs?: unknown; turnDurationMs?: unknown } | undefined;
+    fragments.forEach((fragment, index) => {
+      items.push({
+        key: fragment.id ?? `${id ?? "message"}-${index}`,
+        role: fragment.role === "user" ? "user" : "assistant",
         status: assistantWaiting ? "updating" : status,
         loading: status === "loading" && !assistantWaiting,
-        content: displayContent,
+        content: fragment.role === "user" || fragment.role === "content" ? fragment.content : "",
         extraInfo: {
-          ...(segments.length ? { segments } : {}),
+          messageRole: fragment.role,
+          message: fragment,
           reasoningDone:
             typeof message.reasoningDone === "boolean" ? message.reasoningDone : undefined,
           chatError: typeof message.chatError === "string" ? message.chatError : undefined,
           chatNotices: Array.isArray(message.chatNotices) ? message.chatNotices : undefined,
-          attachments: Array.isArray(message.attachments) ? message.attachments : undefined,
+          ...(fragment.role === "user" || fragment.role === "content"
+            ? { attachments: fragment.attachments }
+            : {}),
           turnStartedAtMs:
             typeof timing?.turnStartedAtMs === "number" ? timing.turnStartedAtMs : undefined,
           turnDurationMs:
             typeof timing?.turnDurationMs === "number" ? timing.turnDurationMs : undefined,
         },
-      };
+      });
     });
+  }
+  return items;
 }
 
-function appendTranscriptField(previous: unknown, incoming: unknown): string {
-  const left = typeof previous === "string" ? previous : "";
-  const right = typeof incoming === "string" ? incoming : "";
-  if (!right) return left;
-  if (!left) return right;
-  return `${left}\n\n${right}`;
-}
-
-/** 把展示层提取出的工作区块并入 segments（按 workspace 段唯一合并）。 */
-function mergeDisplayWorkspace(
-  segments: TranscriptSegment[],
-  extracted: ReturnType<typeof extractWorkspaceFromContent>,
-): TranscriptSegment[] {
-  const workspace: WorkspaceSegment = {
-    kind: "workspace",
-    files: extracted.files,
-    errors: extracted.errors,
-    ...(extracted.hasPendingBlock !== undefined
-      ? { hasPendingBlock: extracted.hasPendingBlock }
-      : {}),
-  };
-  const index = segments.findIndex((segment) => segment.kind === "workspace");
-  if (index === -1) return [...segments, workspace];
-  const next = segments.slice();
-  next[index] = workspace;
-  return next;
-}
-
-/** 从 XModelMessage 取 segments；旧字段（live 过渡数据）兜底转换。 */
-function toMessageSegments(message: XModelMessage): TranscriptSegment[] {
-  const segments = (message as XModelMessage & { segments?: unknown }).segments;
-  if (Array.isArray(segments)) return segments as TranscriptSegment[];
-  const legacy = {
+/** 兜底：没有 fragments 的旧消息按 role 转单片段。 */
+function toSingleFragment(message: XModelMessage): TranscriptMessage {
+  const id = (message as XModelMessage & { id?: string }).id ?? "legacy";
+  const timestamp = (message as XModelMessage & { timestamp?: number }).timestamp ?? Date.now();
+  if (message.role === "user") {
+    return {
+      id,
+      timestamp,
+      role: "user",
+      content: typeof message.content === "string" ? message.content : "",
+      ...(Array.isArray(message.attachments) ? { attachments: message.attachments } : {}),
+    };
+  }
+  const reasoningContent =
+    typeof message.reasoningContent === "string" ? message.reasoningContent : "";
+  if (reasoningContent) {
+    return { id: `${id}-r`, timestamp, role: "reasoning", content: reasoningContent };
+  }
+  return {
+    id: `${id}-c`,
+    timestamp,
+    role: "content",
     content: typeof message.content === "string" ? message.content : "",
-    ...(typeof message.reasoningContent === "string"
-      ? { reasoningContent: message.reasoningContent }
-      : {}),
-    ...(Array.isArray(message.toolCalls) ? { toolCalls: message.toolCalls } : {}),
-    ...(message.agentPlan && typeof message.agentPlan === "object"
-      ? { agentPlan: message.agentPlan }
-      : {}),
-    ...(Array.isArray((message as { timeline?: unknown }).timeline)
-      ? {
-          timeline: (message as unknown as { timeline: unknown[] })
-            .timeline as TranscriptTimelineItem[],
-        }
-      : {}),
   };
-  return legacyToSegments(legacy);
 }
 
 /** 隐藏的模型上下文消息（a2ui-submission 遗留能力）：进上下文但不渲染。 */
@@ -209,3 +152,5 @@ export function isHiddenModelMessage(
       extraInfo?.hidden === true)
   );
 }
+
+export type { TranscriptRole };

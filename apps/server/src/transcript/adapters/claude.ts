@@ -1,17 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
-  appendContentSegment,
-  appendReasoningSegment,
+  appendContentMessage,
+  appendReasoningMessage,
   normalizeTranscriptHistory,
-  upsertToolSegment,
+  upsertToolMessage,
 } from "../core";
-import type {
-  AssistantMessage,
-  ToolSegment,
-  TranscriptActivity,
-  TranscriptMessage,
-  TranscriptSegment,
-} from "../types";
+import type { ToolMessage, TranscriptActivity, TranscriptMessage } from "../types";
 import {
   asRecord,
   contentText,
@@ -21,7 +15,7 @@ import {
   stringValue,
 } from "../value";
 
-/** 把 claude jsonl 历史转换为扁平消息模型（segments + id/timestamp）。 */
+/** 把 claude jsonl 历史转换为扁平消息模型（每条消息带 id + timestamp + role）。 */
 export function convertClaudeHistory(lines: Array<Record<string, unknown>>): TranscriptMessage[] {
   const history: TranscriptMessage[] = [];
 
@@ -57,58 +51,50 @@ export function convertClaudeHistory(lines: Array<Record<string, unknown>>): Tra
     const toolCalls = blocks
       .map(asRecord)
       .filter((block) => stringValue(block?.type) === "tool_use")
-      .map((block) => normalizeClaudeToolUse(block!));
+      .map((block) => normalizeClaudeToolUse(block!, timestamp));
     if (!text && !reasoning && !toolCalls.length) continue;
-    const assistant: AssistantMessage = {
-      id: stringValue(line.uuid) || randomUUID(),
-      timestamp,
-      role: "assistant",
-      segments: [],
-    };
+    const baseId = stringValue(line.uuid) || randomUUID();
     for (const blockValue of blocks) {
       const block = asRecord(blockValue);
       if (!block) continue;
       const blockType = stringValue(block.type);
       if (blockType === "thinking") {
         const blockText = stringValue(block.thinking);
-        if (blockText) appendReasoningSegment(assistant, blockText);
+        if (blockText) appendReasoningMessage(history, `${baseId}:r`, timestamp, blockText);
       } else if (blockType === "tool_use") {
-        upsertToolSegment(assistant, normalizeClaudeToolUse(block));
+        upsertToolMessage(history, normalizeClaudeToolUse(block, timestamp));
       } else if (blockType === "text") {
         const blockText = stringValue(block.text);
-        if (blockText) appendContentSegment(assistant, blockText);
+        if (blockText) appendContentMessage(history, `${baseId}:c`, timestamp, blockText);
       }
     }
-    history.push(assistant);
   }
 
   return normalizeTranscriptHistory(history);
 }
 
-function normalizeClaudeToolUse(block: Record<string, unknown>): ToolSegment {
+function normalizeClaudeToolUse(block: Record<string, unknown>, timestamp: number): ToolMessage {
   return {
-    kind: "tool",
     id: stringValue(block.id) || randomUUID(),
+    timestamp,
+    role: "tool",
     name: stringValue(block.name) || "工具调用",
     status: "running",
     ...(block.input !== undefined ? { input: block.input } : {}),
   };
 }
 
-/** tool_result 块（出现在 user 消息里）→ 按 toolCallId 给最近的 assistant 消息 upsert tool 段。 */
+/** tool_result 块（出现在 user 消息里）→ 按 toolCallId upsert 最近的 tool 消息。 */
 function applyClaudeToolResults(history: TranscriptMessage[], blocks: unknown[]): void {
-  const assistant = [...history].reverse().find((message) => message.role === "assistant");
-  if (!assistant || assistant.role !== "assistant") return;
   for (const blockValue of blocks) {
     const block = asRecord(blockValue);
     if (stringValue(block?.type) !== "tool_result") continue;
     const id = stringValue(block?.tool_use_id);
     if (!id) continue;
     const error = block?.is_error === true;
-    const existing = assistant.segments.find(
-      (segment): segment is Extract<TranscriptSegment, { kind: "tool" }> =>
-        segment.kind === "tool" && segment.id === id,
-    );
+    const existing = [...history]
+      .reverse()
+      .find((message): message is ToolMessage => message.role === "tool" && message.id === id);
     const name = existing?.name || "工具调用";
     const activity: TranscriptActivity = {
       id,
@@ -117,9 +103,10 @@ function applyClaudeToolResults(history: TranscriptMessage[], blocks: unknown[])
       output: contentText(block?.content),
       ...(error ? { error: stringifyValue(block?.content) } : {}),
     };
-    upsertToolSegment(assistant, {
-      kind: "tool",
+    upsertToolMessage(history, {
       id,
+      timestamp: existing?.timestamp ?? Date.now(),
+      role: "tool",
       name,
       status: activity.status,
       ...(activity.output !== undefined ? { output: activity.output } : {}),

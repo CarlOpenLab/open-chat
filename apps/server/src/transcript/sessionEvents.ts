@@ -14,11 +14,6 @@
 //
 // 本模块为纯函数，零宿主依赖（可独立单测）；反向读取见 adapters/sessionEvents.ts。
 
-import {
-  findPlanSegment,
-  mergeContentSegments,
-  mergeReasoningContent,
-} from "@cc-heart/open-chat-types";
 import type { TranscriptActivity, TranscriptMessage } from "./types";
 
 /** 会话事件类型白名单。 */
@@ -123,6 +118,11 @@ const DEGRADATION_RULES: ReadonlyArray<{
     kind: "pendingToolResult",
     strategy: "skip-placeholder",
   },
+  {
+    id: "workspace-skipped",
+    kind: "workspaceSkipped",
+    strategy: "skip-placeholder",
+  },
 ];
 
 // ── 合成 ──────────────────────────────────────────────────────────────────
@@ -161,14 +161,14 @@ function toolArguments(input: unknown): string {
   }
 }
 
-/** assistant 消息 → 内容块（text / reasoning / tool-call）。 */
+/** 单条扁平消息 → 内容块（text / reasoning / tool-call）。 */
 function assistantBlocks(message: TranscriptMessage): unknown[] {
   const blocks: unknown[] = [];
-  if (message.role !== "assistant") return blocks;
-  const reasoning = mergeReasoningContent(message.segments);
-  const content = mergeContentSegments(message.segments);
-  if (reasoning.trim()) blocks.push({ type: "reasoning", text: reasoning });
-  if (content.trim()) blocks.push({ type: "text", text: content });
+  if (message.role === "reasoning") {
+    if (message.content.trim()) blocks.push({ type: "reasoning", text: message.content });
+  } else if (message.role === "content") {
+    if (message.content.trim()) blocks.push({ type: "text", text: message.content });
+  }
   for (const call of stepActivities(message)) {
     blocks.push({
       type: "tool-call",
@@ -180,40 +180,41 @@ function assistantBlocks(message: TranscriptMessage): unknown[] {
   return blocks;
 }
 
-/** assistant 消息里的可执行活动：tool 段 + fileChange 段（会话事件需要 tool/call→tool/result 配对）。 */
+/** 单条扁平消息的可执行活动：tool 消息 / fileChange 消息（会话事件需要 tool/call→tool/result 配对）。 */
 function stepActivities(message: TranscriptMessage): TranscriptActivity[] {
-  if (message.role !== "assistant") return [];
-  const activities: TranscriptActivity[] = [];
-  for (const segment of message.segments) {
-    if (segment.kind === "tool") {
-      activities.push({
-        id: segment.id,
-        name: segment.name,
-        status: segment.status,
-        ...(segment.providerKind !== undefined ? { kind: segment.providerKind } : {}),
-        ...(segment.input !== undefined ? { input: segment.input } : {}),
-        ...(segment.output !== undefined ? { output: segment.output } : {}),
-        ...(segment.error !== undefined ? { error: segment.error } : {}),
-        ...(segment.durationMs !== undefined ? { durationMs: segment.durationMs } : {}),
-        ...(segment.displayTarget !== undefined ? { displayTarget: segment.displayTarget } : {}),
-      });
-    } else if (segment.kind === "fileChange") {
-      activities.push({
-        id: `file-${segment.path}`,
+  if (message.role === "tool") {
+    return [
+      {
+        id: message.id,
+        name: message.name,
+        status: message.status,
+        ...(message.providerKind !== undefined ? { kind: message.providerKind } : {}),
+        ...(message.input !== undefined ? { input: message.input } : {}),
+        ...(message.output !== undefined ? { output: message.output } : {}),
+        ...(message.error !== undefined ? { error: message.error } : {}),
+        ...(message.durationMs !== undefined ? { durationMs: message.durationMs } : {}),
+        ...(message.displayTarget !== undefined ? { displayTarget: message.displayTarget } : {}),
+      },
+    ];
+  }
+  if (message.role === "fileChange") {
+    return [
+      {
+        id: `file-${message.path}`,
         name: "file_change",
         kind: "fileChange",
-        status: segment.status ?? "completed",
+        status: message.status ?? "completed",
         fileChanges: [
           {
-            path: segment.path,
-            ...(segment.additions !== undefined ? { additions: segment.additions } : {}),
-            ...(segment.deletions !== undefined ? { deletions: segment.deletions } : {}),
+            path: message.path,
+            ...(message.additions !== undefined ? { additions: message.additions } : {}),
+            ...(message.deletions !== undefined ? { deletions: message.deletions } : {}),
           },
         ],
-      });
-    }
+      },
+    ];
   }
-  return activities;
+  return [];
 }
 
 /** activity → tool/result 事件里的 message（配对不变量：无结果补空 content）。 */
@@ -318,9 +319,20 @@ export function synthesizeSessionEvents(
         true,
       );
     }
-    for (let i = 0; i < t.steps.length; i++) {
-      const stepNum = i + 1;
-      const message = t.steps[i];
+    let stepNum = 0;
+    for (const message of t.steps) {
+      // plan / workspace 无法用会话事件表达：跳过并显式报告降级。
+      if (message.role === "plan") {
+        bump("planSkipped");
+        continue;
+      }
+      if (message.role === "workspace") {
+        bump("workspaceSkipped");
+        continue;
+      }
+      const activities = stepActivities(message);
+      if (assistantBlocks(message).length === 0 && activities.length === 0) continue;
+      stepNum += 1;
       push("step/start", { turn, step: stepNum });
       push(
         "assistant/message",
@@ -336,7 +348,7 @@ export function synthesizeSessionEvents(
         },
         true,
       );
-      for (const call of stepActivities(message)) {
+      for (const call of activities) {
         const ev = push("tool/call", {
           turn,
           step: stepNum,
@@ -346,7 +358,7 @@ export function synthesizeSessionEvents(
         });
         callSeqByCallId.set(call.id, ev.seq);
       }
-      for (const call of stepActivities(message)) {
+      for (const call of activities) {
         const callSeq = callSeqByCallId.get(call.id);
         const degraded = !coveredCallIds.has(call.id);
         if (degraded) bump("pendingToolResult");
@@ -369,8 +381,12 @@ export function synthesizeSessionEvents(
   for (const t of turns) {
     if (t.userAttachments > 0) bump("attachmentSkipped");
     for (const step of t.steps) {
-      if (step.role === "assistant" && findPlanSegment(step.segments)) bump("planSkipped");
-      if ((step.attachments?.length ?? 0) > 0) bump("attachmentSkipped");
+      if (
+        (step.role === "user" || step.role === "content") &&
+        (step.attachments?.length ?? 0) > 0
+      ) {
+        bump("attachmentSkipped");
+      }
     }
   }
 

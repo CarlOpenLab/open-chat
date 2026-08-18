@@ -62,6 +62,8 @@ export interface GatewayStartOptions {
   port?: number;
   /** 提供时以静态站点（SPA）形式托管 Web UI，与 API 同源。 */
   staticDir?: string;
+  /** 开发模式：不生成访问密码，Web 界面直接放行（免输入密码）。 */
+  dev?: boolean;
   /** 监听成功回调（URL 已确定，可用于自动打开浏览器）。 */
   onListen?: (info: { url: string; host: string; port: number }) => void;
 }
@@ -105,11 +107,15 @@ export function createGatewayApp(
   // 附件上传走 base64 JSON，放大后可达 40MB 左右，放宽 body 上限。
   app.use(express.json({ limit: "44mb" }));
 
-  if (access) {
-    app.get("/api/access/status", (req: Request, res: Response) => {
-      res.json({ authorized: hasWebAccess(req, access, config.gatewayApiKey) });
-    });
-    app.post("/api/access/login", (req: Request, res: Response) => {
+  // 访问控制路由总是注册，供前端 App.vue 统一探测状态：
+  // - 启用密码（access）时：status 返回真实授权状态，未授权走密码登录；
+  // - 开发模式 / 未启用（access 为 undefined）时：status 恒为 authorized: true，
+  //   登录直接放行，且不挂 /api 鉴权中间件。
+  app.get("/api/access/status", (req: Request, res: Response) => {
+    res.json({ authorized: access ? hasWebAccess(req, access, config.gatewayApiKey) : true });
+  });
+  app.post("/api/access/login", (req: Request, res: Response) => {
+    if (access) {
       const password = typeof req.body?.password === "string" ? req.body.password : "";
       if (!sameSecret(password, access.password)) {
         return res
@@ -117,15 +123,14 @@ export function createGatewayApp(
           .json({ error: { message: "密码不正确", type: "authentication_error" } });
       }
       res.setHeader("Set-Cookie", buildWebAccessCookie(access.sessionToken));
-      return res.json({ authorized: true });
-    });
-    app.post("/api/access/logout", (_req: Request, res: Response) => {
-      res.setHeader(
-        "Set-Cookie",
-        "open_chat_access=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
-      );
-      res.json({ authorized: false });
-    });
+    }
+    return res.json({ authorized: true });
+  });
+  app.post("/api/access/logout", (_req: Request, res: Response) => {
+    res.setHeader("Set-Cookie", "open_chat_access=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    res.json({ authorized: false });
+  });
+  if (access) {
     // Static assets remain public so the login screen can load, but every
     // operational API requires the per-start password session.
     app.use("/api", (req: Request, res: Response, next: NextFunction) => {
@@ -494,10 +499,15 @@ export function createGatewayApp(
  */
 export async function startGateway(options: GatewayStartOptions): Promise<GatewayHandle> {
   const runtime = loadGatewayRuntime();
-  const access: WebAccessControl = {
-    password: randomBytes(12).toString("base64url"),
-    sessionToken: randomBytes(32).toString("base64url"),
-  };
+  // 开发模式不生成访问密码：Web 界面直接放行（createGatewayApp 在 access 为
+  // undefined 时让 /api/access/status 恒返回 authorized: true 且不挂鉴权中间件）。
+  const dev = options.dev === true || process.env.NODE_ENV === "development";
+  const access: WebAccessControl | undefined = dev
+    ? undefined
+    : {
+        password: randomBytes(12).toString("base64url"),
+        sessionToken: randomBytes(32).toString("base64url"),
+      };
   const app = createGatewayApp(runtime, options.staticDir, access);
 
   const host = options.host ?? "0.0.0.0";
@@ -519,8 +529,12 @@ export async function startGateway(options: GatewayStartOptions): Promise<Gatewa
   console.log(`Health:      http://${host}:${actualPort}/health`);
   console.log(`Models:      http://${host}:${actualPort}/api/models`);
   console.log(`Chat:        http://${host}:${actualPort}/api/chat/completions`);
-  console.log(`Web password: ${access.password}`);
-  console.log("Web access:  enter this password in the browser; it changes on every start");
+  if (access) {
+    console.log(`Web password: ${access.password}`);
+    console.log("Web access:  enter this password in the browser; it changes on every start");
+  } else {
+    console.log("Web access:  disabled（开发模式，无需输入密码）");
+  }
   console.log(`Gateway auth: ${runtime.config.gatewayApiKey ? "enabled" : "disabled"}`);
   console.log(`Web search:  ${runtime.searchProvider ? runtime.searchProvider.name : "disabled"}`);
   console.log(`Local AI:    ${runtime.localChat ? "enabled (opencode)" : "disabled"}`);

@@ -46,7 +46,7 @@ import {
   appendTranscriptMessageToModelMessages,
   isHiddenModelMessage,
   modelMessagesToBubbleItems,
-  recordsToModelMessages,
+  transcriptHistoryToModelMessages,
   type TranscriptMessage,
 } from "../services/transcript";
 import { useChatModels, type ModelCatalogEntry } from "../composables/useChatModels";
@@ -677,8 +677,8 @@ const refreshAcpSession = async (force = false) => {
       ) {
         conversation.providerSessionId = session.sessionId;
       }
-      if (Array.isArray(session.history) && session.history.length > 0) {
-        conversation.messages = recordsToModelMessages(session.history);
+      if (Array.isArray(session.messages) && session.messages.length > 0) {
+        conversation.messages = transcriptHistoryToModelMessages(session.messages);
         if (String(conversation.key) === currentConversationKey.value && !isRequesting.value) {
           setMessages(conversation.messages);
         }
@@ -773,7 +773,9 @@ const currentFileWorkspace = computed(() =>
       id,
       role: message.role,
       content: message.content,
-      segments: Array.isArray(message.segments) ? message.segments : undefined,
+      messages: Array.isArray((message as { fragments?: unknown }).fragments)
+        ? ((message as { fragments: unknown }).fragments as TranscriptMessage[])
+        : undefined,
     })),
   ),
 );
@@ -1558,9 +1560,9 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
   if (data === "[DONE]") return;
   if (event === "snapshot") {
     try {
-      const parsed = JSON.parse(data) as { records?: unknown };
-      if (Array.isArray(parsed.records)) {
-        setMessages(recordsToModelMessages(parsed.records as HistoryRecord[]));
+      const parsed = JSON.parse(data) as { messages?: unknown };
+      if (Array.isArray(parsed.messages)) {
+        setMessages(transcriptHistoryToModelMessages(parsed.messages as TranscriptMessage[]));
         showWelcome.value = false;
       }
     } catch (err) {

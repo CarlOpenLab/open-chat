@@ -1,10 +1,10 @@
 /// <reference types="vite-plus/test/globals" />
 
-import { legacyToSegments } from "./legacy";
+import { legacyToMessages } from "./legacy";
 
-describe("legacyToSegments", () => {
+describe("legacyToMessages", () => {
   it("maps timeline items in order", () => {
-    const segments = legacyToSegments({
+    const messages = legacyToMessages({
       content: "answer",
       reasoningContent: "think",
       toolCalls: [
@@ -21,11 +21,11 @@ describe("legacyToSegments", () => {
         { kind: "content", id: "c", content: "answer" },
       ],
     });
-    expect(segments.map((s) => s.kind)).toEqual(["reasoning", "tool", "content"]);
+    expect(messages.map((m) => m.role)).toEqual(["reasoning", "tool", "content"]);
   });
 
-  it("splits tool fileChanges into fileChange segments and drops them from the tool", () => {
-    const segments = legacyToSegments({
+  it("splits tool fileChanges into fileChange messages and drops them from the tool", () => {
+    const messages = legacyToMessages({
       content: "",
       toolCalls: [
         {
@@ -36,15 +36,14 @@ describe("legacyToSegments", () => {
         },
       ],
     });
-    expect(segments).toEqual([
-      { kind: "tool", id: "t1", name: "edit", status: "completed" },
-      { kind: "fileChange", path: "a.ts", additions: 2 },
-      { kind: "fileChange", path: "b.ts" },
-    ]);
+    expect(messages.map((m) => m.role)).toEqual(["tool", "fileChange", "fileChange"]);
+    const tool = messages[0];
+    expect(tool).toMatchObject({ role: "tool", id: "t1", name: "edit", status: "completed" });
+    expect(tool).not.toHaveProperty("fileChanges");
   });
 
-  it("converts fileChange-kind activities into fileChange segments only", () => {
-    const segments = legacyToSegments({
+  it("converts fileChange-kind activities into fileChange messages only", () => {
+    const messages = legacyToMessages({
       content: "",
       toolCalls: [
         {
@@ -56,6 +55,14 @@ describe("legacyToSegments", () => {
         },
       ],
     });
-    expect(segments).toEqual([{ kind: "fileChange", path: "a.ts", additions: 1 }]);
+    expect(messages).toEqual([
+      {
+        id: "fc:a.ts",
+        timestamp: expect.any(Number),
+        role: "fileChange",
+        path: "a.ts",
+        additions: 1,
+      },
+    ]);
   });
 });

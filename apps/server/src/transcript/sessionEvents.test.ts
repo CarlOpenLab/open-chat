@@ -18,52 +18,37 @@ function options(overrides: Partial<Parameters<typeof synthesizeSessionEvents>[1
 function sampleHistory(): TranscriptMessage[] {
   return [
     { id: "u1", timestamp: createdAt, role: "user", content: "Inspect the repo" },
+    { id: "a1r", timestamp: createdAt + 1, role: "reasoning", content: "First, find the layout." },
+    { id: "a1c", timestamp: createdAt + 1, role: "content", content: "Let me look." },
     {
-      id: "a1",
+      id: "tool-1",
       timestamp: createdAt + 1,
-      role: "assistant",
-      segments: [
-        { kind: "reasoning", content: "First, find the layout." },
-        { kind: "content", content: "Let me look." },
-        {
-          kind: "tool",
-          id: "tool-1",
-          name: "read",
-          status: "completed",
-          input: { path: "src/index.ts" },
-          output: "export const x = 1;",
-        },
-      ],
+      role: "tool",
+      name: "read",
+      status: "completed",
+      input: { path: "src/index.ts" },
+      output: "export const x = 1;",
     },
     { id: "u2", timestamp: createdAt + 2, role: "user", content: "Now fix the test" },
+    { id: "a2c", timestamp: createdAt + 3, role: "content", content: "Done." },
     {
-      id: "a2",
+      id: "tool-2",
       timestamp: createdAt + 3,
-      role: "assistant",
-      segments: [
-        { kind: "content", content: "Done." },
-        {
-          kind: "tool",
-          id: "tool-2",
-          name: "bash",
-          status: "error",
-          input: { command: "vp check" },
-          error: "exit code 1",
-        },
-      ],
+      role: "tool",
+      name: "bash",
+      status: "error",
+      input: { command: "vp check" },
+      error: "exit code 1",
     },
   ];
-}
-
-function assistantSegments(message: TranscriptMessage) {
-  return message.role === "assistant" ? message.segments : [];
 }
 
 describe("synthesizeSessionEvents", () => {
   it("emits balanced turn/step events with continuous seq and surface ops", () => {
     const result = synthesizeSessionEvents(sampleHistory(), options());
     expect(result.validation.ok).toBe(true);
-    expect(result.messages).toBe(6); // 2 user + 2 assistant + 2 tool/result
+    // 2 user + 5 assistant 片段（reasoning/content/tool × 2 轮中可见的）+ 2 tool/result
+    expect(result.messages).toBe(9);
     expect(result.toolCalls).toBe(2);
 
     const types = result.events.map((ev) => ev.type);
@@ -75,7 +60,7 @@ describe("synthesizeSessionEvents", () => {
     expect(types).toContain("turn/end");
 
     const surface = result.events.filter((ev) => ev.surfaceOp !== undefined);
-    expect(surface).toHaveLength(6);
+    expect(surface).toHaveLength(9);
     expect(surface.every((ev) => ev.surfaceOp === "append")).toBe(true);
 
     // 每个 tool/result 都通过 sourceEventSeqs 指向自己的 tool/call
@@ -89,11 +74,20 @@ describe("synthesizeSessionEvents", () => {
 
   it("maps reasoning, tool input/output, and error results into content blocks", () => {
     const result = synthesizeSessionEvents(sampleHistory(), options());
-    const assistant = result.events.find((ev) => ev.type === "assistant/message")!;
-    const blocks = assistant.data.message as { content: Array<Record<string, unknown>> };
-    expect(blocks.content[0]).toMatchObject({ type: "reasoning", text: "First, find the layout." });
-    expect(blocks.content[1]).toMatchObject({ type: "text", text: "Let me look." });
-    expect(blocks.content[2]).toMatchObject({
+    const reasoning = result.events.find((ev) => ev.type === "assistant/message")!;
+    const reasoningBlocks = reasoning.data.message as { content: Array<Record<string, unknown>> };
+    expect(reasoningBlocks.content[0]).toMatchObject({
+      type: "reasoning",
+      text: "First, find the layout.",
+    });
+
+    const content = result.events.filter((ev) => ev.type === "assistant/message")[1];
+    const contentBlocks = content.data.message as { content: Array<Record<string, unknown>> };
+    expect(contentBlocks.content[0]).toMatchObject({ type: "text", text: "Let me look." });
+
+    const tool = result.events.filter((ev) => ev.type === "assistant/message")[2];
+    const toolBlocks = tool.data.message as { content: Array<Record<string, unknown>> };
+    expect(toolBlocks.content[0]).toMatchObject({
       type: "tool-call",
       id: "tool-1",
       name: "read",
@@ -124,18 +118,12 @@ describe("synthesizeSessionEvents", () => {
     const history: TranscriptMessage[] = [
       { id: "u1", timestamp: createdAt, role: "user", content: "Run it" },
       {
-        id: "a1",
+        id: "tool-p",
         timestamp: createdAt + 1,
-        role: "assistant",
-        segments: [
-          {
-            kind: "tool",
-            id: "tool-p",
-            name: "bash",
-            status: "running",
-            input: { command: "make" },
-          },
-        ],
+        role: "tool",
+        name: "bash",
+        status: "running",
+        input: { command: "make" },
       },
     ];
     const result = synthesizeSessionEvents(history, options());
@@ -158,14 +146,12 @@ describe("synthesizeSessionEvents", () => {
         content: "Plan this",
         attachments: [{ reference: "data:image/png;base64,aa", name: "shot.png", isImage: true }],
       },
+      { id: "a1c", timestamp: createdAt + 1, role: "content", content: "Plan:" },
       {
-        id: "a1",
+        id: "p1",
         timestamp: createdAt + 1,
-        role: "assistant",
-        segments: [
-          { kind: "content", content: "Plan:" },
-          { kind: "plan", entries: [{ content: "step 1", status: "pending" }] },
-        ],
+        role: "plan",
+        entries: [{ content: "step 1", status: "pending" }],
       },
     ];
     const result = synthesizeSessionEvents(history, options());
@@ -217,45 +203,39 @@ describe("convertSessionEventsHistory", () => {
     );
     const restored = convertSessionEventsHistory(lines);
 
-    expect(restored).toHaveLength(4);
-    expect(restored[0]).toMatchObject({
-      role: "user",
-      content: "Inspect the repo",
-      timestamp: expect.any(Number),
-    });
-    const a1 = restored[1];
-    expect(a1).toMatchObject({ role: "assistant", timestamp: expect.any(Number) });
-    expect(assistantSegments(a1).map((s) => s.kind)).toEqual(["reasoning", "content", "tool"]);
-    const tool1 = assistantSegments(a1).find((s) => s.kind === "tool");
-    expect(tool1).toMatchObject({
-      kind: "tool",
+    expect(restored).toHaveLength(7);
+    expect(restored[0]).toMatchObject({ role: "user", content: "Inspect the repo" });
+    expect(restored[1]).toMatchObject({ role: "reasoning" });
+    expect(restored[2]).toMatchObject({ role: "content", content: "Let me look." });
+    expect(restored[3]).toMatchObject({
+      role: "tool",
       id: "tool-1",
       name: "read",
       status: "completed",
       output: "export const x = 1;",
     });
-    if (tool1 && tool1.kind === "tool") expect(tool1.input).toEqual({ path: "src/index.ts" });
-    const tool2 = assistantSegments(restored[3]).find((s) => s.kind === "tool");
-    expect(tool2).toMatchObject({
-      kind: "tool",
-      id: "tool-2",
-      name: "bash",
-      status: "error",
-      error: "exit code 1",
-    });
+    const tool1 = restored[3];
+    if (tool1.role === "tool") expect(tool1.input).toEqual({ path: "src/index.ts" });
+    const tool2 = restored[6];
+    if (tool2.role === "tool") {
+      expect(tool2).toMatchObject({
+        id: "tool-2",
+        name: "bash",
+        status: "error",
+        error: "exit code 1",
+      });
+    }
   });
 
-  it("merges adjacent assistant fragments and preserves segment order", () => {
+  it("preserves flat message order across adjacent assistant fragments", () => {
     const result = synthesizeSessionEvents(sampleHistory(), options());
     const lines = result.events.map(
       (ev) => JSON.parse(JSON.stringify(ev)) as Record<string, unknown>,
     );
     const restored = convertSessionEventsHistory(lines);
-    const assistant = restored[1];
-    const segments = assistantSegments(assistant);
-    expect(segments.map((s) => s.kind)).toEqual(["reasoning", "content", "tool"]);
-    const tool = segments.find((s) => s.kind === "tool");
-    if (tool && tool.kind === "tool") expect(tool.status).toBe("completed");
+    expect(restored.slice(1, 4).map((m) => m.role)).toEqual(["reasoning", "content", "tool"]);
+    const tool = restored[3];
+    if (tool.role === "tool") expect(tool.status).toBe("completed");
   });
 
   it("fills tool name/arguments from tool/call events when the block lacks them", () => {
@@ -316,16 +296,15 @@ describe("convertSessionEventsHistory", () => {
       },
     ];
     const restored = convertSessionEventsHistory(lines);
-    const assistant = restored[1];
-    const tool = assistantSegments(assistant).find((s) => s.kind === "tool");
+    const tool = restored[1];
     expect(tool).toMatchObject({
-      kind: "tool",
+      role: "tool",
       id: "t1",
       name: "bash",
       status: "completed",
       output: "ok",
     });
-    if (tool && tool.kind === "tool") expect(tool.input).toEqual({ command: "make" });
+    if (tool.role === "tool") expect(tool.input).toEqual({ command: "make" });
   });
 });
 
