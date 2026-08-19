@@ -2703,6 +2703,10 @@ const handleCommandPaletteSelectConversation = (key: string) => {
   transition: none;
 }
 
+:deep(.chat-markdown a) {
+  color: var(--brand-accent);
+}
+
 @media (max-width: 767px) {
   .sidebar-backdrop {
     display: block;
