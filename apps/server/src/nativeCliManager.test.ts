@@ -50,17 +50,28 @@ describe("convertCodexThreadHistory", () => {
       },
     ]);
 
-    expect(history).toHaveLength(2);
-    expect(history[0]).toMatchObject({ id: "user-1", role: "user", content: "Fix it" });
-    expect(history[1]).toMatchObject({
-      id: "comment-1:assistant",
-      role: "assistant",
-      content: "Checking.\n\nVerified.\n\nFixed.",
-      reasoningContent: "Found it.",
-    });
-    expect(history[1]?.toolCalls).toEqual([
-      expect.objectContaining({ id: "tool-1", status: "completed", output: "ok" }),
+    expect(history.map((message) => message.role)).toEqual([
+      "user",
+      "content",
+      "reasoning",
+      "tool",
+      "content",
     ]);
+    expect(history[0]).toMatchObject({
+      id: "user-1",
+      role: "user",
+      content: "Fix it",
+      timestamp: expect.any(Number),
+    });
+    expect(history[1]).toMatchObject({ role: "content", content: "Checking." });
+    expect(history[2]).toMatchObject({ role: "reasoning", content: "Found it." });
+    expect(history[3]).toMatchObject({
+      role: "tool",
+      id: "tool-1",
+      status: "completed",
+      output: "ok",
+    });
+    expect(history[4]).toMatchObject({ role: "content", content: "Verified.\n\nFixed." });
   });
 
   it("keeps unphased agent messages as visible assistant content", () => {
@@ -73,21 +84,12 @@ describe("convertCodexThreadHistory", () => {
       },
     ]);
 
-    expect(history).toEqual([
-      {
-        id: "progress:assistant",
-        role: "assistant",
-        content: "Working.\n\nDone.",
-        reasoningContent: undefined,
-        timeline: [
-          {
-            kind: "content",
-            id: "content-progress:assistant",
-            content: "Working.\n\nDone.",
-          },
-        ],
-      },
-    ]);
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      role: "content",
+      content: "Working.\n\nDone.",
+      timestamp: expect.any(Number),
+    });
   });
 
   it("extracts codex input_image into attachments and strips injected boilerplate", () => {
@@ -208,7 +210,9 @@ describe("convertCodexThreadHistory", () => {
       },
     ]);
 
-    expect(history.map((message) => message.content)).toEqual(["真的请求"]);
+    expect(history.map((message) => (message.role === "user" ? message.content : ""))).toEqual([
+      "真的请求",
+    ]);
   });
 });
 
@@ -379,13 +383,20 @@ describe("provider transcript adapters", () => {
       },
     ]);
 
-    expect(history).toHaveLength(2);
-    expect(history[1]).toMatchObject({
-      role: "assistant",
-      content: "Done.",
-      reasoningContent: "I should read it.",
-      toolCalls: [{ id: "read-1", name: "read", status: "completed", output: "source" }],
+    expect(history.map((message) => message.role)).toEqual([
+      "user",
+      "reasoning",
+      "tool",
+      "content",
+    ]);
+    expect(history[2]).toMatchObject({
+      role: "tool",
+      id: "read-1",
+      name: "read",
+      status: "completed",
+      output: "source",
     });
+    expect(history[3]).toMatchObject({ role: "content", content: "Done." });
   });
 
   it("merges Pi tool results and final text into one assistant turn", () => {
@@ -419,12 +430,18 @@ describe("provider transcript adapters", () => {
       },
     ]);
 
-    expect(history).toHaveLength(2);
-    expect(history[1]).toMatchObject({
-      role: "assistant",
-      content: "Done.",
-      reasoningContent: "Reading.",
-      toolCalls: [{ id: "read-1", name: "read", status: "completed", output: "source" }],
+    expect(history.map((message) => message.role)).toEqual([
+      "user",
+      "reasoning",
+      "tool",
+      "content",
+    ]);
+    expect(history[2]).toMatchObject({
+      role: "tool",
+      id: "read-1",
+      name: "read",
+      status: "completed",
+      output: "source",
     });
   });
 
@@ -446,16 +463,25 @@ describe("provider transcript adapters", () => {
       },
     ]);
 
-    expect(history).toHaveLength(2);
-    expect(history[1]).toMatchObject({
-      role: "assistant",
-      content: "Done.",
-      reasoningContent: "Reading.",
-      toolCalls: [{ id: "read-1", name: "read", status: "completed", output: "source" }],
-    });
+    expect(history.map((message) => message.role)).toEqual([
+      "user",
+      "reasoning",
+      "tool",
+      "content",
+    ]);
+    const opencodeTool = history[2];
+    if (opencodeTool.role === "tool") {
+      expect(opencodeTool).toMatchObject({
+        id: "read-1",
+        name: "read",
+        status: "completed",
+        output: "source",
+      });
+    }
+    expect(history[3]).toMatchObject({ role: "content", content: "Done." });
   });
 
-  it("collects ACP chunks and tool updates into the active assistant message", () => {
+  it("collects ACP chunks and tool updates into flat messages", () => {
     const collector = createTranscriptCollector();
     const updates = [
       { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Inspect it" } },
@@ -478,12 +504,26 @@ describe("provider transcript adapters", () => {
     ] as SessionUpdate[];
     for (const update of updates) collectAcpHistoryUpdate(collector, update);
 
-    expect(collector.messages).toHaveLength(2);
-    expect(collector.messages[1]).toMatchObject({
-      role: "assistant",
-      content: "Done.",
-      reasoningContent: "Reading.",
-      toolCalls: [{ id: "read-1", name: "read", status: "completed", output: "source" }],
+    expect(collector.messages.map((message) => message.role)).toEqual([
+      "user",
+      "reasoning",
+      "tool",
+      "content",
+    ]);
+    expect(collector.messages[0]).toMatchObject({
+      role: "user",
+      content: "Inspect it",
+      timestamp: expect.any(Number),
     });
+    const acpTool = collector.messages[2];
+    if (acpTool.role === "tool") {
+      expect(acpTool).toMatchObject({
+        id: "read-1",
+        name: "read",
+        status: "completed",
+        output: "source",
+      });
+    }
+    expect(collector.messages[3]).toMatchObject({ role: "content", content: "Done." });
   });
 });

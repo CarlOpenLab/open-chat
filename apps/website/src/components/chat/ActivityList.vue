@@ -13,36 +13,31 @@ import {
   X,
 } from "@lucide/vue";
 import { XMarkdown } from "@antdv-next/x-markdown";
-import type { ToolCallItem } from "../../services/OpenChatProvider";
-import type { TranscriptTimelineItem } from "../../services/transcript";
+import {
+  fileChangeTitle,
+  formatActivitySummary,
+  summarizeMessages,
+  toolTitle,
+} from "@cc-heart/open-chat-types";
+import type {
+  FileChangeMessage,
+  SegmentStatus,
+  ToolMessage,
+  TranscriptMessage,
+} from "@cc-heart/open-chat-types";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 import { formatWorkedDuration } from "../../utils/chatDuration";
 
-interface ReasoningInfo {
-  content: string;
-  done: boolean;
-  durationMs?: number;
-}
-
-interface PlanInfo {
-  entries?: Array<{ content?: string; status?: string }>;
-}
-
-interface WorkspaceInfo {
-  files: Array<{ path: string; status: string }>;
-  errors: string[];
-}
-
 interface Props {
-  reasoning?: ReasoningInfo | null;
-  tools?: ToolCallItem[];
-  plan?: PlanInfo | null;
-  workspace?: WorkspaceInfo | null;
-  timeline?: TranscriptTimelineItem[];
+  messages: TranscriptMessage[];
   streaming: boolean;
+  /** 思考是否已完成（streaming 中 false 时显示"正在思考"）。 */
+  reasoningDone?: boolean;
   summaryExpanded: boolean;
   itemExpandedIds: string[];
+  /** 思考阶段的耗时（用于"思考用时 Xs"）。 */
+  reasoningDurationMs?: number;
 }
 
 interface Emits {
@@ -51,13 +46,10 @@ interface Emits {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  reasoning: null,
-  tools: () => [],
-  plan: null,
-  workspace: null,
+  reasoningDone: true,
   summaryExpanded: false,
   itemExpandedIds: () => [],
-  timeline: () => [],
+  reasoningDurationMs: undefined,
 });
 const emit = defineEmits<Emits>();
 
@@ -86,7 +78,7 @@ const formatToolDetail = (value: unknown, maxLength = 4000): string => {
 
 interface ActivityEntry {
   id: string;
-  kind: "reasoning" | "tool" | "plan" | "workspace" | "content";
+  kind: "reasoning" | "tool" | "plan" | "workspace";
   icon: Component | null;
   title: string;
   preview: string;
@@ -114,30 +106,20 @@ const normalizeEntryIds = (items: ActivityEntry[]): ActivityEntry[] => {
   });
 };
 
-const reasoningLive = computed(
-  () => props.streaming && Boolean(props.reasoning) && !props.reasoning!.done,
-);
+const reasoningRunning = computed(() => props.streaming && props.reasoningDone !== true);
 
-const isFileChange = (tool: ToolCallItem): boolean =>
-  tool.kind === "fileChange" || tool.name === "fileChange";
+const segmentStatus = (status: SegmentStatus): ActivityEntry["status"] =>
+  status === "completed"
+    ? "success"
+    : status === "error"
+      ? "error"
+      : status === "running"
+        ? "running"
+        : "pending";
 
 const fileName = (path: string): string => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 
-const fileChangeStats = (tool: ToolCallItem): { additions: number; deletions: number } => {
-  const changes = tool.fileChanges ?? [];
-  const additions = changes.reduce((total, change) => total + (change.additions ?? 0), 0);
-  const deletions = changes.reduce((total, change) => total + (change.deletions ?? 0), 0);
-  return { additions, deletions };
-};
-
-const fileChangeSubject = (tool: ToolCallItem): string => {
-  const changes = tool.fileChanges ?? [];
-  if (changes.length === 1 && changes[0]) return fileName(changes[0].path);
-  if (changes.length > 1) return `${changes.length} 个文件`;
-  return tool.displayTarget ? fileName(tool.displayTarget) : "文件";
-};
-
-function toolActivityEntry(tool: ToolCallItem): ActivityEntry {
+function toolActivityEntry(tool: ToolMessage): ActivityEntry {
   const sections: Array<{ label: string; content: string; copyable?: boolean }> = [];
   if (tool.input !== undefined) {
     sections.push({ label: "参数", content: formatToolDetail(tool.input, 2000), copyable: true });
@@ -148,171 +130,125 @@ function toolActivityEntry(tool: ToolCallItem): ActivityEntry {
     .join("\n\n");
   if (output) sections.push({ label: "输出", content: output, copyable: tool.input === undefined });
 
-  const status: ActivityEntry["status"] =
-    tool.status === "completed"
-      ? "success"
-      : tool.status === "error"
-        ? "error"
-        : tool.status === "running"
-          ? "running"
-          : "pending";
-  const fileChange = isFileChange(tool);
-  const fileStats = fileChange ? fileChangeStats(tool) : undefined;
-  const subject = fileChange ? fileChangeSubject(tool) : tool.name;
-  const title = fileChange
-    ? tool.status === "running"
-      ? `正在编辑 ${subject}`
-      : tool.status === "completed"
-        ? `已编辑 ${subject}`
-        : tool.status === "error"
-          ? `编辑 ${subject} 失败`
-          : `等待编辑 ${subject}`
-    : tool.status === "running"
-      ? `正在运行 ${tool.name}`
-      : tool.status === "completed"
-        ? `已运行 ${tool.name}`
-        : tool.status === "error"
-          ? `${tool.name} 失败`
-          : `等待运行 ${tool.name}`;
+  const status = segmentStatus(tool.status);
+  const title = toolTitle(tool.name, tool.status);
   const preview =
     tool.status === "error"
       ? firstPreviewLine(tool.error)
       : tool.status === "completed"
-        ? fileChange
-          ? firstPreviewLine(tool.output)
-          : firstPreviewLine(tool.output) ||
-            (tool.durationMs ? `已完成 · ${(tool.durationMs / 1000).toFixed(1)}s` : "已完成")
+        ? firstPreviewLine(tool.output) ||
+          (tool.durationMs ? `已完成 · ${(tool.durationMs / 1000).toFixed(1)}s` : "已完成")
         : "";
   return {
     id: `tool-${tool.id || tool.name}`,
     kind: "tool",
-    icon: fileChange ? Pencil : Wrench,
+    icon: Wrench,
     title,
     preview,
     status,
     sections: sections.length ? sections : undefined,
-    ...(fileChange && tool.fileChanges?.length ? { fileChanges: tool.fileChanges } : {}),
-    ...(fileStats ? { fileStats } : {}),
+  };
+}
+
+function fileChangeActivityEntry(change: FileChangeMessage): ActivityEntry {
+  const status = segmentStatus(change.status ?? "completed");
+  const title = fileChangeTitle(change.path, change.status);
+  const preview =
+    status === "success"
+      ? [
+          change.additions ? `+${change.additions}` : "",
+          change.deletions ? `-${change.deletions}` : "",
+        ]
+          .filter(Boolean)
+          .join(" ") || "已完成"
+      : "";
+  return {
+    id: `file-${change.path}`,
+    kind: "tool",
+    icon: Pencil,
+    title,
+    preview,
+    status,
+    fileChanges: [
+      {
+        path: change.path,
+        ...(change.additions !== undefined ? { additions: change.additions } : {}),
+        ...(change.deletions !== undefined ? { deletions: change.deletions } : {}),
+      },
+    ],
+    fileStats: {
+      additions: change.additions ?? 0,
+      deletions: change.deletions ?? 0,
+    },
   };
 }
 
 const entries = computed<ActivityEntry[]>(() => {
   const list: ActivityEntry[] = [];
 
-  if (props.timeline.length) {
-    for (const item of props.timeline) {
-      if (item.kind === "content") {
+  for (const message of props.messages) {
+    if (message.role === "reasoning") {
+      list.push({
+        id: `reasoning-${list.length}`,
+        kind: "reasoning",
+        icon: Sparkles,
+        title: reasoningRunning.value
+          ? "正在思考"
+          : props.reasoningDurationMs
+            ? `思考用时 ${formatWorkedDuration(props.reasoningDurationMs)}`
+            : "思考过程",
+        preview: "",
+        status: reasoningRunning.value ? "running" : "success",
+        content: message.content,
+      });
+    } else if (message.role === "tool") {
+      list.push(toolActivityEntry(message));
+    } else if (message.role === "fileChange") {
+      list.push(fileChangeActivityEntry(message));
+    } else if (message.role === "plan") {
+      for (const [index, entry] of message.entries.entries()) {
+        const status: ActivityEntry["status"] =
+          entry.status === "completed"
+            ? "success"
+            : entry.status === "in_progress"
+              ? "running"
+              : "pending";
         list.push({
-          id: item.id,
-          kind: "content",
-          icon: null,
-          title: "",
-          preview: "",
-          status: "success",
-          content: item.content,
-        });
-      } else if (item.kind === "reasoning") {
-        list.push({
-          id: item.id,
-          kind: "reasoning",
-          icon: Sparkles,
-          title: props.streaming ? "正在思考" : "思考过程",
-          preview: "",
-          status: props.streaming ? "running" : "success",
-          content: item.content,
-        });
-      } else if (item.kind === "plan") {
-        for (const [index, entry] of (item.plan.entries ?? []).entries()) {
-          const status: ActivityEntry["status"] =
+          id: `plan-${list.length}-${index}`,
+          kind: "plan",
+          icon: ListTodo,
+          title: entry.content || `步骤 ${index + 1}`,
+          preview:
             entry.status === "completed"
-              ? "success"
+              ? "已完成"
               : entry.status === "in_progress"
-                ? "running"
-                : "pending";
-          list.push({
-            id: `${item.id}-${index}`,
-            kind: "plan",
-            icon: ListTodo,
-            title: entry.content || `步骤 ${index + 1}`,
-            preview:
-              entry.status === "completed"
-                ? "已完成"
-                : entry.status === "in_progress"
-                  ? "进行中"
-                  : "等待中",
-            status,
-          });
-        }
-      } else {
-        list.push(toolActivityEntry(item.activity));
+                ? "进行中"
+                : "等待中",
+          status,
+        });
       }
-    }
-    return normalizeEntryIds(list);
-  }
-
-  if (props.reasoning?.content.trim()) {
-    list.push({
-      id: "reasoning",
-      kind: "reasoning",
-      icon: Sparkles,
-      title: reasoningLive.value
-        ? "正在思考"
-        : props.reasoning.durationMs
-          ? `思考用时 ${formatWorkedDuration(props.reasoning.durationMs)}`
-          : "思考过程",
-      preview: "",
-      status: reasoningLive.value ? "running" : "success",
-      content: props.reasoning.content,
-    });
-  }
-
-  for (const tool of props.tools) {
-    list.push(toolActivityEntry(tool));
-  }
-
-  for (const [index, entry] of (props.plan?.entries ?? []).entries()) {
-    const status: ActivityEntry["status"] =
-      entry.status === "completed"
-        ? "success"
-        : entry.status === "in_progress"
-          ? "running"
-          : "pending";
-    list.push({
-      id: `plan-${index}`,
-      kind: "plan",
-      icon: ListTodo,
-      title: entry.content || `步骤 ${index + 1}`,
-      preview:
-        entry.status === "completed"
-          ? "已完成"
-          : entry.status === "in_progress"
-            ? "进行中"
-            : "等待中",
-      status,
-    });
-  }
-
-  if (props.workspace) {
-    for (const file of props.workspace.files) {
-      const writing = file.status === "streaming" && props.streaming;
-      list.push({
-        id: `file-${file.path}`,
-        kind: "workspace",
-        icon: Pencil,
-        title: writing ? `正在写入 ${file.path}` : `已生成 ${file.path}`,
-        preview: writing ? "写入中" : "已生成",
-        status: writing ? "running" : "success",
-      });
-    }
-    for (const [index, error] of props.workspace.errors.entries()) {
-      list.push({
-        id: `workspace-error-${index}`,
-        kind: "workspace",
-        icon: Pencil,
-        title: "文件生成异常",
-        preview: error,
-        status: "error",
-      });
+    } else if (message.role === "workspace") {
+      for (const file of message.files) {
+        const writing = file.status === "streaming" && props.streaming;
+        list.push({
+          id: `file-${file.path}`,
+          kind: "workspace",
+          icon: Pencil,
+          title: writing ? `正在写入 ${file.path}` : `已生成 ${file.path}`,
+          preview: writing ? "写入中" : "已生成",
+          status: writing ? "running" : "success",
+        });
+      }
+      for (const [index, error] of message.errors.entries()) {
+        list.push({
+          id: `workspace-error-${index}`,
+          kind: "workspace",
+          icon: Pencil,
+          title: "文件生成异常",
+          preview: error,
+          status: "error",
+        });
+      }
     }
   }
 
@@ -320,30 +256,11 @@ const entries = computed<ActivityEntry[]>(() => {
 });
 
 /** 活动摘要："正在执行：N 次命令，M 次思考" / "已执行：…"。 */
-const summaryLabel = computed(() => {
-  if (!entries.value.length) return "";
-  let commands = 0;
-  let reasoning = 0;
-  let plans = 0;
-  let files = 0;
-  for (const entry of entries.value) {
-    if (entry.kind === "reasoning") reasoning += 1;
-    else if (entry.kind === "plan") plans += 1;
-    else if (entry.kind === "workspace") files += 1;
-    else if (entry.kind === "tool") {
-      if (entry.fileChanges?.length || entry.fileStats) files += 1;
-      else commands += 1;
-    }
-  }
-  const parts: string[] = [];
-  if (commands) parts.push(`${commands} 次命令`);
-  if (reasoning) parts.push(`${reasoning} 次思考`);
-  if (plans) parts.push(`${plans} 个计划`);
-  if (files) parts.push(`${files} 次文件修改`);
-  const running = entries.value.some((entry) => entry.status === "running");
-  return running ? `正在执行：${parts.join("，")}` : `已执行：${parts.join("，")}`;
-});
+const summary = computed(() => summarizeMessages(props.messages));
 const anyRunning = computed(() => entries.value.some((entry) => entry.status === "running"));
+const summaryLabel = computed(() =>
+  formatActivitySummary(summary.value, { running: anyRunning.value }),
+);
 
 const hasDetail = (entry: ActivityEntry): boolean =>
   Boolean(entry.content) || Boolean(entry.sections?.length) || Boolean(entry.fileChanges?.length);
@@ -445,19 +362,8 @@ onBeforeUnmount(() => {
         class="flex min-w-0 flex-col"
         @click="toggleItem(entry)"
       >
-        <XMarkdown
-          v-if="entry.kind === 'content' && entry.content"
-          :content="entry.content"
-          :components="markdownComponents"
-          :streaming="{ hasNextChunk: streaming, enableAnimation: streaming, tail: false }"
-          :class-name="markdownClassName"
-          :config="{ breaks: true }"
-          open-links-in-new-tab
-        />
-
         <!-- 标题行：与展开内容上下布局，互不居中 -->
         <div
-          v-else
           class="my-4px group flex min-h-6 items-center rounded-[6px] px-1.5 py-[3px] text-[11.5px] leading-[14px] w-full"
           :class="
             hasDetail(entry)
@@ -485,11 +391,11 @@ onBeforeUnmount(() => {
               class="flex-none font-mono text-[10.5px] text-brand-danger"
               >-{{ entry.fileStats.deletions }}</span
             >
-            <span
-              v-if="!isItemExpanded(entry.id) && entry.preview"
-              class="min-w-0 flex-1 overflow-hidden truncate text-[11px] text-brand-ghost"
-              >{{ entry.preview }}</span
-            >
+            <!-- <span -->
+            <!--   v-if="!isItemExpanded(entry.id) && entry.preview" -->
+            <!--   class="min-w-0 flex-1 overflow-hidden truncate text-[11px] text-brand-ghost" -->
+            <!--   >{{ entry.preview }}</span -->
+            <!-- > -->
           </div>
           <span class="inline-flex flex-none items-center" aria-hidden="true">
             <X v-if="entry.status === 'error'" class="h-2.5 w-2.5 text-brand-danger" />
@@ -523,8 +429,8 @@ onBeforeUnmount(() => {
                   :content="entry.content"
                   :components="markdownComponents"
                   :streaming="{
-                    hasNextChunk: reasoningLive,
-                    enableAnimation: reasoningLive,
+                    hasNextChunk: reasoningRunning,
+                    enableAnimation: reasoningRunning,
                     tail: false,
                   }"
                   :class-name="[markdownClassName, 'activity-reasoning-markdown'].join(' ')"

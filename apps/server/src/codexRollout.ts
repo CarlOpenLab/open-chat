@@ -90,17 +90,19 @@ export function parseCodexRollout(content: string): unknown[] {
     if (!turnId) continue;
     const items = turnFor(turnId);
     const id = stringValue(payload.id) || randomUUID();
+    // codex 每条 response_item 记录带顶层 timestamp（epoch 秒），透传给适配器。
+    const timestamp = record.timestamp;
 
     if (ptype === "message") {
       const role = stringValue(payload.role);
       if (role === "user") {
-        items.push({ id, type: "userMessage", content: payload.content });
+        items.push({ id, timestamp, type: "userMessage", content: payload.content });
       } else if (role === "assistant") {
-        items.push({ id, type: "agentMessage", text: outputText(payload.content) });
+        items.push({ id, timestamp, type: "agentMessage", text: outputText(payload.content) });
       }
       // developer / system：系统上下文，不作为对话内容。
     } else if (ptype === "reasoning") {
-      items.push({ id, type: "reasoning", summary: payload.summary });
+      items.push({ id, timestamp, type: "reasoning", summary: payload.summary });
     } else if (
       ptype === "custom_tool_call" ||
       ptype === "function_call" ||
@@ -108,6 +110,7 @@ export function parseCodexRollout(content: string): unknown[] {
     ) {
       items.push({
         id: stringValue(payload.call_id) || id,
+        timestamp,
         type: "commandExecution",
         name: stringValue(payload.name) || ptype,
         status: stringValue(payload.status) || "completed",
@@ -117,6 +120,7 @@ export function parseCodexRollout(content: string): unknown[] {
     } else if (ptype === "web_search") {
       items.push({
         id,
+        timestamp,
         type: "webSearch",
         name: "web_search",
         status: stringValue(payload.status) || "completed",
@@ -124,6 +128,7 @@ export function parseCodexRollout(content: string): unknown[] {
     } else if (ptype === "file_change") {
       items.push({
         id,
+        timestamp,
         type: "fileChange",
         name: "file_change",
         status: stringValue(payload.status) || "completed",

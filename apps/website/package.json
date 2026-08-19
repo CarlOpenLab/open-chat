@@ -13,6 +13,7 @@
     "@antdv-next/x-card": "catalog:",
     "@antdv-next/x-markdown": "catalog:",
     "@antdv-next/x-sdk": "catalog:",
+    "@cc-heart/open-chat-types": "workspace:*",
     "@codemirror/lang-css": "catalog:",
     "@codemirror/lang-javascript": "catalog:",
     "@codemirror/lang-json": "catalog:",

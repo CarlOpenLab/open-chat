@@ -1,5 +1,5 @@
 /**
- * 独立网关入口（开发：`tsx watch src/index.ts`；生产：`node dist/index.cjs`）。
+ * 独立网关入口（开发：`tsx watch src/index.ts --dev`；生产：`node dist/index.cjs`）。
  *
  * 无配置文件，使用内置默认配置（自动发现本机 CLI）。
  * 业务逻辑在 app.ts（`startGateway` / `createGatewayApp`），
@@ -8,6 +8,7 @@
  * 可选参数：
  *   --port <port>  监听端口（默认 8082，0 = 自动分配）
  *   --host <host>  监听地址（默认 0.0.0.0，可从局域网访问）
+ *   --dev          开发模式：不生成访问密码，Web 界面直接放行
  */
 import { startGateway } from "./app";
 
@@ -18,6 +19,7 @@ function parseArg(name: string): string | undefined {
 
 const portRaw = parseArg("--port");
 const host = parseArg("--host") ?? "0.0.0.0";
+const dev = process.argv.includes("--dev") || process.env.NODE_ENV === "development";
 const port = portRaw !== undefined ? Number(portRaw) : undefined;
 if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) {
   console.error(`无效端口: ${portRaw}`);
@@ -25,7 +27,7 @@ if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535))
 }
 
 async function main(): Promise<void> {
-  const gateway = await startGateway({ host, port });
+  const gateway = await startGateway({ host, port, dev });
   const shutdown = (signal: string): void => {
     console.log(`\nReceived ${signal}, shutting down…`);
     void gateway.stop().then(() => process.exit(0));

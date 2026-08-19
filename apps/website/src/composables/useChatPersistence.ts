@@ -10,7 +10,7 @@ import {
   type PersistedConversation,
   type QueuedChatMessage,
 } from "../services/chatStorage";
-import { isA2UISubmissionContextMessage, type A2UISubmission } from "../utils/a2ui";
+import { isHiddenModelMessage } from "../services/transcript";
 import type { WorkspaceFileDraft } from "../utils/fileWorkspace";
 
 export interface OpenChatConversation extends ConversationItemType {
@@ -19,7 +19,6 @@ export interface OpenChatConversation extends ConversationItemType {
   /** 创建会话时使用的模型；历史数据缺省时由当前模型补齐。 */
   modelId?: string;
   messages?: DefaultMessageInfo<XModelMessage>[];
-  a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
   queuedMessages?: QueuedChatMessage[];
   queuePaused?: boolean;
@@ -112,9 +111,6 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
             ? { updatedAt: conversation.updatedAt }
             : {}),
           messages: normalizedMessages,
-          a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
-            ? conversation.a2uiSubmissions
-            : [],
           workspaceDrafts: Array.isArray(conversation.workspaceDrafts)
             ? conversation.workspaceDrafts
             : [],
@@ -156,8 +152,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
       if (conv.label === "默认对话") {
         if (conv.messages?.length) {
           const firstUserMessage = conv.messages.find(
-            (m) =>
-              m.message.role === "user" && !isA2UISubmissionContextMessage(m.message, m.extraInfo),
+            (m) => m.message.role === "user" && !isHiddenModelMessage(m.message, m.extraInfo),
           );
           if (firstUserMessage && typeof firstUserMessage.message.content === "string") {
             // 注：PersistedConversation 的 Omit + 索引签名使 key 丢失已知类型，

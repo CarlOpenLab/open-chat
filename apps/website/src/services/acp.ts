@@ -1,6 +1,6 @@
 import { API_BASE_URL, GATEWAY_API_KEY } from "./ai";
 import { handleGatewayUnauthorized, requireGatewayAccess } from "./access";
-import type { TranscriptMessage } from "./transcript";
+import type { TranscriptMessage } from "@cc-heart/open-chat-types";
 
 export interface AcpAgentView {
   id: string;
@@ -55,7 +55,7 @@ export interface AcpSessionState {
   sessionId: string;
   configOptions: AcpConfigOption[];
   modes?: unknown;
-  history?: TranscriptMessage[];
+  messages?: TranscriptMessage[];
   loadSupported?: boolean;
   /** 该 ACP 会话当前是否正在运行（服务端 activeRuns，回合进行中为 true）。 */
   running?: boolean;

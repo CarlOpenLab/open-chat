@@ -1,10 +1,18 @@
 import type {
-  TranscriptActivity,
+  ContentMessage,
+  FileChangeMessage,
+  PlanMessage,
+  ReasoningMessage,
+  ToolMessage,
   TranscriptHistoryCollector,
   TranscriptMessage,
   TranscriptRole,
-  TranscriptTimelineItem,
+  WorkspaceMessage,
 } from "./types";
+
+// ─────────────────────────────────────────────────────────────
+// 扁平消息 collector（服务端 live 累积，如 ACP）。
+// ─────────────────────────────────────────────────────────────
 
 export function createTranscriptCollector(
   messages: TranscriptMessage[] = [],
@@ -20,137 +28,163 @@ export function transcriptMessageFor(
   const last = collector.messages.at(-1);
   if (last && collector.activeRole === role) return last;
 
-  const message: TranscriptMessage = {
-    id: `${idPrefix}-${collector.nextId++}`,
-    role,
-    content: "",
-  };
+  const timestamp = Date.now();
+  const id = `${idPrefix}-${collector.nextId++}`;
+  const message = createMessage(role, id, timestamp);
   collector.messages.push(message);
   collector.activeRole = role;
   return message;
 }
 
-export function appendTranscriptText(current: string | undefined, next: string, separator = "") {
-  if (!next) return current ?? "";
-  if (!current) return next;
-  return `${current}${separator}${next}`;
-}
-
-export function upsertTranscriptActivity(
-  activities: TranscriptActivity[] | undefined,
-  activity: TranscriptActivity,
-): TranscriptActivity[] {
-  const next = activities ? activities.slice() : [];
-  const index = next.findIndex((item) => item.id === activity.id);
-  if (index === -1) next.push(activity);
-  else next[index] = { ...next[index], ...activity };
-  return next;
-}
-
-export function appendTranscriptTimeline(
-  message: TranscriptMessage,
-  item: TranscriptTimelineItem,
-): void {
-  const timeline = message.timeline ? message.timeline.slice() : [];
-  if (item.kind === "tool") {
-    const index = timeline.findIndex((entry) => entry.kind === "tool" && entry.id === item.id);
-    if (index === -1) timeline.push(item);
-    else {
-      const previous = timeline[index];
-      if (previous?.kind === "tool") {
-        timeline[index] = {
-          ...previous,
-          activity: { ...previous.activity, ...item.activity },
-        };
-      }
-    }
-  } else if (item.kind === "plan") {
-    const index = timeline.findIndex((entry) => entry.kind === "plan" && entry.id === item.id);
-    if (index === -1) timeline.push(item);
-    else timeline[index] = item;
-  } else {
-    const previous = timeline.at(-1);
-    if (previous?.kind === item.kind) {
-      timeline[timeline.length - 1] = {
-        ...previous,
-        content: `${previous.content}${item.content}`,
-      };
-    } else {
-      const duplicateCount = timeline.filter((entry) => entry.id === item.id).length;
-      timeline.push(duplicateCount ? { ...item, id: `${item.id}-${duplicateCount}` } : item);
-    }
+function createMessage(role: TranscriptRole, id: string, timestamp: number): TranscriptMessage {
+  switch (role) {
+    case "user":
+      return { id, timestamp, role: "user", content: "" };
+    case "reasoning":
+      return { id, timestamp, role: "reasoning", content: "" };
+    case "content":
+      return { id, timestamp, role: "content", content: "" };
+    case "tool":
+      return { id, timestamp, role: "tool", name: "", status: "pending" };
+    case "plan":
+      return { id, timestamp, role: "plan", entries: [] };
+    case "fileChange":
+      return { id, timestamp, role: "fileChange", path: "" };
+    case "workspace":
+      return { id, timestamp, role: "workspace", files: [], errors: [] };
   }
-  message.timeline = timeline;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 扁平消息操作。
+// ─────────────────────────────────────────────────────────────
+
+/** 相邻 content 消息合并（块之间用空行），否则追加。 */
+export function appendContentMessage(
+  messages: TranscriptMessage[],
+  id: string,
+  timestamp: number,
+  text: string,
+): void {
+  if (!text) return;
+  const previous = messages.at(-1);
+  if (previous?.role === "content") {
+    messages[messages.length - 1] = {
+      ...previous,
+      content: `${previous.content}\n\n${text}`,
+    };
+  } else {
+    messages.push({ id, timestamp, role: "content", content: text });
+  }
+}
+
+/** 相邻 reasoning 消息合并，否则追加。 */
+export function appendReasoningMessage(
+  messages: TranscriptMessage[],
+  id: string,
+  timestamp: number,
+  text: string,
+): void {
+  if (!text) return;
+  const previous = messages.at(-1);
+  if (previous?.role === "reasoning") {
+    messages[messages.length - 1] = {
+      ...previous,
+      content: `${previous.content}${text}`,
+    };
+  } else {
+    messages.push({ id, timestamp, role: "reasoning", content: text });
+  }
+}
+
+/** 工具消息按 id upsert（后到状态覆盖旧状态）。 */
+export function upsertToolMessage(messages: TranscriptMessage[], tool: ToolMessage): void {
+  const index = messages.findIndex((message) => message.role === "tool" && message.id === tool.id);
+  if (index === -1) messages.push(tool);
+  else messages[index] = { ...(messages[index] as ToolMessage), ...tool };
+}
+
+/** plan 消息唯一，后到者覆盖。 */
+export function upsertPlanMessage(
+  messages: TranscriptMessage[],
+  id: string,
+  timestamp: number,
+  entries: PlanMessage["entries"],
+): void {
+  const index = messages.findIndex((message) => message.role === "plan");
+  const message: PlanMessage = { id, timestamp, role: "plan", entries };
+  if (index === -1) messages.push(message);
+  else messages[index] = message;
+}
+
+/** 文件修改消息按 path upsert。 */
+export function upsertFileChangeMessage(
+  messages: TranscriptMessage[],
+  change: FileChangeMessage,
+): void {
+  const index = messages.findIndex(
+    (message) => message.role === "fileChange" && message.path === change.path,
+  );
+  if (index === -1) messages.push(change);
+  else messages[index] = { ...(messages[index] as FileChangeMessage), ...change };
+}
+
+/** workspace 消息唯一，后到者覆盖。 */
+export function upsertWorkspaceMessage(
+  messages: TranscriptMessage[],
+  workspace: WorkspaceMessage,
+): void {
+  const index = messages.findIndex((message) => message.role === "workspace");
+  if (index === -1) messages.push(workspace);
+  else messages[index] = workspace;
 }
 
 /**
- * Provider histories occasionally split one assistant turn across several
- * adjacent records. Merge only adjacent assistant records; user boundaries
- * remain authoritative turn boundaries.
+ * 扁平历史规范化：合并相邻同种 content/reasoning 消息，去掉空 assistant 侧消息。
+ * user 消息边界保持权威。
  */
 export function normalizeTranscriptHistory(messages: TranscriptMessage[]): TranscriptMessage[] {
   const history: TranscriptMessage[] = [];
   for (const message of messages) {
-    if (!hasTranscriptContent(message)) continue;
-    const previous = history.at(-1);
-    if (message.role === "assistant" && previous?.role === "assistant") {
-      previous.content = appendTranscriptText(previous.content, message.content, "\n\n");
-      previous.reasoningContent = optionalText(
-        appendTranscriptText(previous.reasoningContent, message.reasoningContent ?? "", "\n\n"),
-      );
-      for (const activity of message.toolCalls ?? []) {
-        previous.toolCalls = upsertTranscriptActivity(previous.toolCalls, activity);
-      }
-      if (message.agentPlan) previous.agentPlan = message.agentPlan;
-      for (const item of message.timeline ?? []) appendTranscriptTimeline(previous, item);
+    if (message.role === "user") {
+      history.push(message);
       continue;
     }
-    const normalized = {
-      ...message,
-      content: message.content.trim(),
-      reasoningContent: optionalText(message.reasoningContent?.trim() ?? ""),
-    };
-    if (normalized.role === "assistant" && !normalized.timeline?.length) {
-      if (normalized.reasoningContent) {
-        appendTranscriptTimeline(normalized, {
-          kind: "reasoning",
-          id: `reasoning-${normalized.id}`,
-          content: normalized.reasoningContent,
-        });
-      }
-      for (const activity of normalized.toolCalls ?? []) {
-        appendTranscriptTimeline(normalized, { kind: "tool", id: activity.id, activity });
-      }
-      if (normalized.agentPlan) {
-        appendTranscriptTimeline(normalized, {
-          kind: "plan",
-          id: `plan-${normalized.id}`,
-          plan: normalized.agentPlan,
-        });
-      }
-      if (normalized.content) {
-        appendTranscriptTimeline(normalized, {
-          kind: "content",
-          id: `content-${normalized.id}`,
-          content: normalized.content,
-        });
-      }
+    if (isEmptyAssistantMessage(message)) continue;
+    const previous = history.at(-1);
+    if (
+      previous?.role === message.role &&
+      (message.role === "content" || message.role === "reasoning")
+    ) {
+      const prev = previous as ContentMessage | ReasoningMessage;
+      const current = message as ContentMessage | ReasoningMessage;
+      const merged =
+        message.role === "content"
+          ? `${prev.content}\n\n${current.content}`
+          : `${prev.content}${current.content}`;
+      history[history.length - 1] = { ...prev, content: merged };
+    } else {
+      history.push(message);
     }
-    history.push(normalized);
   }
   return history;
 }
 
-export function hasTranscriptContent(message: TranscriptMessage): boolean {
-  return Boolean(
-    message.content.trim() ||
-    message.reasoningContent?.trim() ||
-    message.toolCalls?.length ||
-    message.agentPlan ||
-    message.attachments?.length,
-  );
+function isEmptyAssistantMessage(message: TranscriptMessage): boolean {
+  switch (message.role) {
+    case "content":
+    case "reasoning":
+      return !message.content.trim();
+    case "plan":
+      return message.entries.length === 0;
+    case "workspace":
+      return message.files.length === 0 && message.errors.length === 0;
+    default:
+      return false;
+  }
 }
 
-function optionalText(value: string): string | undefined {
-  return value || undefined;
+/** 判断扁平消息列表是否有 assistant 侧内容（非 user 消息）。 */
+export function hasAssistantContent(messages: readonly TranscriptMessage[]): boolean {
+  return messages.some((message) => message.role !== "user");
 }

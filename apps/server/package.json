@@ -8,12 +8,13 @@
     "./app": "./src/app.ts"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/index.ts --dev",
     "build": "esbuild src/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist/index.cjs",
     "start": "node dist/index.cjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
+    "@cc-heart/open-chat-types": "workspace:*",
     "cors": "catalog:",
     "express": "catalog:"
   },

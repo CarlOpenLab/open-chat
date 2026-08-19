@@ -1,6 +1,5 @@
 import type { ConversationItemType } from "@antdv-next/x";
 import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
-import { isValidA2UISubmission, type A2UISubmission } from "../utils/a2ui";
 import { isValidWorkspaceFileDraft, type WorkspaceFileDraft } from "../utils/fileWorkspace";
 import { deleteLocalValue, readLocalValue, writeLocalValue } from "./localDatabase";
 import type { UploadedAttachment } from "./ai";
@@ -18,7 +17,6 @@ export interface PersistedConversation extends Omit<ConversationItemType, "messa
   agentId?: string;
   modelId?: string;
   messages: DefaultMessageInfo<XModelMessage>[];
-  a2uiSubmissions?: A2UISubmission[];
   workspaceDrafts?: WorkspaceFileDraft[];
   queuedMessages?: QueuedChatMessage[];
   queuePaused?: boolean;
@@ -125,9 +123,6 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
         ...(typeof conversation.modelId === "string" && conversation.modelId
           ? { modelId: conversation.modelId }
           : {}),
-        a2uiSubmissions: Array.isArray(conversation.a2uiSubmissions)
-          ? conversation.a2uiSubmissions.filter(isValidA2UISubmission)
-          : [],
         ...(Array.isArray(conversation.workspaceDrafts)
           ? { workspaceDrafts: conversation.workspaceDrafts.filter(isValidWorkspaceFileDraft) }
           : {}),

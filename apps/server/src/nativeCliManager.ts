@@ -41,7 +41,7 @@ export interface NativeSessionStateView {
   sessionId: string;
   configOptions: SessionConfigOption[];
   modes: null;
-  history?: TranscriptMessage[];
+  messages?: TranscriptMessage[];
 }
 
 interface NativeProviderSessionView {
@@ -1974,7 +1974,7 @@ function sessionView(
     sessionId: session.sessionId,
     configOptions,
     modes: null,
-    ...(history.length > 0 ? { history } : {}),
+    ...(history.length > 0 ? { messages: history } : {}),
   };
 }
 

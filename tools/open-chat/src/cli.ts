@@ -319,6 +319,7 @@ async function main(): Promise<void> {
       host: opts.host,
       port: opts.port,
       staticDir: websiteDir,
+      dev: opts.dev,
     });
 
     const targetUrl = opts.dev ? DEV_URL : gateway.url;

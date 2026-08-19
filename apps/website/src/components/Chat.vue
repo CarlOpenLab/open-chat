@@ -21,13 +21,6 @@ import {
   type PermissionRequest,
 } from "../services/OpenChatProvider";
 import {
-  A2UI_SUBMISSION_MESSAGE_KIND,
-  appendA2UISurfaceIdContext,
-  createA2UISubmission,
-  formatA2UISubmissionAsUserMessage,
-  type A2UIActionPayload,
-} from "../utils/a2ui";
-import {
   collectFileWorkspaceState,
   collectWorkspaceDiffStats,
   type EditableWorkspaceFile,
@@ -51,6 +44,7 @@ import {
 } from "../services/acp";
 import {
   appendTranscriptMessageToModelMessages,
+  isHiddenModelMessage,
   modelMessagesToBubbleItems,
   transcriptHistoryToModelMessages,
   type TranscriptMessage,
@@ -139,7 +133,6 @@ const PROJECT_PATH_HISTORY_KEY = "open-chat-project-paths-v1";
 const projectPathHistory = ref<Record<string, string[]>>({});
 const selectedWorkspacePath = ref<string[]>([]);
 const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
-const pendingA2UISurfaceId = ref("");
 const showWelcome = ref(true);
 const isHydrating = ref(true);
 let componentUnmounted = false;
@@ -391,7 +384,6 @@ const createNewConversation = (
     group: "今天",
     updatedAt: Date.now(),
     messages: [],
-    a2uiSubmissions: [],
     workspaceDrafts: [],
     queuedMessages: [],
     queuePaused: false,
@@ -685,8 +677,8 @@ const refreshAcpSession = async (force = false) => {
       ) {
         conversation.providerSessionId = session.sessionId;
       }
-      if (Array.isArray(session.history) && session.history.length > 0) {
-        conversation.messages = transcriptHistoryToModelMessages(session.history);
+      if (Array.isArray(session.messages) && session.messages.length > 0) {
+        conversation.messages = transcriptHistoryToModelMessages(session.messages);
         if (String(conversation.key) === currentConversationKey.value && !isRequesting.value) {
           setMessages(conversation.messages);
         }
@@ -775,13 +767,15 @@ const searchResultsByMessageId = computed<Record<string, WebSearchSourceItem[]>>
   }
   return map;
 });
-const currentA2UISubmissions = computed(() => getCurrentConversation()?.a2uiSubmissions ?? []);
 const currentFileWorkspace = computed(() =>
   collectFileWorkspaceState(
     currentConversationMessages.value.map(({ id, message }) => ({
       id,
       role: message.role,
       content: message.content,
+      messages: Array.isArray((message as { fragments?: unknown }).fragments)
+        ? ((message as { fragments: unknown }).fragments as TranscriptMessage[])
+        : undefined,
     })),
   ),
 );
@@ -820,7 +814,7 @@ const updateConversationMessages = (
   // 如果有消息，更新对话标题为首条用户消息摘要
   if (newMessages.length > 0 && conv.label === "新对话") {
     const firstUserMessage = newMessages.find(
-      (m) => m.message.role === "user" && !isA2UISubmissionContextMessage(m.message, m.extraInfo),
+      (m) => m.message.role === "user" && !isHiddenModelMessage(m.message, m.extraInfo),
     );
     if (firstUserMessage) {
       const contentStr =
@@ -1131,7 +1125,6 @@ const syncProviderConversations = async (agentId: string): Promise<void> => {
         group: "今天",
         updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
         messages: [],
-        a2uiSubmissions: [],
         workspaceDrafts: [],
         systemPrompt: "",
         agentId,
@@ -1216,7 +1209,6 @@ const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
       group: "今天",
       updatedAt: session.lastUsed,
       messages: [],
-      a2uiSubmissions: [],
       workspaceDrafts: [],
       systemPrompt: "",
       agentId: session.agentId,
@@ -1496,7 +1488,6 @@ watch(isRequesting, (requesting) => {
   }
   attachPendingSearchSources();
   activeRequestConversationKey.value = "";
-  pendingA2UISurfaceId.value = "";
   pendingPermission.value = null;
   requestStartedAt.value = 0;
   // 请求结束：会话必然回到空闲，清掉过期的 ACP 运行状态
@@ -1569,9 +1560,9 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
   if (data === "[DONE]") return;
   if (event === "snapshot") {
     try {
-      const parsed = JSON.parse(data) as { messages?: TranscriptMessage[] };
+      const parsed = JSON.parse(data) as { messages?: unknown };
       if (Array.isArray(parsed.messages)) {
-        setMessages(transcriptHistoryToModelMessages(parsed.messages));
+        setMessages(transcriptHistoryToModelMessages(parsed.messages as TranscriptMessage[]));
         showWelcome.value = false;
       }
     } catch (err) {
@@ -2010,14 +2001,7 @@ const getRequestSystemPrompt = (baseSystemPrompt: string) => {
     .filter(Boolean)
     .join("\n\n");
 
-  return appendA2UISurfaceIdContext(
-    composedPrompt,
-    currentConversationMessages.value.map(({ message: modelMessage, status }) => ({
-      content: modelMessage.content,
-      role: modelMessage.role,
-      status,
-    })),
-  );
+  return composedPrompt;
 };
 
 interface SubmitMessageOptions {
@@ -2297,41 +2281,6 @@ const handleProjectPathRemove = (value: string) => {
   if (!removedPath) return;
   forgetProjectPath(removedPath);
   if (normalizeProjectPath(projectPath.value) === removedPath) handleProjectPathChange("");
-};
-
-const handleA2UIAction = (payload: A2UIActionPayload) => {
-  if (isRequesting.value) {
-    message.warning("回答生成中，请稍后再操作界面");
-    return;
-  }
-
-  const conversation = getCurrentConversation();
-  if (!conversation) {
-    message.error("当前对话不存在，无法提交表单");
-    return;
-  }
-  const duplicate = (conversation.a2uiSubmissions ?? []).some(
-    (submission) =>
-      submission.surfaceId === payload.surfaceId &&
-      submission.surfaceRevision === payload.surfaceRevision &&
-      submission.action.name === payload.name,
-  );
-  if (duplicate) {
-    message.info("这份表单已经提交");
-    return;
-  }
-
-  const submission = createA2UISubmission(payload, currentConversationKey.value);
-  conversation.a2uiSubmissions = [...(conversation.a2uiSubmissions ?? []), submission];
-  pendingA2UISurfaceId.value = payload.surfaceId;
-  schedulePersistState();
-  handleSubmit(formatA2UISubmissionAsUserMessage(submission), {
-    extraInfo: {
-      hidden: true,
-      kind: A2UI_SUBMISSION_MESSAGE_KIND,
-      submissionId: submission.submissionId,
-    },
-  });
 };
 
 const handleModelChange = async (key: string) => {
@@ -2627,11 +2576,9 @@ const handleCommandPaletteSelectConversation = (key: string) => {
           :bubble-items="bubbleItems"
           :dark="dark"
           :conversation-key="currentConversationKey"
-          :a2ui-pending-surface-id="pendingA2UISurfaceId"
-          :a2ui-submissions="currentA2UISubmissions"
           :search-results-by-message-id="searchResultsByMessageId"
+          :working="Boolean(currentConversationBusyState)"
           :working-started-at-ms="currentConversationBusyState?.startedAt"
-          @a2ui-action="handleA2UIAction"
           @reload="handleReloadMessage"
           @prompt-click="handlePromptClick"
         />
@@ -2755,6 +2702,10 @@ const handleCommandPaletteSelectConversation = (key: string) => {
 }
 .chat-layout > .sidebar-shell.sidebar-shell-resizing {
   transition: none;
+}
+
+:deep(.chat-markdown a) {
+  color: var(--brand-accent);
 }
 
 @media (max-width: 767px) {
