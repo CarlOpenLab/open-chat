@@ -2577,6 +2577,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
           :dark="dark"
           :conversation-key="currentConversationKey"
           :search-results-by-message-id="searchResultsByMessageId"
+          :working="Boolean(currentConversationBusyState)"
           :working-started-at-ms="currentConversationBusyState?.startedAt"
           @reload="handleReloadMessage"
           @prompt-click="handlePromptClick"

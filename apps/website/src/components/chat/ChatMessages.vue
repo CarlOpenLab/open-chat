@@ -5,6 +5,7 @@ import { ArrowDown, Copy, RotateCcw } from "@lucide/vue";
 import { computed, h, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import type { WebSearchSourceItem, UploadedAttachment } from "../../services/ai";
 import { attachmentUrl } from "../../services/ai";
+import { formatWorkingElapsed } from "../../utils/chatDuration";
 import type { TranscriptMessage } from "@cc-heart/open-chat-types";
 import AssistantMessageContent from "./AssistantMessageContent.vue";
 import ActivityList from "./ActivityList.vue";
@@ -18,6 +19,8 @@ interface Props {
   dark: boolean;
   conversationKey: string;
   searchResultsByMessageId?: Record<string, WebSearchSourceItem[]>;
+  /** 会话运行中（与侧栏 busy 状态同源），控制列尾"工作中"指示。 */
+  working?: boolean;
   /** 当前会话服务端运行起点，刷新恢复时与侧栏计时保持一致。 */
   workingStartedAtMs?: number;
 }
@@ -30,6 +33,7 @@ interface Emits {
 const props = withDefaults(defineProps<Props>(), {
   searchResultsByMessageId: () => ({}),
   workingStartedAtMs: undefined,
+  working: false,
 });
 const emit = defineEmits<Emits>();
 
@@ -289,6 +293,30 @@ const buildMessageActions = (item: BubbleItemType): ItemType[] => {
   ];
 };
 
+/** 列尾"工作中 · Xs"跳动计时：跟随 busy 状态，会话运行中每秒刷新。 */
+const nowMs = ref(Date.now());
+let workingTickTimer: ReturnType<typeof setInterval> | undefined;
+watch(
+  () => props.working,
+  (working) => {
+    if (working && !workingTickTimer) {
+      nowMs.value = Date.now();
+      workingTickTimer = setInterval(() => {
+        nowMs.value = Date.now();
+      }, 1000);
+    } else if (!working && workingTickTimer) {
+      clearInterval(workingTickTimer);
+      workingTickTimer = undefined;
+    }
+  },
+  { immediate: true },
+);
+const workingElapsed = computed(() =>
+  props.workingStartedAtMs
+    ? formatWorkingElapsed(Math.max(0, nowMs.value - props.workingStartedAtMs))
+    : "",
+);
+
 watch(
   [displayItems, () => props.workingStartedAtMs],
   ([items]) => {
@@ -364,6 +392,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   scrollBox?.removeEventListener("scroll", updateScrollState);
   if (scrollRestoreFrame !== null) cancelAnimationFrame(scrollRestoreFrame);
+  if (workingTickTimer) clearInterval(workingTickTimer);
 });
 </script>
 
@@ -423,7 +452,6 @@ onBeforeUnmount(() => {
                 :content="String(item.content ?? '')"
                 :markdown-class-name="markdownClassName"
                 :streaming="isStreamingStatus(item.status)"
-                :started-at-ms="props.workingStartedAtMs ?? messageStartMap[getThinkKey(item.key)]"
                 :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
               />
               <div
@@ -449,6 +477,26 @@ onBeforeUnmount(() => {
             />
           </div>
         </template>
+
+        <!-- 进行中指示：会话运行中（与侧栏 busy 状态同源），列尾常驻显示 -->
+        <div v-if="working" class="flex w-full justify-start" role="status" aria-live="polite">
+          <div
+            class="inline-flex min-h-[22px] items-center gap-2 text-[11.5px] leading-4 font-medium text-brand-muted-strong animate-[working-status-in_220ms_ease-out_both]"
+          >
+            <span class="inline-flex items-center gap-[3.5px]" aria-hidden="true">
+              <i
+                class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite]"
+              />
+              <i
+                class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.12s]"
+              />
+              <i
+                class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.24s]"
+              />
+            </span>
+            <span>工作中{{ workingElapsed ? ` · ${workingElapsed}` : "" }}</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -621,6 +669,27 @@ onBeforeUnmount(() => {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes working-wave {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes working-status-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 </style>

@@ -3,10 +3,9 @@ import type { BubbleItemType } from "@antdv-next/x";
 import { Sources } from "@antdv-next/x";
 import { XMarkdown } from "@antdv-next/x-markdown";
 import { Globe2, TriangleAlert } from "@lucide/vue";
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import type { Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
-import { formatWorkingElapsed } from "../../utils/chatDuration";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 
 interface Props {
@@ -14,8 +13,6 @@ interface Props {
   content: string;
   markdownClassName: string;
   streaming: boolean;
-  /** 回合开始时间戳（用于底部"工作中 · Xs"跳动）。 */
-  startedAtMs?: number;
   searchResults: WebSearchSourceItem[];
 }
 
@@ -30,31 +27,6 @@ const markdownStreaming = computed(() => ({
   enableAnimation: props.streaming,
   tail: false,
 }));
-
-/** 底部"工作中 · Xs"跳动计时。 */
-const nowMs = ref(Date.now());
-let tickTimer: ReturnType<typeof setInterval> | undefined;
-watch(
-  () => props.streaming,
-  (streaming) => {
-    if (streaming && !tickTimer) {
-      nowMs.value = Date.now();
-      tickTimer = setInterval(() => {
-        nowMs.value = Date.now();
-      }, 1000);
-    } else if (!streaming && tickTimer) {
-      clearInterval(tickTimer);
-      tickTimer = undefined;
-    }
-  },
-  { immediate: true },
-);
-const workingElapsed = computed(() =>
-  props.startedAtMs ? formatWorkingElapsed(Math.max(0, nowMs.value - props.startedAtMs)) : "",
-);
-onBeforeUnmount(() => {
-  if (tickTimer) clearInterval(tickTimer);
-});
 
 const chatNotices = computed(() => {
   const notices = props.item.extraInfo?.chatNotices;
@@ -128,49 +100,5 @@ const onFaviconError = (url: string) => {
         <Globe2 v-else class="h-4 w-4" />
       </template>
     </Sources>
-
-    <!-- 进行中指示：底部"工作中 · Xs"，随内容流式跳动 -->
-    <div
-      v-if="streaming"
-      class="inline-flex min-h-[22px] items-center gap-2 text-[11.5px] leading-4 font-medium text-brand-muted-strong animate-[working-status-in_220ms_ease-out_both]"
-      role="status"
-      aria-live="polite"
-    >
-      <span class="inline-flex items-center gap-[3.5px]" aria-hidden="true">
-        <i
-          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite]"
-        />
-        <i
-          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.12s]"
-        />
-        <i
-          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.24s]"
-        />
-      </span>
-      <span>工作中{{ workingElapsed ? ` · ${workingElapsed}` : "" }}</span>
-    </div>
   </div>
 </template>
-
-<style>
-@keyframes working-wave {
-  0%,
-  100% {
-    opacity: 0.25;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@keyframes working-status-in {
-  from {
-    opacity: 0;
-    transform: translateY(3px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-</style>
