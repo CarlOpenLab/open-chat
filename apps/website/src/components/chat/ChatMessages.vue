@@ -126,12 +126,50 @@ const isStreamingStatus = (status: unknown): boolean =>
 const messageFragment = (item: BubbleItemType): TranscriptMessage | undefined =>
   item.extraInfo?.message as TranscriptMessage | undefined;
 
+/** 取气泡携带的活动消息：合并组携带多条，普通气泡携带单条。 */
+const activityMessages = (item: BubbleItemType): TranscriptMessage[] => {
+  const extra = item.extraInfo as { messages?: unknown; message?: unknown } | undefined;
+  if (Array.isArray(extra?.messages)) return extra.messages as TranscriptMessage[];
+  return extra?.message ? [extra.message as TranscriptMessage] : [];
+};
+
+/** 活动气泡（思考/工具/计划/文件修改/工作区），不含正文。 */
+const isActivityItem = (item: BubbleItemType): boolean =>
+  item.role === "assistant" && item.extraInfo?.messageRole !== "content";
+
+/**
+ * 把相邻的活动气泡合并为一组：正文之间的思考/文件修改/工具… 只渲染一个
+ * ActivityList，摘要合并为「已执行：N 次文件修改，M 次思考」。
+ * 组 key 复用首条成员 key，流式追加成员时展开/计时状态保持连续。
+ */
+function buildActivityGroup(members: BubbleItemType[]): BubbleItemType {
+  const first = members[0];
+  const streaming = members.some((member) => isStreamingStatus(member.status));
+  const flags = members
+    .map((member) => member.extraInfo?.reasoningDone)
+    .filter((value): value is boolean => typeof value === "boolean");
+  return {
+    key: first.key,
+    role: "assistant",
+    status: streaming ? "updating" : "success",
+    loading: false,
+    content: "",
+    extraInfo: {
+      ...first.extraInfo,
+      messageRole: "activities",
+      messages: members.flatMap(activityMessages),
+      ...(flags.length ? { reasoningDone: flags.every(Boolean) } : {}),
+    },
+  };
+}
+
 /**
  * 丢弃完全空白的 assistant 气泡（无正文、无活动、无错误/提示）。
  * 内容清洗（think/workspace 剥离）已上移到数据层，这里不再做字符串解析。
+ * 相邻的活动气泡在此合并为一组，正文（content）气泡保持独立。
  */
-const displayItems = computed<BubbleItemType[]>(() =>
-  props.bubbleItems.filter((item) => {
+const displayItems = computed<BubbleItemType[]>(() => {
+  const items = props.bubbleItems.filter((item) => {
     if (item.role !== "assistant" || isStreamingStatus(item.status)) return true;
     const hasContent = typeof item.content === "string" && item.content.trim().length > 0;
     const hasFragment = Boolean(messageFragment(item));
@@ -139,8 +177,25 @@ const displayItems = computed<BubbleItemType[]>(() =>
       Boolean(item.extraInfo?.chatError) ||
       (Array.isArray(item.extraInfo?.chatNotices) && item.extraInfo.chatNotices.length > 0);
     return hasContent || hasFragment || hasMeta;
-  }),
-);
+  });
+
+  const grouped: BubbleItemType[] = [];
+  let pending: BubbleItemType[] = [];
+  const flush = () => {
+    if (pending.length) grouped.push(buildActivityGroup(pending));
+    pending = [];
+  };
+  for (const item of items) {
+    if (isActivityItem(item)) {
+      pending.push(item);
+    } else {
+      flush();
+      grouped.push(item);
+    }
+  }
+  flush();
+  return grouped;
+});
 
 const lastAssistantMessageKey = computed(
   () =>
@@ -181,7 +236,7 @@ const isSummaryExpanded = (messageId: string | number, streaming: boolean): bool
 const isItemExpandedIds = (item: BubbleItemType): string[] => {
   const key = getThinkKey(item.key);
   const saved = itemExpandedMap.value[key] ?? [];
-  const hasReasoning = messageFragment(item)?.role === "reasoning";
+  const hasReasoning = activityMessages(item).some((message) => message.role === "reasoning");
   const reasoningLive =
     isStreamingStatus(item.status) &&
     hasReasoning &&
@@ -268,8 +323,8 @@ watch(
         turnDurationMap.value[key] = Math.max(1, now - messageStartMap.value[key]);
       }
 
-      // 思考计时。
-      const hasReasoning = messageFragment(item)?.role === "reasoning";
+      // 思考计时（合并组内任一成员是思考，即按组计时）。
+      const hasReasoning = activityMessages(item).some((message) => message.role === "reasoning");
       if (hasReasoning) {
         if (!reasoningStartMap.value[key]) reasoningStartMap.value[key] = now;
         if (item.extraInfo?.reasoningDone === true && !reasoningDurationMap.value[key]) {
@@ -383,9 +438,7 @@ onBeforeUnmount(() => {
           <!-- 活动行（思考/工具/计划/文件/工作区）：非气泡，平铺展示 -->
           <div v-else class="activity-row w-full min-w-0 max-w-full">
             <ActivityList
-              :messages="
-                item.extraInfo?.message ? [item.extraInfo.message as TranscriptMessage] : []
-              "
+              :messages="activityMessages(item)"
               :streaming="isStreamingStatus(item.status)"
               :reasoning-done="item.extraInfo?.reasoningDone !== false"
               :summary-expanded="isSummaryExpanded(item.key, isStreamingStatus(item.status))"
