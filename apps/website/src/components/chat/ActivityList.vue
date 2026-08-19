@@ -27,6 +27,7 @@ import type {
 } from "@cc-heart/open-chat-types";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
+import UnifiedDiff from "./UnifiedDiff.vue";
 import { formatWorkedDuration } from "../../utils/chatDuration";
 
 interface Props {
@@ -85,7 +86,12 @@ interface ActivityEntry {
   status: "running" | "success" | "error" | "pending";
   content?: string;
   sections?: Array<{ label: string; content: string; copyable?: boolean }>;
-  fileChanges?: Array<{ path: string; additions?: number; deletions?: number }>;
+  fileChanges?: Array<{
+    path: string;
+    additions?: number;
+    deletions?: number;
+    patch?: string;
+  }>;
   fileStats?: { additions: number; deletions: number };
 }
 
@@ -174,6 +180,7 @@ function fileChangeActivityEntry(change: FileChangeMessage): ActivityEntry {
         path: change.path,
         ...(change.additions !== undefined ? { additions: change.additions } : {}),
         ...(change.deletions !== undefined ? { deletions: change.deletions } : {}),
+        ...(change.patch ? { patch: change.patch } : {}),
       },
     ],
     fileStats: {
@@ -451,20 +458,29 @@ onBeforeUnmount(() => {
                   <div
                     v-for="change in entry.fileChanges"
                     :key="change.path"
-                    class="flex min-w-0 items-center gap-2 rounded-[4px] px-1 py-0.5"
+                    class="file-change block min-w-0 rounded-[4px] bg-transparent"
                   >
-                    <Pencil class="h-3 w-3 flex-none text-brand-muted-strong" />
-                    <span
-                      class="min-w-0 flex-1 truncate font-sans text-[11px] text-brand-muted-strong"
+                    <div class="flex min-w-0 items-center gap-2 px-1 py-0.5">
+                      <Pencil class="h-3 w-3 flex-none text-brand-muted-strong" />
+                      <span
+                        class="min-w-0 flex-1 truncate font-sans text-[11px] text-brand-muted-strong"
+                      >
+                        {{ change.path }}
+                      </span>
+                      <span v-if="change.additions" class="flex-none text-brand-success"
+                        >+{{ change.additions }}</span
+                      >
+                      <span v-if="change.deletions" class="flex-none text-brand-danger"
+                        >-{{ change.deletions }}</span
+                      >
+                    </div>
+                    <!-- 路径下方：统一 diff（由 X CodeHighlighter 以 diff 语言高亮） -->
+                    <div
+                      v-if="change.patch"
+                      class="file-change-diff mt-1 min-w-0 overflow-hidden rounded-[6px]"
                     >
-                      {{ change.path }}
-                    </span>
-                    <span v-if="change.additions" class="flex-none text-brand-success"
-                      >+{{ change.additions }}</span
-                    >
-                    <span v-if="change.deletions" class="flex-none text-brand-danger"
-                      >-{{ change.deletions }}</span
-                    >
+                      <UnifiedDiff :patch="change.patch" :path="change.path" :theme="theme" />
+                    </div>
                   </div>
                 </div>
                 <div

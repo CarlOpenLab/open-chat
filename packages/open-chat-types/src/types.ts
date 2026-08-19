@@ -99,6 +99,8 @@ export interface FileChangeMessage {
   additions?: number;
   deletions?: number;
   status?: SegmentStatus;
+  /** 该文件的 unified diff 文本（X CodeHighlighter 以 diff 语言高亮）；存在时才可展示内容。 */
+  patch?: string;
 }
 
 /** 工作区生成消息（opencode 等提供的文件工作区块）。 */
@@ -157,6 +159,8 @@ export interface TranscriptFileChange {
   path: string;
   additions?: number;
   deletions?: number;
+  /** 该文件的 unified diff 文本（X CodeHighlighter 以 diff 语言高亮）。 */
+  patch?: string;
 }
 
 export interface TranscriptPlan extends Record<string, unknown> {

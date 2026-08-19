@@ -209,6 +209,7 @@ function stepActivities(message: TranscriptMessage): TranscriptActivity[] {
             path: message.path,
             ...(message.additions !== undefined ? { additions: message.additions } : {}),
             ...(message.deletions !== undefined ? { deletions: message.deletions } : {}),
+            ...(message.patch ? { patch: message.patch } : {}),
           },
         ],
       },

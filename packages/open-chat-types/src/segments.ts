@@ -69,6 +69,7 @@ export function activityToMessages(activity: TranscriptActivity): TranscriptMess
     path: change.path,
     ...(change.additions !== undefined ? { additions: change.additions } : {}),
     ...(change.deletions !== undefined ? { deletions: change.deletions } : {}),
+    ...(change.patch ? { patch: change.patch } : {}),
     status: activity.status,
   }));
 }

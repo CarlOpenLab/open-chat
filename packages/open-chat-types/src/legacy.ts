@@ -51,7 +51,7 @@ export function legacyToMessages(message: LegacySegmentSource): TranscriptMessag
   };
 
   const pushFileChanges = (
-    fileChanges: Array<{ path: string; additions?: number; deletions?: number }>,
+    fileChanges: Array<{ path: string; additions?: number; deletions?: number; patch?: string }>,
   ): void => {
     for (const change of fileChanges) {
       if (!change.path) continue;
@@ -62,6 +62,7 @@ export function legacyToMessages(message: LegacySegmentSource): TranscriptMessag
         path: change.path,
         ...(change.additions !== undefined ? { additions: change.additions } : {}),
         ...(change.deletions !== undefined ? { deletions: change.deletions } : {}),
+        ...(change.patch ? { patch: change.patch } : {}),
       });
     }
   };

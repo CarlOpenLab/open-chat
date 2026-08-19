@@ -120,6 +120,7 @@ export function convertCodexThreadHistory(
               path: change.path,
               ...(change.additions !== undefined ? { additions: change.additions } : {}),
               ...(change.deletions !== undefined ? { deletions: change.deletions } : {}),
+              ...(change.patch ? { patch: change.patch } : {}),
               status: activity.status,
             });
           }
@@ -190,23 +191,22 @@ export function normalizeCodexActivity(
   };
 }
 
-function extractFileChanges(item: Record<string, unknown>): Array<{
-  path: string;
-  additions?: number;
-  deletions?: number;
-}> {
+function extractFileChanges(item: Record<string, unknown>): Array<FileChange> {
   const source =
     item.arguments ?? item.input ?? item.changes ?? item.fileChanges ?? item.file_changes;
-  const changes: Array<{ path: string; additions?: number; deletions?: number }> = [];
+  const changes: FileChange[] = [];
   collectFileChanges(source, changes, 0);
   return dedupeFileChanges(changes);
 }
 
-function collectFileChanges(
-  value: unknown,
-  changes: Array<{ path: string; additions?: number; deletions?: number }>,
-  depth: number,
-): void {
+interface FileChange {
+  path: string;
+  additions?: number;
+  deletions?: number;
+  patch?: string;
+}
+
+function collectFileChanges(value: unknown, changes: FileChange[], depth: number): void {
   if (depth > 5 || value === null || value === undefined) return;
   if (typeof value === "string") {
     try {
@@ -237,6 +237,7 @@ function collectFileChanges(
     const counts = diff ? countPatchChanges(diff) : {};
     changes.push({
       path,
+      ...(diff ? { patch: diff } : {}),
       additions: numberValue(record.additions) ?? counts.additions,
       deletions: numberValue(record.deletions) ?? counts.deletions,
     });
@@ -246,14 +247,11 @@ function collectFileChanges(
   }
 }
 
-function collectPatchChanges(
-  patch: string,
-  changes: Array<{ path: string; additions?: number; deletions?: number }>,
-): void {
+function collectPatchChanges(patch: string, changes: FileChange[]): void {
   const paths = [...patch.matchAll(/^\+\+\+\s+(?:b\/)?(.+)$/gm)].map((match) => match[1]?.trim());
   const counts = countPatchChanges(patch);
   for (const path of paths) {
-    if (path && path !== "/dev/null") changes.push({ path, ...counts });
+    if (path && path !== "/dev/null") changes.push({ path, patch, ...counts });
   }
 }
 
@@ -271,16 +269,16 @@ function countPatchChanges(diff: string): { additions?: number; deletions?: numb
   };
 }
 
-function dedupeFileChanges(
-  changes: Array<{ path: string; additions?: number; deletions?: number }>,
-): Array<{ path: string; additions?: number; deletions?: number }> {
-  const result: Array<{ path: string; additions?: number; deletions?: number }> = [];
+function dedupeFileChanges(changes: FileChange[]): FileChange[] {
+  const result: FileChange[] = [];
   for (const change of changes) {
     const previous = result.find((entry) => entry.path === change.path);
     if (!previous) result.push(change);
     else {
       previous.additions = (previous.additions ?? 0) + (change.additions ?? 0) || undefined;
       previous.deletions = (previous.deletions ?? 0) + (change.deletions ?? 0) || undefined;
+      // 保留后到者的 patch（优先记录里自带的 diff / 结构补丁）。
+      if (change.patch) previous.patch = change.patch;
     }
   }
   return result;
