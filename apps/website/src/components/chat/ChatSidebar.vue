@@ -98,6 +98,25 @@ const GROUP_WEIGHT: Record<string, number> = {
   更早: 6,
 };
 
+const agentNameMap = computed(() => {
+  const map = new Map<string, string>();
+  for (const agent of props.agents) map.set(agent.id, agent.name);
+  map.set("api", "API");
+  return map;
+});
+
+const getConversationAgentLabel = (conversation: OpenChatConversation): string => {
+  const agentId = (conversation.agentId || "api") as string;
+  return agentNameMap.value.get(agentId) ?? agentId;
+};
+
+const getConversationModelShort = (conversation: OpenChatConversation): string => {
+  const raw = typeof conversation.modelId === "string" ? conversation.modelId.trim() : "";
+  if (!raw) return "";
+  const parts = raw.split("/");
+  return parts[parts.length - 1] || raw;
+};
+
 const groupedConversations = computed<ConversationItemType[]>(() => {
   const query = search.value.trim().toLocaleLowerCase();
   const list = props.conversationList
@@ -105,13 +124,19 @@ const groupedConversations = computed<ConversationItemType[]>(() => {
       ...item,
       group: resolveConversationGroup(item.updatedAt, item.group),
     }))
-    .filter((item) =>
-      query
-        ? String(item.label ?? "")
-            .toLocaleLowerCase()
-            .includes(query)
-        : true,
-    );
+    .filter((item) => {
+      if (!query) return true;
+      const conv = item as OpenChatConversation;
+      const haystack = [
+        String(item.label ?? ""),
+        getConversationAgentLabel(conv),
+        String(conv.modelId ?? ""),
+        String((conv as OpenChatConversation).projectPath ?? ""),
+      ]
+        .join(" ")
+        .toLocaleLowerCase();
+      return haystack.includes(query);
+    });
 
   return list.sort((a, b) => {
     const ga = GROUP_WEIGHT[a.group ?? "今天"] ?? 6;
@@ -177,7 +202,7 @@ const conversationMeta = (conversation: OpenChatConversation): string => {
 };
 
 /**
- * 条目 = 两行结构：标题行 + 项目/消息摘要 + 时间，无会话类型图标。
+ * 聚合条目 = 标题行 + 供应商/模型/项目副行 + 时间；聚合展示全供应商会话。
  * 进行中的会话把时间换成「工作中 · 已运行时长」并附一个转圈图标。
  */
 const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
@@ -186,17 +211,23 @@ const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
   const busy = Boolean(busyState);
   const title = String(conversation.label ?? "").trim() || "新对话";
   const metaText = conversationMeta(conversation);
+  const agentLabel = getConversationAgentLabel(conversation);
+  const modelShort = getConversationModelShort(conversation);
+  const providerMeta = modelShort ? `${agentLabel} · ${modelShort}` : agentLabel;
 
   return h("span", { class: "conversation-entry" }, [
     h("span", { class: "conversation-entry-body" }, [
-      // 首行：标题占满，进行中时右端挂一个转圈图标
       h("span", { class: "conversation-entry-head" }, [
         h("span", { class: "conversation-entry-title" }, title),
         busy ? h(LoaderCircle, { class: "conversation-entry-spinner" }) : null,
       ]),
       h("span", { class: "conversation-entry-meta" }, [
-        // 副行：消息预览 + 时间，文案弹性占位把时间推到右端
-        metaText ? h("span", { class: "conversation-entry-project" }, metaText) : null,
+        // 副行：供应商/模型 + 项目/消息摘要 + 时间，时间始终贴右
+        h("span", { class: "conversation-entry-provider" }, providerMeta),
+        metaText ? h("span", { class: "conversation-entry-sep" }, "·") : null,
+        metaText
+          ? h("span", { class: "conversation-entry-project" }, metaText)
+          : h("span", { class: "conversation-entry-project is-empty" }, ""),
         h(
           "span",
           { class: busy ? "conversation-entry-time is-busy" : "conversation-entry-time" },
@@ -657,12 +688,27 @@ onBeforeUnmount(() => {
   font-weight: 400;
   line-height: 15px;
 }
+.chat-sidebar :deep(.conversation-entry-provider) {
+  flex: none;
+  max-width: 44%;
+  overflow: hidden;
+  color: var(--brand-muted-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-sidebar :deep(.conversation-entry-sep) {
+  flex: none;
+  color: var(--brand-ghost);
+}
 .chat-sidebar :deep(.conversation-entry-project) {
   overflow: hidden;
   min-width: 0;
   flex: 1 1 auto;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.chat-sidebar :deep(.conversation-entry-project.is-empty) {
+  flex: 0 0 auto;
 }
 /* 闲置条目的时间比项目名更暗（text_ghost），进行中时提到 text_tertiary。
    margin-left:auto 保证即使副行没有文案，时间也始终贴右 */

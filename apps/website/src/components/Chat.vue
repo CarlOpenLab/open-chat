@@ -568,12 +568,9 @@ const inputCurrentModelLabel = computed(() => {
 });
 const projectPathEnabled = computed(() => isAcpAgent.value || isLocalModel(currentModel.value));
 
-// 会话列表只按供应商（agent）过滤：切换模型不会让历史会话消失或重排。
-const visibleConversationList = computed(() =>
-  conversationList.value.filter(
-    (conversation) => (conversation.agentId || "api") === activeAgentId.value,
-  ),
-);
+// 侧栏聚合展示：所有本地 IndexedDB 会话（全供应商聚合），不再按 activeAgent 过滤。
+// 只有本地创建过的会话 id 才会出现在侧栏，避免全量拉取供应商侧历史。
+const visibleConversationList = computed(() => [...conversationList.value]);
 
 const ensureDraftConversationKey = (): string => {
   if (!draftConversationKey.value) {
@@ -850,14 +847,49 @@ const pushHistory = (key: string) => {
 };
 
 const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
-  if (String(key) !== currentConversationKey.value) {
+  const targetKey = String(key);
+  const targetConversation = conversationList.value.find((item) => String(item.key) === targetKey);
+  // 聚合侧栏：点击不同供应商的会话时，自动切换供应商与模型
+  if (targetConversation?.agentId && targetConversation.agentId !== activeAgentId.value) {
+    const targetAgent = agents.value.find((agent) => agent.id === targetConversation.agentId);
+    if (targetAgent) {
+      if (isRequesting.value) {
+        message.warning("请先停止当前任务再切换会话");
+        return;
+      }
+      resetPermissionForAgentSwitch();
+      draftConversationKey.value = "";
+      acpSession.value = null;
+      draftProjectPath.value = "";
+      activeAgentId.value = targetAgent.id;
+      localStorage.setItem("open-chat-agent", targetAgent.id);
+      if (
+        targetAgent.kind !== "acp" &&
+        typeof targetConversation.modelId === "string" &&
+        targetConversation.modelId
+      ) {
+        currentModel.value = targetConversation.modelId;
+        reconcileCurrentModel();
+      }
+    }
+  } else if (
+    targetConversation?.modelId &&
+    !isAcpAgent.value &&
+    typeof targetConversation.modelId === "string" &&
+    targetConversation.modelId !== currentModel.value
+  ) {
+    currentModel.value = targetConversation.modelId;
+    reconcileCurrentModel();
+  }
+
+  if (targetKey !== currentConversationKey.value) {
     pushHistory(currentConversationKey.value || "");
   }
-  currentConversationKey.value = key;
+  currentConversationKey.value = targetKey;
   syncConversationRoute("push");
   const conv = getCurrentConversation();
   if (conv) {
-    showWelcome.value = conv.messages.length === 0;
+    showWelcome.value = (conv.messages?.length ?? 0) === 0;
   }
   if (window.matchMedia("(max-width: 767px)").matches) {
     closeSidebar();
@@ -891,9 +923,6 @@ const handleAgentChange = (agentId: string) => {
   syncConversationRoute("replace");
   if (!next.available) {
     message.warning(next.adapterHint || `${next.name} 当前不可用，请检查本地 CLI 安装与登录状态`);
-  }
-  if (next.kind === "acp" && next.available) {
-    void syncProviderConversations(next.id);
   }
 };
 
@@ -1067,10 +1096,9 @@ const {
 });
 
 /**
- * Provider session listing supplies provider-owned metadata. IndexedDB keeps the
- * stable UI key and cached transcript, including sessions missing temporarily
- * from a provider response, so selecting a session can render its local snapshot
- * before the provider history arrives.
+/**
+ * 仅用于已存在于本地 IndexedDB 的会话做标题/路径等元数据补齐。
+ * 不再为仅存在于供应商侧的外部会话创建新的侧栏条目——侧栏只展示 open chat 本地发起的 sessions。
  */
 const syncProviderConversations = async (agentId: string): Promise<void> => {
   const agent = agents.value.find((item) => item.id === agentId);
@@ -1084,54 +1112,35 @@ const syncProviderConversations = async (agentId: string): Promise<void> => {
       const existing = conversationList.value.find(
         (item) => item.agentId === agentId && item.providerSessionId === providerSession.sessionId,
       );
+      if (!existing) continue;
       const updatedAt = providerSession.updatedAt
         ? Date.parse(providerSession.updatedAt)
         : Number.NaN;
-      if (existing) {
-        if (
-          providerSession.title?.trim() &&
-          (!String(existing.label ?? "").trim() || existing.label === "新对话")
-        ) {
-          existing.label = providerSession.title.trim();
-          changed = true;
-        }
-        const providerProjectPath = normalizeProjectPath(providerSession.cwd);
-        if (existing.projectPath !== providerProjectPath) {
-          existing.projectPath = providerProjectPath;
-          changed = true;
-        }
-        if (Number.isFinite(updatedAt) && existing.updatedAt !== updatedAt) {
-          existing.updatedAt = updatedAt;
-          changed = true;
-          // The provider session changed outside Open Chat (Codex terminal /
-          // desktop app continued the same thread). Reload the open
-          // conversation's history snapshot so those turns become visible.
-          // The gateway never live-streams externally started turns.
-          if (
-            existing.agentId === activeAgentId.value &&
-            String(existing.key) === currentConversationKey.value &&
-            !isRequesting.value &&
-            !isHydrating.value &&
-            !acpStreamController.value
-          ) {
-            void refreshAcpSession();
-          }
-        }
-        continue;
+      if (
+        providerSession.title?.trim() &&
+        (!String(existing.label ?? "").trim() || existing.label === "新对话")
+      ) {
+        existing.label = providerSession.title.trim();
+        changed = true;
       }
-      conversationList.value.push({
-        key: `acp:${agentId}:${providerSession.sessionId}`,
-        label: providerSession.title?.trim() || "新对话",
-        group: "今天",
-        updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
-        messages: [],
-        workspaceDrafts: [],
-        systemPrompt: "",
-        agentId,
-        providerSessionId: providerSession.sessionId,
-        projectPath: normalizeProjectPath(providerSession.cwd),
-      });
-      changed = true;
+      const providerProjectPath = normalizeProjectPath(providerSession.cwd);
+      if (existing.projectPath !== providerProjectPath) {
+        existing.projectPath = providerProjectPath;
+        changed = true;
+      }
+      if (Number.isFinite(updatedAt) && existing.updatedAt !== updatedAt) {
+        existing.updatedAt = updatedAt;
+        changed = true;
+        if (
+          existing.agentId === activeAgentId.value &&
+          String(existing.key) === currentConversationKey.value &&
+          !isRequesting.value &&
+          !isHydrating.value &&
+          !acpStreamController.value
+        ) {
+          void refreshAcpSession();
+        }
+      }
     }
     if (changed) schedulePersistState();
   } catch (error) {
@@ -1175,49 +1184,32 @@ const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
           (conversation.agentId === session.agentId &&
             conversation.providerSessionId === session.sessionId),
       );
-    if (existing) {
-      // A state refresh can discover a new provider id before the run-state
-      // response arrives. Keep the gateway conversation key used by the run
-      // registry and remove that temporary provider-only duplicate.
-      if (exact && session.sessionId) {
-        for (let index = conversationList.value.length - 1; index >= 0; index -= 1) {
-          const candidate = conversationList.value[index];
-          if (
-            candidate !== exact &&
-            candidate.agentId === session.agentId &&
-            candidate.providerSessionId === session.sessionId
-          ) {
-            conversationList.value.splice(index, 1);
-            changed = true;
-          }
-        }
-      }
-      if (session.sessionId && existing.providerSessionId !== session.sessionId) {
-        existing.providerSessionId = session.sessionId;
-        changed = true;
-      }
-      const sessionProjectPath = normalizeProjectPath(session.projectPath);
-      if (sessionProjectPath && existing.projectPath !== sessionProjectPath) {
-        existing.projectPath = sessionProjectPath;
-        changed = true;
-      }
+    if (!existing) {
+      // 只维护本地已存在的会话，不为外部运行中的会话自动创建侧栏条目
       continue;
     }
-    conversationList.value.push({
-      key: session.conversationId,
-      label: "新对话",
-      group: "今天",
-      updatedAt: session.lastUsed,
-      messages: [],
-      workspaceDrafts: [],
-      systemPrompt: "",
-      agentId: session.agentId,
-      providerSessionId: session.sessionId,
-      ...(normalizeProjectPath(session.projectPath)
-        ? { projectPath: normalizeProjectPath(session.projectPath) }
-        : {}),
-    });
-    changed = true;
+    if (exact && session.sessionId) {
+      for (let index = conversationList.value.length - 1; index >= 0; index -= 1) {
+        const candidate = conversationList.value[index];
+        if (
+          candidate !== exact &&
+          candidate.agentId === session.agentId &&
+          candidate.providerSessionId === session.sessionId
+        ) {
+          conversationList.value.splice(index, 1);
+          changed = true;
+        }
+      }
+    }
+    if (session.sessionId && existing.providerSessionId !== session.sessionId) {
+      existing.providerSessionId = session.sessionId;
+      changed = true;
+    }
+    const sessionProjectPath = normalizeProjectPath(session.projectPath);
+    if (sessionProjectPath && existing.projectPath !== sessionProjectPath) {
+      existing.projectPath = sessionProjectPath;
+      changed = true;
+    }
   }
   if (changed) schedulePersistState();
 };
@@ -1238,10 +1230,8 @@ const refreshSessionState = async () => {
   const controller = new AbortController();
   sessionRefreshController = controller;
   try {
-    // Provider-owned session metadata (title / cwd / updatedAt) drives the
-    // sidebar and lets externally updated sessions reload their history
-    // snapshot below. It is refreshed on the same cadence as run state.
-    await syncProviderConversations(agentId);
+    // 本地聚合模式：不再周期性全量拉取供应商会话，仅刷新运行状态（openChatSessions）。
+    // 供应商元数据同步（syncProviderConversations）仅在需要时手动触发，避免侧栏全量拉取。
     const previouslyRunning = openChatSessions.value.filter(
       (session) => session.agentId === agentId && session.running,
     );
@@ -1398,10 +1388,6 @@ const restoreRouteConversation = async (
     draftProjectPath.value = "";
     activeAgentId.value = targetAgent.id;
     localStorage.setItem("open-chat-agent", targetAgent.id);
-    if (targetAgent.kind === "acp" && targetAgent.available) {
-      // 同步目标供应商的会话列表，让 URL 里的 provider session 出现在侧栏
-      await syncProviderConversations(targetAgent.id);
-    }
   }
 
   // 2) 会话：精确 key → ACP 重建 key → providerSessionId 匹配；找不到则落到草稿
@@ -1432,7 +1418,7 @@ const restoreRouteConversation = async (
     showWelcome.value = (conversation.messages?.length ?? 0) === 0;
     return true;
   }
-  // 本地找不到：落到目标供应商的草稿态（ACP 会话会在下次 syncProviderConversations 后出现）
+  // 本地找不到：仅展示本地 IndexedDB 会话，不再等待供应商侧同步创建
   draftProjectPath.value = "";
   currentConversationKey.value = "";
   setMessages([]);
@@ -1811,9 +1797,8 @@ onMounted(async () => {
     showWelcome.value = true;
   }
 
-  await syncProviderConversations(activeAgentId.value);
   if (componentUnmounted) return;
-  // URL 直达：打开复制的链接时恢复对应供应商与会话
+  // URL 直达：打开复制的链接时恢复对应供应商与会话（仅本地会话，不再预拉供应商全量）
   await restoreRouteConversation(initialChatPath);
   if (componentUnmounted) return;
   // Release session/config watchers only after the final route conversation
@@ -2055,6 +2040,9 @@ const sendMessageNow = (
   }
   // 只有真正提交新消息才改变会话排序；读取、恢复和实时回放保持原顺序。
   conversation.updatedAt = Date.now();
+  // 记录会话创建/最后使用的供应商与模型，供聚合侧栏点击时恢复
+  conversation.agentId = activeAgentId.value;
+  conversation.modelId = inputCurrentModel.value;
   manuallyStoppedConversationKeys.delete(String(conversation.key));
   activeRequestOutcome = "pending";
   setMessages(currentConversationMessages.value);
