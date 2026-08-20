@@ -12,7 +12,6 @@ import {
   PanelLeftClose,
   Pencil,
   Pin,
-  Search,
   Settings,
   SquarePen,
   Sun,
@@ -201,46 +200,18 @@ const conversationMeta = (conversation: OpenChatConversation): string => {
   return "";
 };
 
-/**
- * 聚合条目 = 标题行 + 供应商/模型/项目副行 + 时间；聚合展示全供应商会话。
- * 进行中的会话把时间换成「工作中 · 已运行时长」并附一个转圈图标。
- */
-const conversationLabelRender: ConversationsProps["labelRender"] = (item) => {
-  const conversation = item as OpenChatConversation;
-  const busyState = props.busyStates[String(item.key)];
-  const busy = Boolean(busyState);
-  const title = String(conversation.label ?? "").trim() || "新对话";
-  const metaText = conversationMeta(conversation);
-  const agentLabel = getConversationAgentLabel(conversation);
-  const modelShort = getConversationModelShort(conversation);
-  const providerMeta = modelShort ? `${agentLabel} · ${modelShort}` : agentLabel;
+// template slot 版本所需的小助手（供 #labelRender 内联调用）
+const getConversationTitle = (item: ConversationItemType) =>
+  String((item as OpenChatConversation).label ?? "").trim() || "新对话";
 
-  return h("span", { class: "conversation-entry" }, [
-    h("span", { class: "conversation-entry-body" }, [
-      h("span", { class: "conversation-entry-head" }, [
-        h("span", { class: "conversation-entry-title" }, title),
-        busy ? h(LoaderCircle, { class: "conversation-entry-spinner" }) : null,
-      ]),
-      h("span", { class: "conversation-entry-meta" }, [
-        // 副行：供应商/模型 + 项目/消息摘要 + 时间，时间始终贴右
-        h("span", { class: "conversation-entry-provider" }, providerMeta),
-        metaText ? h("span", { class: "conversation-entry-sep" }, "·") : null,
-        metaText
-          ? h("span", { class: "conversation-entry-project" }, metaText)
-          : h("span", { class: "conversation-entry-project is-empty" }, ""),
-        h(
-          "span",
-          { class: busy ? "conversation-entry-time is-busy" : "conversation-entry-time" },
-          busy
-            ? `工作中 · ${formatElapsedDuration(
-                nowTick.value - (busyState?.startedAt ?? nowTick.value),
-              )}`
-            : formatRelativeTime(conversation.updatedAt as number | undefined, nowTick.value),
-        ),
-      ]),
-    ]),
-  ]);
+const getProviderMeta = (item: ConversationItemType) => {
+  const c = item as OpenChatConversation;
+  const agentLabel = getConversationAgentLabel(c);
+  const modelShort = getConversationModelShort(c);
+  return modelShort ? `${agentLabel} · ${modelShort}` : agentLabel;
 };
+
+const getBusyState = (key: string) => props.busyStates[key];
 
 const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
   emit("activeChange", String(key));
@@ -405,9 +376,53 @@ onBeforeUnmount(() => {
         :active-key="currentKey"
         :groupable="groupable"
         :menu="conversationMenu"
-        :label-render="conversationLabelRender"
         @active-change="handleActiveChange"
-      />
+      >
+        <template #labelRender="{ item }">
+          <span class="conversation-entry">
+            <span class="conversation-entry-body">
+              <span class="conversation-entry-head">
+                <span class="conversation-entry-title">{{ getConversationTitle(item) }}</span>
+                <LoaderCircle
+                  v-if="getBusyState(String(item.key))"
+                  class="conversation-entry-spinner"
+                />
+              </span>
+              <span class="conversation-entry-meta">
+                <!-- 副行：供应商/模型 + 项目/消息摘要 + 时间，时间始终贴右 -->
+                <span class="conversation-entry-provider">{{ getProviderMeta(item) }}</span>
+                <span
+                  v-if="conversationMeta(item as OpenChatConversation)"
+                  class="conversation-entry-sep"
+                  >·</span
+                >
+                <span
+                  v-if="conversationMeta(item as OpenChatConversation)"
+                  class="conversation-entry-project"
+                  >{{ conversationMeta(item as OpenChatConversation) }}</span
+                >
+                <span v-else class="conversation-entry-project is-empty" />
+                <span
+                  :class="
+                    getBusyState(String(item.key))
+                      ? 'conversation-entry-time is-busy'
+                      : 'conversation-entry-time'
+                  "
+                >
+                  {{
+                    getBusyState(String(item.key))
+                      ? `工作中 · ${formatElapsedDuration(nowTick - (getBusyState(String(item.key))?.startedAt ?? nowTick))}`
+                      : formatRelativeTime(
+                          (item as OpenChatConversation).updatedAt as number | undefined,
+                          nowTick,
+                        )
+                  }}
+                </span>
+              </span>
+            </span>
+          </span>
+        </template>
+      </Conversations>
     </div>
 
     <!-- 底栏：设置在左，主题切换在右，两端平衡 -->
