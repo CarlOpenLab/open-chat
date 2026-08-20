@@ -528,7 +528,8 @@ onBeforeUnmount(() => {
 }
 
 .user-bubble {
-  max-width: 85%;
+  max-width: 50%;
+  word-break: break-all;
   animation: message-in 260ms cubic-bezier(0.2, 0, 0, 1) both;
 }
 
