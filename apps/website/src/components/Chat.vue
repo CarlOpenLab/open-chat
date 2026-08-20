@@ -130,7 +130,8 @@ const projectPath = ref("");
 const draftProjectPath = ref("");
 const defaultProjectPath = ref("");
 const PROJECT_PATH_HISTORY_KEY = "open-chat-project-paths-v1";
-const projectPathHistory = ref<Record<string, string[]>>({});
+/** 全局项目历史（与供应商/模型解耦）：不再按 agentId 分区 */
+const projectPathHistory = ref<string[]>([]);
 const selectedWorkspacePath = ref<string[]>([]);
 const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const showWelcome = ref(true);
@@ -243,6 +244,31 @@ const persistMessageTimings = (
 };
 const commandPaletteOpen = ref(false);
 const settingsOpen = ref(false);
+const CHAT_AUTO_SCROLL_KEY = "open-chat-auto-scroll-mode-v1";
+type AutoScrollMode = "follow" | "always" | "never";
+const readAutoScrollMode = (): AutoScrollMode => {
+  try {
+    const stored = localStorage.getItem(CHAT_AUTO_SCROLL_KEY);
+    if (stored === "follow" || stored === "always" || stored === "never") return stored;
+    // 兼容旧的布尔值存储
+    if (stored === "false" || stored === "0") return "never";
+    if (stored === "true" || stored === "1") return "always";
+  } catch {
+    // ignore
+  }
+  return "follow";
+};
+const autoScrollMode = ref<AutoScrollMode>(readAutoScrollMode());
+watch(autoScrollMode, (value) => {
+  try {
+    localStorage.setItem(CHAT_AUTO_SCROLL_KEY, value);
+  } catch {
+    // ignore
+  }
+});
+const handleAutoScrollModeChange = (mode: AutoScrollMode) => {
+  autoScrollMode.value = mode;
+};
 const TASK_COMPLETION_NOTIFICATIONS_KEY = "open-chat-task-completion-notifications";
 const browserNotificationsSupported =
   typeof window !== "undefined" && typeof window.Notification !== "undefined";
@@ -407,20 +433,30 @@ const isPiAgent = computed(() => {
 });
 const effectivePermissionMode = computed(() => (isPiAgent.value ? "full" : permissionMode.value));
 
+const normalizeProjectPath = (value: string | undefined): string => {
+  const path = normalizeDirectoryPath(value);
+  return path && path === normalizeDirectoryPath(defaultProjectPath.value) ? "" : path;
+};
+
 const loadProjectPathHistory = () => {
   if (typeof window === "undefined") return;
   try {
     const stored = JSON.parse(localStorage.getItem(PROJECT_PATH_HISTORY_KEY) || "null") as unknown;
-    if (!stored || typeof stored !== "object") return;
-    const normalized: Record<string, string[]> = {};
-    for (const [agentId, paths] of Object.entries(stored)) {
-      if (!Array.isArray(paths)) continue;
-      const unique = uniqueDirectoryPaths(paths).slice(0, 20);
-      if (unique.length) normalized[agentId] = unique;
+    if (!stored) return;
+    let paths: string[] = [];
+    if (Array.isArray(stored)) {
+      paths = stored.filter((v): v is string => typeof v === "string");
+    } else if (typeof stored === "object") {
+      // 兼容旧数据：Record<agentId, string[]> → 合并为全局列表
+      for (const value of Object.values(stored as Record<string, unknown>)) {
+        if (Array.isArray(value)) {
+          paths.push(...value.filter((v): v is string => typeof v === "string"));
+        }
+      }
     }
-    projectPathHistory.value = normalized;
+    projectPathHistory.value = uniqueDirectoryPaths(paths.map(normalizeProjectPath)).slice(0, 20);
   } catch {
-    projectPathHistory.value = {};
+    projectPathHistory.value = [];
   }
 };
 
@@ -433,44 +469,30 @@ const saveProjectPathHistory = () => {
   }
 };
 
-const rememberProjectPath = (value: string, agentId = activeAgentId.value) => {
+const rememberProjectPath = (value: string) => {
   const path = normalizeProjectPath(value);
   if (!path) return;
-  const previous = projectPathHistory.value[agentId] ?? [];
-  const paths = uniqueDirectoryPaths([path, ...previous]).slice(0, 20);
-  projectPathHistory.value = { ...projectPathHistory.value, [agentId]: paths };
+  const paths = uniqueDirectoryPaths([path, ...projectPathHistory.value]).slice(0, 20);
+  projectPathHistory.value = paths;
   saveProjectPathHistory();
 };
 
-const forgetProjectPath = (value: string, agentId = activeAgentId.value) => {
+const forgetProjectPath = (value: string) => {
   const path = normalizeProjectPath(value);
   if (!path) return;
-  const paths = uniqueDirectoryPaths(projectPathHistory.value[agentId] ?? []).filter(
-    (item) => item !== path,
-  );
-  const nextHistory = { ...projectPathHistory.value };
-  if (paths.length) nextHistory[agentId] = paths;
-  else delete nextHistory[agentId];
-  projectPathHistory.value = nextHistory;
+  projectPathHistory.value = projectPathHistory.value.filter((item) => item !== path);
   saveProjectPathHistory();
 };
 
 const projectPathOptions = computed(() => {
-  const paths = uniqueDirectoryPaths(
-    (projectPathHistory.value[activeAgentId.value] ?? []).map(normalizeProjectPath),
-  );
   const current = normalizeProjectPath(projectPath.value);
-  return uniqueDirectoryPaths(current ? [current, ...paths] : paths);
+  return uniqueDirectoryPaths(
+    current ? [current, ...projectPathHistory.value] : [...projectPathHistory.value],
+  );
 });
 
-const normalizeProjectPath = (value: string | undefined): string => {
-  const path = normalizeDirectoryPath(value);
-  return path && path === normalizeDirectoryPath(defaultProjectPath.value) ? "" : path;
-};
-
 const lastProjectPath = () => {
-  const paths = projectPathHistory.value[activeAgentId.value] ?? [];
-  return paths.map(normalizeProjectPath).find(Boolean) ?? "";
+  return projectPathHistory.value.map(normalizeProjectPath).find(Boolean) ?? "";
 };
 
 loadProjectPathHistory();
@@ -566,7 +588,8 @@ const inputCurrentModelLabel = computed(() => {
   );
   return selected?.name || option.currentValue;
 });
-const projectPathEnabled = computed(() => isAcpAgent.value || isLocalModel(currentModel.value));
+/** 项目目录与模型/供应商解耦：始终可用，由用户显式选择 */
+const projectPathEnabled = computed(() => true);
 
 // 侧栏聚合展示：所有本地 IndexedDB 会话（全供应商聚合），不再按 activeAgent 过滤。
 // 只有本地创建过的会话 id 才会出现在侧栏，避免全量拉取供应商侧历史。
@@ -860,7 +883,6 @@ const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
       resetPermissionForAgentSwitch();
       draftConversationKey.value = "";
       acpSession.value = null;
-      draftProjectPath.value = "";
       activeAgentId.value = targetAgent.id;
       localStorage.setItem("open-chat-agent", targetAgent.id);
       if (
@@ -911,11 +933,10 @@ const handleAgentChange = (agentId: string) => {
   resetPermissionForAgentSwitch();
   draftConversationKey.value = "";
   acpSession.value = null;
-  draftProjectPath.value = "";
+  // 项目与供应商解耦：切换供应商不重置项目目录，保留当前选择供新会话复用
   activeAgentId.value = next.id;
   localStorage.setItem("open-chat-agent", next.id);
   currentConversationKey.value = "";
-  projectPath.value = "";
   setMessages([]);
   showWelcome.value = true;
   historyBack.value = [];
@@ -1080,7 +1101,6 @@ const {
   applyPersistedState,
   schedulePersistState,
   handleExportLocalHistory,
-  handleImportLocalHistory,
   handleClearLocalHistory,
 } = useChatPersistence({
   conversationList,
@@ -1385,14 +1405,14 @@ const restoreRouteConversation = async (
     resetPermissionForAgentSwitch();
     acpSession.value = null;
     draftConversationKey.value = "";
-    draftProjectPath.value = "";
+    // 项目与供应商解耦：不清空 draftProjectPath，保留全局项目选择
     activeAgentId.value = targetAgent.id;
     localStorage.setItem("open-chat-agent", targetAgent.id);
   }
 
   // 2) 会话：精确 key → ACP 重建 key → providerSessionId 匹配；找不到则落到草稿
   if (!routeSessionId) {
-    draftProjectPath.value = "";
+    draftProjectPath.value = lastProjectPath();
     currentConversationKey.value = "";
     setMessages([]);
     showWelcome.value = true;
@@ -1410,7 +1430,6 @@ const restoreRouteConversation = async (
     if (conversation.agentId && conversation.agentId !== activeAgentId.value) {
       resetPermissionForAgentSwitch();
       acpSession.value = null;
-      draftProjectPath.value = "";
       activeAgentId.value = conversation.agentId;
       localStorage.setItem("open-chat-agent", conversation.agentId);
     }
@@ -1419,7 +1438,7 @@ const restoreRouteConversation = async (
     return true;
   }
   // 本地找不到：仅展示本地 IndexedDB 会话，不再等待供应商侧同步创建
-  draftProjectPath.value = "";
+  draftProjectPath.value = lastProjectPath();
   currentConversationKey.value = "";
   setMessages([]);
   showWelcome.value = true;
@@ -1773,11 +1792,9 @@ onMounted(async () => {
   if (componentUnmounted) return;
   defaultProjectPath.value = loadedDefaultProjectPath;
   if (loadedDefaultProjectPath) {
-    projectPathHistory.value = Object.fromEntries(
-      Object.entries(projectPathHistory.value)
-        .map(([agentId, paths]) => [agentId, uniqueDirectoryPaths(paths.map(normalizeProjectPath))])
-        .filter(([, paths]) => paths.length > 0),
-    );
+    projectPathHistory.value = uniqueDirectoryPaths(
+      projectPathHistory.value.map(normalizeProjectPath),
+    ).slice(0, 20);
     saveProjectPathHistory();
   }
   agents.value = loadedAgents;
@@ -2567,8 +2584,13 @@ const handleCommandPaletteSelectConversation = (key: string) => {
           :search-results-by-message-id="searchResultsByMessageId"
           :working="Boolean(currentConversationBusyState)"
           :working-started-at-ms="currentConversationBusyState?.startedAt"
+          :auto-scroll-mode="autoScrollMode"
+          :project-path="projectPath"
+          :project-path-options="projectPathOptions"
           @reload="handleReloadMessage"
           @prompt-click="handlePromptClick"
+          @project-path-change="handleProjectPathChange"
+          @project-path-remove="handleProjectPathRemove"
         />
       </div>
 
@@ -2667,13 +2689,14 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       :theme-mode="themeMode"
       :task-completion-notifications-enabled="taskCompletionNotificationsEnabled"
       :browser-notifications-supported="browserNotificationsSupported"
+      :auto-scroll-mode="autoScrollMode"
       @update:open="settingsOpen = $event"
       @theme-mode-change="emit('themeModeChange', $event)"
       @task-completion-notifications-change="handleTaskCompletionNotificationsChange"
       @test-task-completion-notification="handleTestTaskCompletionNotification"
       @export-history="handleExportLocalHistory"
-      @import-history="handleImportLocalHistory"
       @clear-history="handleClearLocalHistory"
+      @auto-scroll-mode-change="handleAutoScrollModeChange"
     />
   </div>
 </template>

@@ -13,6 +13,8 @@ import EmptyState from "./EmptyState.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import { Image } from "antdv-next";
 
+export type AutoScrollMode = "follow" | "always" | "never";
+
 interface Props {
   showWelcome: boolean;
   bubbleItems: BubbleItemType[];
@@ -23,17 +25,25 @@ interface Props {
   working?: boolean;
   /** 当前会话服务端运行起点，刷新恢复时与侧栏计时保持一致。 */
   workingStartedAtMs?: number;
+  /** 流式输出时的自动滚动策略，默认智能跟随 */
+  autoScrollMode?: AutoScrollMode;
+  /** 空状态标题中的项目目录（由外层 Chat 传入） */
+  projectPath?: string;
+  projectPathOptions?: string[];
 }
 
 interface Emits {
   (e: "reload", messageId: string | number): void;
   (e: "promptClick", info: { data: { key: string; description: string } }): void;
+  (e: "projectPathChange", value: string): void;
+  (e: "projectPathRemove", value: string): void;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   searchResultsByMessageId: () => ({}),
   workingStartedAtMs: undefined,
   working: false,
+  autoScrollMode: "follow",
 });
 const emit = defineEmits<Emits>();
 
@@ -214,11 +224,19 @@ const scrollToBottom = () => {
   scrollBox.scrollTo({ top: scrollBox.scrollHeight, behavior: "smooth" });
   showScrollToBottom.value = false;
 };
+const shouldAutoScroll = (): boolean => {
+  if (props.autoScrollMode === "never") return false;
+  if (props.autoScrollMode === "always") return true;
+  // follow: 仅当用户已在底部附近时才跟随，避免打断上方阅读
+  if (!scrollBox) return false;
+  const distance = scrollBox.scrollHeight - scrollBox.clientHeight - scrollBox.scrollTop;
+  return distance <= 160;
+};
 const autoScrollOnStream = () => {
   if (!scrollBox) return;
-  if (displayItems.value.some((item) => isStreamingStatus(item.status))) {
-    scrollBox.scrollTo({ top: scrollBox.scrollHeight, behavior: "auto" });
-  }
+  if (!displayItems.value.some((item) => isStreamingStatus(item.status))) return;
+  if (!shouldAutoScroll()) return;
+  scrollBox.scrollTo({ top: scrollBox.scrollHeight, behavior: "auto" });
 };
 
 const getThinkKey = (messageId: string | number) =>
@@ -361,11 +379,11 @@ watch(
       }
 
       // 活动摘要：流式中默认展开（实时看进度），回合结束默认折叠为"已执行：…"。
-      if (prevStreaming && !streaming && nextSummary[key] === undefined) {
+      // 流式中的默认展开由 isSummaryExpanded 的 fallback (saved ?? streaming) 提供，
+      // 此处不再在 streaming 时写入 true，以允许用户在流式中手动折叠后保持折叠态。
+      if (prevStreaming && !streaming) {
+        // 回合结束自动收敛为折叠，用户之后可手动再展开
         nextSummary[key] = false;
-      }
-      if (streaming && nextSummary[key] === undefined) {
-        nextSummary[key] = true;
       }
 
       lastStreamingMap.value[key] = streaming;
@@ -405,7 +423,12 @@ onBeforeUnmount(() => {
     tabindex="-1"
   >
     <section v-if="showWelcome" class="empty-state m-auto w-[min(100%,760px)] p-0 text-center">
-      <EmptyState />
+      <EmptyState
+        :project-path="projectPath"
+        :project-path-options="projectPathOptions"
+        @project-path-change="emit('projectPathChange', $event)"
+        @project-path-remove="emit('projectPathRemove', $event)"
+      />
     </section>
 
     <div v-else class="chat-scroll-box h-full min-h-0 overflow-y-auto overscroll-contain">

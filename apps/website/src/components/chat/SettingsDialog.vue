@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  ArrowDown,
   Bell,
   CloudUpload,
   Database,
@@ -11,12 +12,13 @@ import {
   Trash2,
   X,
 } from "@lucide/vue";
-import { Button, Modal, Segmented, Switch, Upload } from "antdv-next";
+import { Button, Modal, Segmented, Switch } from "antdv-next";
 import { computed, h, ref, watch } from "vue";
 import { APP_VERSION } from "../../version";
 
 type ThemeMode = "system" | "light" | "dark";
 type SettingsTab = "general" | "data" | "about";
+export type AutoScrollMode = "follow" | "always" | "never";
 
 interface Props {
   open: boolean;
@@ -24,6 +26,7 @@ interface Props {
   themeMode: ThemeMode;
   taskCompletionNotificationsEnabled: boolean;
   browserNotificationsSupported: boolean;
+  autoScrollMode: AutoScrollMode;
 }
 
 interface Emits {
@@ -32,8 +35,8 @@ interface Emits {
   (e: "taskCompletionNotificationsChange", enabled: boolean): void;
   (e: "testTaskCompletionNotification"): void;
   (e: "exportHistory"): void;
-  (e: "importHistory", file: File): void;
   (e: "clearHistory"): void;
+  (e: "autoScrollModeChange", mode: AutoScrollMode): void;
 }
 
 const props = defineProps<Props>();
@@ -51,6 +54,11 @@ const taskCompletionNotificationsValue = computed({
   set: (enabled: boolean) => emit("taskCompletionNotificationsChange", enabled),
 });
 
+const autoScrollModeValue = computed({
+  get: () => props.autoScrollMode,
+  set: (mode: AutoScrollMode) => emit("autoScrollModeChange", mode),
+});
+
 // @lucide/vue 图标是函数式组件，直接作为 Segmented 的 icon 会被 antdv-next
 // 当作普通函数调用导致崩溃（Cannot destructure property 'slots' of undefined）。
 // 包一层渲染函数，由 Vue 的 h() 负责创建 vnode。
@@ -58,6 +66,12 @@ const themeSegmentedOptions = [
   { label: "跟随系统", value: "system", icon: () => h(Monitor) },
   { label: "浅色", value: "light", icon: () => h(Sun) },
   { label: "深色", value: "dark", icon: () => h(Moon) },
+];
+
+const autoScrollSegmentedOptions = [
+  { label: "智能跟随", value: "follow" },
+  { label: "始终滚动", value: "always" },
+  { label: "关闭", value: "never" },
 ];
 
 watch(
@@ -69,7 +83,7 @@ watch(
 
 const navItems = [
   { key: "general", label: "常规", description: "外观与主题", icon: Settings2 },
-  { key: "data", label: "数据", description: "导入与备份", icon: Database },
+  { key: "data", label: "数据", description: "导出与清理", icon: Database },
   { key: "about", label: "关于", description: "版本信息", icon: Info },
 ] as const;
 </script>
@@ -141,6 +155,34 @@ const navItems = [
               </div>
             </div>
 
+            <h3 class="settings-section-title settings-section-title-spaced">对话滚动</h3>
+            <p class="settings-section-desc">
+              输出时是否自动滚动到底部。智能跟随仅在已位于底部时才滚动，避免打断阅读。
+            </p>
+            <div class="settings-card">
+              <div class="settings-row settings-row-wrap">
+                <div class="min-w-0">
+                  <div class="settings-label settings-label-with-icon">
+                    <ArrowDown class="!h-[14px] !w-[14px]" />自动滚动
+                  </div>
+                  <p class="settings-hint">
+                    {{
+                      autoScrollModeValue === "follow"
+                        ? "已在底部时跟随滚动，阅读上方内容不会被打断"
+                        : autoScrollModeValue === "always"
+                          ? "输出时始终滚动到底部"
+                          : "输出时不自动滚动，需手动点击按钮回到底部"
+                    }}
+                  </p>
+                </div>
+                <Segmented
+                  :value="autoScrollModeValue"
+                  :options="autoScrollSegmentedOptions"
+                  @change="autoScrollModeValue = $event as AutoScrollMode"
+                />
+              </div>
+            </div>
+
             <h3 class="settings-section-title settings-section-title-spaced">通知</h3>
             <p class="settings-section-desc">在任务完成后发送浏览器系统通知。</p>
             <div class="settings-card">
@@ -186,30 +228,14 @@ const navItems = [
             <div class="settings-card">
               <div class="settings-row settings-card-row">
                 <div class="min-w-0">
-                  <div class="settings-label">导出记录</div>
-                  <p class="settings-hint">下载全部会话与消息为 JSON 文件</p>
+                  <div class="settings-label">导出索引</div>
+                  <p class="settings-hint">
+                    仅导出会话 id、供应商与会话路径等索引信息，不含消息内容
+                  </p>
                 </div>
                 <Button @click="emit('exportHistory')">
                   <CloudUpload class="!h-[14px] !w-[14px]" />导出
                 </Button>
-              </div>
-              <div class="settings-row settings-card-row">
-                <div class="min-w-0">
-                  <div class="settings-label">导入记录</div>
-                  <p class="settings-hint">从 JSON 文件恢复会话与消息</p>
-                </div>
-                <Upload
-                  :show-upload-list="false"
-                  accept=".json"
-                  :before-upload="
-                    (file: File) => {
-                      emit('importHistory', file);
-                      return false;
-                    }
-                  "
-                >
-                  <Button> <CloudUpload class="!h-[14px] !w-[14px]" />导入 </Button>
-                </Upload>
               </div>
               <div class="settings-row settings-card-row">
                 <div class="min-w-0">

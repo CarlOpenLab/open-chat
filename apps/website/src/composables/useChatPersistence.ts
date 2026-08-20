@@ -4,7 +4,6 @@ import { message } from "antdv-next";
 import { onBeforeUnmount, watch, type Ref } from "vue";
 import {
   clearChatState,
-  normalizePersistedChatState,
   saveChatState,
   type PersistedChatState,
   type PersistedConversation,
@@ -48,12 +47,12 @@ interface UseChatPersistenceOptions {
   isRequesting: Ref<boolean>;
   setMessages: (messages: DefaultMessageInfo<XModelMessage>[]) => void;
   reconcileCurrentModel: () => void;
-  /** 会话被重置为草稿态（清空历史 / 导入日志后）时同步 URL */
+  /** 会话被重置为草稿态（清空历史后）时同步 URL */
   onResetToDraft?: () => void;
 }
 
 /**
- * 会话持久化：负责本地聊天记录的防抖保存、恢复、导入导出与清空。
+ * 会话持久化：负责本地聊天记录的防抖保存、恢复、导出与清空。
  */
 export function useChatPersistence(options: UseChatPersistenceOptions) {
   const {
@@ -184,7 +183,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
     currentModel.value = persistedState.currentModel;
     reconcileCurrentModel();
 
-    // 导入后保持草稿态，历史会话保留在侧栏供手动打开
+    // 恢复后保持草稿态，历史会话保留在侧栏供手动打开
     currentConversationKey.value = "";
     setMessages([]);
     showWelcome.value = true;
@@ -232,59 +231,56 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
   };
 
   const handleExportLocalHistory = () => {
-    const state: PersistedChatState = {
-      version: 2,
-      currentConversationKey: currentConversationKey.value,
-      currentModel: currentModel.value,
-      conversationList: toPersistedConversations(conversationList.value),
-    };
-    const payload = JSON.stringify(state, null, 2);
+    // 轻量索引导出：仅含本地会话 id 与供应商会话路径，不含消息内容
+    const conversations = conversationList.value.map((conversation) => {
+      const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+      return {
+        key: String(conversation.key),
+        label:
+          typeof conversation.label === "string" && conversation.label.trim()
+            ? conversation.label.trim()
+            : "新对话",
+        group: typeof conversation.group === "string" ? conversation.group : "今天",
+        agentId:
+          typeof conversation.agentId === "string" && conversation.agentId
+            ? conversation.agentId
+            : "api",
+        modelId:
+          typeof conversation.modelId === "string" && conversation.modelId
+            ? conversation.modelId
+            : currentModel.value,
+        ...(typeof conversation.providerSessionId === "string" &&
+        conversation.providerSessionId.trim()
+          ? { providerSessionId: conversation.providerSessionId.trim() }
+          : {}),
+        ...(typeof conversation.projectPath === "string" && conversation.projectPath.trim()
+          ? { projectPath: conversation.projectPath.trim() }
+          : {}),
+        ...(typeof conversation.updatedAt === "number"
+          ? { updatedAt: conversation.updatedAt }
+          : {}),
+        messageCount: messages.length,
+      };
+    });
+
+    const payload = JSON.stringify(
+      {
+        version: 1 as const,
+        exportedAt: new Date().toISOString(),
+        conversations,
+      },
+      null,
+      2,
+    );
     const blob = new Blob([payload], { type: "application/json;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const link = document.createElement("a");
     link.href = url;
-    link.download = `open-chat-logs-${timestamp}.json`;
+    link.download = `open-chat-index-${timestamp}.json`;
     link.click();
     URL.revokeObjectURL(url);
-    message.success("日志导出成功");
-  };
-
-  const handleImportLocalHistory = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith(".json")) {
-      message.error("仅支持导入 JSON 日志文件");
-      return;
-    }
-
-    const shouldOverwrite = window.confirm("导入会覆盖当前本地聊天记录，是否继续？");
-    if (!shouldOverwrite) return;
-
-    try {
-      const text = await file.text();
-      const raw = JSON.parse(text) as unknown;
-      const importedState = normalizePersistedChatState(raw);
-
-      if (!importedState) {
-        message.error("日志文件格式不正确，导入失败");
-        return;
-      }
-
-      if (isRequesting.value) {
-        message.warning("回答生成中，请先手动停止后再导入日志");
-        return;
-      }
-
-      applyPersistedState(importedState);
-      await saveChatState({
-        ...importedState,
-        currentConversationKey: "",
-        conversationList: toPersistedConversations(conversationList.value),
-      });
-      message.success(`日志导入成功，共 ${conversationList.value.length} 条会话`);
-    } catch (error) {
-      console.error("Failed to import chat history:", error);
-      message.error("日志导入失败，请检查文件内容");
-    }
+    message.success(`索引导出成功，共 ${conversations.length} 条会话`);
   };
 
   // 监听模型变化，持久化选择（model 通过 onRequest 按请求传入，无需重建 provider）
@@ -314,6 +310,5 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
     schedulePersistState,
     handleClearLocalHistory,
     handleExportLocalHistory,
-    handleImportLocalHistory,
   };
 }

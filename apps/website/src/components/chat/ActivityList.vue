@@ -362,7 +362,7 @@ onBeforeUnmount(() => {
       <ChevronDown v-else class="h-2.5 w-2.5 flex-none text-brand-ghost" />
     </button>
 
-    <div v-if="summaryExpanded || streaming" class="flex w-full min-w-0 flex-col pl-[15px]">
+    <div v-if="summaryExpanded" class="flex w-full min-w-0 flex-col pl-[15px]">
       <div
         v-for="entry in entries"
         :key="entry.id"

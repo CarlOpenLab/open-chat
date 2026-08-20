@@ -113,33 +113,27 @@ const projectPathMenu = computed<MenuProps>(() => {
   const paths = uniqueDirectoryPaths(props.projectPathOptions);
   const currentPath = normalizeDirectoryPath(props.projectPath);
   const currentIndex = paths.indexOf(currentPath);
+  const hasSelection = currentIndex >= 0;
+
+  const pathItems: NonNullable<MenuProps["items"]> = paths.map((path, index) => ({
+    key: `__path_${index}__`,
+    label: path,
+    // store raw path for labelRender
+    path,
+  }));
+
+  const emptyHint: NonNullable<MenuProps["items"]> =
+    paths.length === 0 ? [{ key: "__empty__", label: "暂无历史目录", disabled: true }] : [];
+
+  const clearItem: NonNullable<MenuProps["items"]> = hasSelection
+    ? [{ key: "__none__", label: "清除已选目录", icon: h(X) }]
+    : [];
+
   const items: NonNullable<MenuProps["items"]> = [
-    { key: "__none__", label: "无文件目录", icon: h(Check) },
-    ...paths.map((path, index) => ({
-      key: `__path_${index}__`,
-      label: h("div", { class: "project-path-menu-row", title: path }, [
-        h("span", { class: "project-path-menu-copy" }, [
-          h("span", { class: "project-path-menu-name" }, pathName(path) || "未命名目录"),
-          h("span", { class: "project-path-menu-location" }, path),
-        ]),
-        h(
-          "button",
-          {
-            type: "button",
-            class: "project-path-menu-remove",
-            title: "从列表移除",
-            "aria-label": `从列表移除 ${path}`,
-            onClick: (event: MouseEvent) => {
-              event.preventDefault();
-              event.stopPropagation();
-              emit("projectPathRemove", path);
-            },
-          },
-          [h(Trash2, { size: 14, "aria-hidden": "true" })],
-        ),
-      ]),
-    })),
-    { type: "divider" },
+    ...pathItems,
+    ...emptyHint,
+    ...(pathItems.length > 0 || emptyHint.length > 0 ? [{ type: "divider" as const }] : []),
+    ...clearItem,
     { key: "__pick__", label: "选择其他目录", icon: h(FolderOpen) },
   ];
 
@@ -147,7 +141,51 @@ const projectPathMenu = computed<MenuProps>(() => {
     rootClass: "project-path-menu",
     items,
     selectable: true,
-    selectedKeys: [currentIndex >= 0 ? `__path_${currentIndex}__` : "__none__"],
+    selectedKeys: hasSelection ? [`__path_${currentIndex}__`] : [],
+    labelRender: (item) => {
+      if (item.type === "divider") return null;
+      if (String(item.key).startsWith("__path_")) {
+        const match = String(item.key).match(/^__path_(\d+)__$/);
+        const idx = match ? Number(match[1]) : -1;
+        const path = idx >= 0 ? paths[idx] : "";
+        if (!path) return h("span", null, String(item.label ?? ""));
+        const selected = idx === currentIndex;
+        return h("div", { class: "project-path-menu-row", title: path }, [
+          h(Check, {
+            class: ["project-path-menu-check", { "is-visible": selected }],
+            size: 14,
+            "aria-hidden": "true",
+          }),
+          h("span", { class: "project-path-menu-copy" }, [
+            h(
+              "span",
+              { class: ["project-path-menu-name", { "is-selected": selected }] },
+              pathName(path) || "未命名目录",
+            ),
+            h("span", { class: "project-path-menu-location" }, path),
+          ]),
+          h(
+            "button",
+            {
+              type: "button",
+              class: "project-path-menu-remove",
+              title: "从列表移除",
+              "aria-label": `从列表移除 ${path}`,
+              onClick: (event: MouseEvent) => {
+                event.preventDefault();
+                event.stopPropagation();
+                emit("projectPathRemove", path);
+              },
+            },
+            [h(Trash2, { size: 14, "aria-hidden": "true" })],
+          ),
+        ]);
+      }
+      if (item.key === "__empty__") {
+        return h("span", { class: "project-path-menu-empty" }, String(item.label));
+      }
+      return null;
+    },
     onClick: ({ key }) => {
       if (key === "__none__") {
         emit("projectPathChange", "");
@@ -1832,6 +1870,7 @@ const chipClass = (active: boolean, disabled = false) => {
   min-width: 0;
   align-items: center;
   gap: 8px;
+  padding-left: 4px;
 }
 :global(.project-path-menu-copy) {
   display: flex;
@@ -1874,6 +1913,27 @@ const chipClass = (active: boolean, disabled = false) => {
   background: var(--brand-danger-subtle);
   color: var(--brand-danger);
   outline: none;
+}
+:global(.project-path-menu-name.is-selected) {
+  color: var(--brand-foreground);
+  font-weight: 600;
+}
+:global(.project-path-menu-check) {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--brand-accent);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+:global(.project-path-menu-check.is-visible) {
+  opacity: 1;
+}
+:global(.project-path-menu-empty) {
+  display: block;
+  padding: 4px 8px;
+  color: var(--brand-ghost);
+  font-size: 12px;
 }
 :global(.project-path-menu .ant-dropdown-menu-item-divider) {
   margin: 4px 0;
