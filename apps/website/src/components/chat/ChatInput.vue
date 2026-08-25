@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Sender } from "@antdv-next/x";
+import type { SkillType } from "@antdv-next/x";
 import {
   AlertTriangle,
   BrainCircuit,
@@ -29,7 +30,14 @@ import type { PermissionRequest } from "../../services/OpenChatProvider";
 import { aiService, type GitWorkspaceInfo, type UploadedAttachment } from "../../services/ai";
 import type { QueuedChatMessage } from "../../services/chatStorage";
 import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../../utils/projectPath";
+import {
+  filterQuickCommands,
+  formatCommandForModel,
+  parseSenderCommand,
+} from "../../utils/senderCommands";
+import type { QuickCommandMeta } from "../../utils/senderCommands";
 import ModelIcon from "../Icons/ModelIcon.vue";
+import QuickCommands from "./QuickCommands.vue";
 
 interface Props {
   modelValue: string;
@@ -55,6 +63,8 @@ interface Props {
   permission?: "supervised" | "auto" | "full";
   permissionLocked?: boolean;
   pendingPermission?: PermissionRequest | null;
+  /** 是否为 Oh My Pi（pi/omp）会话，快捷指令优先展示 Goal/Review */
+  isOhMyPi?: boolean;
   /** 深度思考 chip 的图标，可配置（默认 BrainCircuit） */
   thinkingIcon?: Component;
   /** 文件工作区 chip 的图标，可配置（默认 FolderOpen） */
@@ -65,7 +75,12 @@ interface Emits {
   (e: "update:modelValue", value: string): void;
   (e: "change", value: string): void;
   (e: "cancel"): void;
-  (e: "submit", value: string, attachments: UploadedAttachment[]): void;
+  (
+    e: "submit",
+    value: string,
+    attachments: UploadedAttachment[],
+    commandMeta?: { command: string; rawGoal: string },
+  ): void;
   (e: "queuedMessageChange", id: string, content: string): void;
   (e: "queuedMessageRemove", id: string): void;
   (e: "queuedMessageClear"): void;
@@ -98,6 +113,7 @@ const props = withDefaults(defineProps<Props>(), {
   projectPath: "",
   projectPathOptions: () => [],
   projectPathEnabled: false,
+  isOhMyPi: false,
 });
 const emit = defineEmits<Emits>();
 const projectPathPicking = ref(false);
@@ -455,6 +471,57 @@ const permissionMenu = computed<MenuProps>(() => ({
   onClick: ({ key }) => emit("permissionChange", String(key) as "supervised" | "auto" | "full"),
 }));
 
+// ============ Skill：Goal / Review 由 Sender 原生 skill 承载，凸显为 tag 且随消息透传 ============
+const activeSkill = ref<SkillType | undefined>(undefined);
+
+/** 同步 Sender 的 slot 文本与外部 modelValue，避免 ProseMirror 侧残留 "/"（tag + / 问题）。 */
+const senderSlotConfig = computed(() => {
+  if (!activeSkill.value) return undefined;
+  const text = props.modelValue ?? "";
+  if (!text) return [];
+  return [{ type: "text" as const, value: text }];
+});
+
+const hasSuggestion = computed(() => {
+  const trimmed = props.modelValue.trimStart();
+  if (!trimmed.startsWith("/")) return false;
+  const q = trimmed.slice(1).split(/\s/)[0] ?? "";
+  const filtered = filterQuickCommands(q, Boolean(props.isOhMyPi));
+  if (
+    trimmed.includes(" ") &&
+    filtered.length === 1 &&
+    filtered[0].command.toLowerCase() === q.toLowerCase()
+  )
+    return false;
+  return filtered.length > 0;
+});
+
+// ============ 快捷指令组件（Oh My Pi 优先，斜杠触发） ============
+const quickCommandsRef = ref<InstanceType<typeof QuickCommands> | null>(null);
+const senderRef = ref<InstanceType<typeof Sender> | null>(null);
+
+const handleQuickSelect = (command: QuickCommandMeta, remaining: string) => {
+  if (command.command === "goal") {
+    activeSkill.value = { value: "goal", title: "🎯 Goal", closable: { disabled: false } };
+  } else if (command.command === "review") {
+    activeSkill.value = { value: "review", title: "🔍 Review", closable: { disabled: false } };
+  } else if (command.command === "instruction") {
+    activeSkill.value = {
+      value: "instruction",
+      title: "📋 Instruction",
+      closable: { disabled: false },
+    };
+  } else if (command.command === "system") {
+    activeSkill.value = { value: "system", title: "⚙️ System", closable: { disabled: false } };
+  }
+  const nextValue = remaining.trim();
+  emit("update:modelValue", nextValue);
+  emit("change", nextValue);
+  setTimeout(() => {
+    (senderRef.value as unknown as { focus?: () => void })?.focus?.();
+  }, 0);
+};
+
 const pendingPermissionLabel = computed(() => {
   const name = props.pendingPermission?.permission ?? "";
   const labels: Record<string, string> = {
@@ -531,7 +598,41 @@ const pendingPermissionActions = computed(() => {
   return actions;
 });
 
-const handleChange = (value: string) => {
+const handleChange = (
+  value: string,
+  _event?: Event,
+  _slotConfig?: unknown[],
+  skill?: SkillType,
+) => {
+  // SlotTextArea 模式（已激活 skill）：ProseMirror 侧通过 slotConfig/skill 同步，需显式处理 skill 移除
+  if (Array.isArray(_slotConfig)) {
+    if (skill !== activeSkill.value) {
+      activeSkill.value = skill;
+    }
+    emit("update:modelValue", value);
+    emit("change", value);
+    return;
+  }
+  if (skill !== undefined) {
+    activeSkill.value = skill;
+  }
+  const parsed = value ? parseSenderCommand(value) : null;
+  if (parsed && !activeSkill.value) {
+    if (parsed.command === "goal") {
+      activeSkill.value = { value: "goal", title: "🎯 Goal", closable: { disabled: false } };
+      const remaining = parsed.arg;
+      emit("update:modelValue", remaining);
+      emit("change", remaining);
+      return;
+    }
+    if (parsed.command === "review") {
+      activeSkill.value = { value: "review", title: "🔍 Review", closable: { disabled: false } };
+      const remaining = parsed.arg;
+      emit("update:modelValue", remaining);
+      emit("change", remaining);
+      return;
+    }
+  }
   emit("update:modelValue", value);
   emit("change", value);
 };
@@ -658,20 +759,41 @@ const removeAttachment = (index: number) => {
   stagedAttachments.value.splice(index, 1);
 };
 
-const handleSubmit = (value: string) => {
+const handleSubmit = (value: string, _slotConfig?: unknown[], submittedSkill?: SkillType) => {
   const prompt = value.trim();
   const ready = stagedAttachments.value.filter((entry) => entry.reference && !entry.uploading);
-  if (!prompt && ready.length === 0) return;
+  if (!prompt && ready.length === 0 && !activeSkill.value && !submittedSkill) return;
+  const effectiveSkill = submittedSkill ?? activeSkill.value;
+  let parsed = prompt ? parseSenderCommand(prompt) : null;
+  let skillCommand: { command: string; rawGoal: string } | undefined;
+  let submitText = prompt;
+  if (effectiveSkill) {
+    const skillValue = String(effectiveSkill.value ?? "").toLowerCase();
+    if (skillValue === "goal") {
+      skillCommand = { command: "goal", rawGoal: prompt };
+      submitText = `🎯 目标指令：${prompt}`;
+    } else if (skillValue === "review") {
+      skillCommand = { command: "review", rawGoal: prompt };
+      submitText = `🔍 复审指令：${prompt}`;
+    }
+  } else if (parsed) {
+    submitText = formatCommandForModel(parsed);
+    skillCommand = { command: parsed.command, rawGoal: parsed.arg };
+  }
+  const commandMeta = skillCommand;
+  // @ts-expect-error submit 事件在 Chat.vue 侧扩展为支持第三参 commandMeta
   emit(
     "submit",
-    prompt,
+    submitText,
     ready.map(({ reference, name }) => ({ reference, name, isImage: true })),
+    commandMeta,
   );
   for (const entry of stagedAttachments.value) {
     if (entry.previewUrl.startsWith("blob:")) URL.revokeObjectURL(entry.previewUrl);
   }
   stagedAttachments.value = [];
   attachmentsPanelOpen.value = false;
+  if (effectiveSkill) activeSkill.value = undefined;
 };
 
 let isImeComposing = false;
@@ -706,6 +828,33 @@ const handleSenderKeyDown = (event: KeyboardEvent): void | false => {
     (event.key === "Enter" && suppressPostCompositionEnter)
   ) {
     return false;
+  }
+  const qc = quickCommandsRef.value as unknown as {
+    shouldShow: boolean;
+    move: (d: -1 | 1) => boolean;
+    confirm: () => boolean;
+  } | null;
+  if (qc?.shouldShow) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      qc.move(1);
+      return false;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      qc.move(-1);
+      return false;
+    }
+    if (event.key === "Enter") {
+      if (qc.confirm()) {
+        event.preventDefault();
+        return false;
+      }
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      return false;
+    }
   }
 };
 
@@ -774,12 +923,14 @@ const chipClass = (active: boolean, disabled = false) => {
     <!-- 由 Sender 外部承载，避免附件上传状态被 Sender slot 的渲染节奏延迟。 -->
     <Transition name="sender-header">
       <div
-        v-if="hasQueuedMessages || hasAttachmentPanel || pendingPermission"
+        v-if="hasSuggestion || hasQueuedMessages || hasAttachmentPanel || pendingPermission"
         class="sender-header-card"
-        :class="{
-          'has-permission': Boolean(pendingPermission),
-          'has-navigation': hasHeaderNavigation,
-        }"
+        :class="[
+          {
+            'has-permission': Boolean(pendingPermission),
+            'has-navigation': hasHeaderNavigation,
+          },
+        ]"
       >
         <button
           v-if="hasHeaderNavigation"
@@ -791,8 +942,16 @@ const chipClass = (active: boolean, disabled = false) => {
         >
           <ChevronLeft class="!h-4 !w-4" />
         </button>
-        <div class="sender-header-panel">
-          <div v-if="visibleHeaderPanel === 'queue'" class="queued-message-panel">
+        <div :class="['sender-header-panel']">
+          <div v-if="hasSuggestion" class="quick-commands-inline">
+            <QuickCommands
+              ref="quickCommandsRef"
+              :model-value="modelValue"
+              :is-oh-my-pi="isOhMyPi"
+              @select="handleQuickSelect"
+            />
+          </div>
+          <div v-else-if="visibleHeaderPanel === 'queue'" class="queued-message-panel">
             <div class="queued-message-heading">
               <span>待发送 · {{ queuedMessages.length }}</span>
               <div class="queued-message-heading-actions">
@@ -972,9 +1131,12 @@ const chipClass = (active: boolean, disabled = false) => {
       @change="handleFileInputChange"
     />
     <Sender
+      ref="senderRef"
       :value="modelValue"
+      :slot-config="senderSlotConfig"
       :loading="false"
-      placeholder="做什么都可以..."
+      :skill="activeSkill"
+      placeholder="做什么都可以... 试试 /goal 目标 或 /review 复审"
       :on-cancel="() => emit('cancel')"
       :on-change="handleChange"
       :on-submit="handleSubmit"
@@ -1219,20 +1381,26 @@ const chipClass = (active: boolean, disabled = false) => {
 <style scoped>
 /* 保留原因：以下均为 :deep() 覆盖 antd / antd-x 内部类，按迁移规范保留在 scoped CSS 中 */
 .sender-header-card {
-  position: relative;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 2;
-  width: 100%;
+  width: calc(100% - 40px);
   max-width: 760px;
-  margin: 0 auto -28px;
+  max-height: 360px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--brand-border);
   border-radius: 16px;
   background: var(--brand-composer);
   padding: 8px 8px 36px;
   box-shadow: var(--brand-shadow-float);
+  bottom: 126px;
 }
 .sender-header-enter-active,
 .sender-header-leave-active {
-  max-height: 420px;
+  max-height: 360px;
   overflow: hidden;
   transition:
     max-height 180ms ease,
@@ -1250,13 +1418,26 @@ const chipClass = (active: boolean, disabled = false) => {
   opacity: 0;
   padding-top: 0;
   padding-bottom: 0;
-  transform: translateY(10px) scale(0.985);
 }
 .sender-header-card.has-permission {
   border-color: color-mix(in srgb, var(--brand-warning, #b7791f) 55%, var(--brand-border));
 }
+.sender-header-card.has-suggestion {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  overflow: visible;
+  max-height: none;
+}
+.sender-header-card.has-suggestion .sender-header-panel {
+  overflow: visible;
+}
 .sender-header-panel {
+  flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 .sender-header-card.has-navigation {
   display: flex;

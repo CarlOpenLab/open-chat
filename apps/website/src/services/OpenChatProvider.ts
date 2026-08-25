@@ -87,6 +87,9 @@ export interface OpenChatParams extends XModelParams {
   mode?: "build" | "plan";
   permission?: "supervised" | "auto" | "full";
   systemPrompt?: string;
+  /** 单次目标指令（goal 等斜杠指令透传）：随本次请求发送，服务端以 system 优先级注入模型上下文。 */
+  goal?: string;
+  instruction?: string;
   /** When true, declares a `web_search` tool in the request so the model can
    * autonomously decide whether to search. The gateway executes the call. */
   web_search?: boolean;
@@ -397,26 +400,49 @@ export class OpenChatProvider extends DeepSeekChatProvider<
     requestParams: Partial<OpenChatParams>,
     options: XRequestConfigOptions<OpenChatParams, XModelResponse, XModelMessage>,
   ): OpenChatParams {
-    const { systemPrompt = "", web_search, ...modelRequestParams } = requestParams;
+    const {
+      systemPrompt = "",
+      goal = "",
+      instruction = "",
+      web_search,
+      ...modelRequestParams
+    } = requestParams;
     const params = super.transformParams(modelRequestParams, options);
-    delete params.systemPrompt;
+    delete (params as Record<string, unknown>).systemPrompt;
+    delete (params as Record<string, unknown>).goal;
+    delete (params as Record<string, unknown>).instruction;
     const messages = (params.messages ?? [])
       .filter((modelMessage) => modelMessage.openChatLocalOnly !== true)
       .map((modelMessage) => stripLocalMessageFields(modelMessage));
     const normalizedSystemPrompt = systemPrompt.trim();
+    // goal / instruction 为本次请求的单次高优指令，以独立 system 块注入，优先级高于持久 systemPrompt
+    const normalizedGoal = goal.trim();
+    const normalizedInstruction = instruction.trim();
+    const goalBlock = [normalizedGoal, normalizedInstruction].filter(Boolean).join("\n\n");
 
     // `web_search: true` declares the web-search tool so the model can decide
     // whether to call it; the gateway intercepts the call, runs the configured
     // search provider (Tavily) and feeds results back to the model.
     const searchTools = web_search ? { tools: [WEB_SEARCH_TOOL], tool_choice: "auto" } : {};
 
+    const systemMessages: Array<{ role: "system"; content: string }> = [];
+    if (normalizedSystemPrompt)
+      systemMessages.push({ role: "system", content: normalizedSystemPrompt });
+    if (goalBlock) {
+      systemMessages.push({
+        role: "system",
+        content: `[GOAL]\n${goalBlock}`,
+      });
+    }
+
     return {
       ...params,
       ...searchTools,
-      messages: normalizedSystemPrompt
-        ? [{ role: "system", content: normalizedSystemPrompt }, ...messages]
-        : messages,
-    };
+      messages: systemMessages.length ? [...systemMessages, ...messages] : messages,
+      // 透传原始字段供网关侧 handleAgentChat / handleLocalChat 读取（注入原生会话）
+      ...(normalizedGoal ? { goal: normalizedGoal } : {}),
+      ...(normalizedInstruction ? { instruction: normalizedInstruction } : {}),
+    } as OpenChatParams;
   }
 }
 

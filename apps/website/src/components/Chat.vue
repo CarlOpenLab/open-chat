@@ -2011,6 +2011,8 @@ interface SubmitMessageOptions {
   systemPrompt?: string;
   /** 随消息发送的附件（已上传到网关，携带持久引用）。 */
   attachments?: UploadedAttachment[];
+  goal?: string;
+  instruction?: string;
 }
 
 const sendMessageNow = (
@@ -2099,6 +2101,8 @@ const sendMessageNow = (
         mode: workMode.value,
         permission: effectivePermissionMode.value,
         systemPrompt: getRequestSystemPrompt(conversation.systemPrompt ?? ""),
+        ...(options.goal ? { goal: options.goal } : {}),
+        ...(options.instruction ? { instruction: options.instruction } : {}),
         enable_thinking: thinkingEnabled.value,
         thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
         // 本地 opencode（服务端 AI）：按会话复用长会话，无需转发目标。
@@ -2186,7 +2190,53 @@ const queueMessage = (
   content.value = "";
 };
 
-const handleSubmit = (nextContent: string, options: SubmitMessageOptions = {}) => {
+const handleSubmit = (
+  nextContent: string,
+  attachmentsOrOptions: UploadedAttachment[] | SubmitMessageOptions = [],
+  commandMeta?: { command: string; rawGoal: string },
+) => {
+  // 兼容 ChatInput 的 (value, attachments[], commandMeta) 与内部调用的 (value, options)
+  let options: SubmitMessageOptions = {};
+  if (Array.isArray(attachmentsOrOptions)) {
+    options = { attachments: attachmentsOrOptions };
+  } else if (attachmentsOrOptions && typeof attachmentsOrOptions === "object") {
+    options = attachmentsOrOptions as SubmitMessageOptions;
+  }
+  if (commandMeta?.rawGoal) {
+    if (
+      commandMeta.command === "goal" ||
+      commandMeta.command === "system" ||
+      commandMeta.command === "objective"
+    ) {
+      options.goal = commandMeta.rawGoal;
+    } else if (commandMeta.command === "instruction") {
+      options.instruction = commandMeta.rawGoal;
+    } else if (commandMeta.command === "review") {
+      // Review 复审作为高优指令，复用 instruction 通道并以 [GOAL] 注入
+      options.instruction = commandMeta.rawGoal;
+    }
+  } else {
+    // 兜底：直接输入的 "/goal xxx" 未经 ChatInput 解析时（如 handlePromptClick 等路径）
+    const trimmed = nextContent.trimStart();
+    const match = trimmed.match(/^\/(goal|system|instruction|objective|review)\s+([\s\S]+)$/i);
+    if (match) {
+      const cmd = match[1].toLowerCase();
+      const arg = match[2].trim();
+      if (arg) {
+        if (cmd === "goal" || cmd === "system" || cmd === "objective") {
+          options.goal = arg;
+          // 保持气泡可读性：用统一前缀展示
+          nextContent = `🎯 目标指令：${arg}`;
+        } else if (cmd === "instruction") {
+          options.instruction = arg;
+          nextContent = `📋 指令：${arg}`;
+        } else if (cmd === "review") {
+          options.instruction = arg;
+          nextContent = `🔍 复审指令：${arg}`;
+        }
+      }
+    }
+  }
   if ((!nextContent || !nextContent.trim()) && !options.attachments?.length) return;
   if (inputUnavailable.value) return;
   if (!activeAgent.value.available) {
@@ -2616,9 +2666,10 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :agent-mode="isAcpAgent"
         :agent-available="activeAgent.available"
         :agent-configuring="acpSessionLoading"
+        :is-oh-my-pi="isPiAgent"
         @change="handleChange"
         @cancel="handleCancel"
-        @submit="(value, attachments) => handleSubmit(value, { attachments })"
+        @submit="handleSubmit"
         @queued-message-change="handleQueuedMessageChange"
         @queued-message-remove="handleQueuedMessageRemove"
         @queued-message-clear="handleQueuedMessageClear"

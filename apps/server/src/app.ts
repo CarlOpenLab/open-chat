@@ -385,13 +385,16 @@ export function createGatewayApp(
 
       // 转发目标由客户端在请求体携带；解析后从 body 剔除，避免上游报未知字段。
       const endpoint = parseRequestProvider(body);
+      // goal / instruction 为 sender 斜杠指令的单次高优输入：注入为 system 消息后剔除独立字段
+      injectGoalMessages(body as unknown as Record<string, unknown>);
       delete body.provider;
       delete body.mode;
       delete body.permission;
       delete body.projectPath;
+      delete (body as Record<string, unknown>).goal;
+      delete (body as Record<string, unknown>).instruction;
       // 附件引用 → OpenAI 多模态 image_url（data URL，远端模型读不到本地路径）。
       injectAttachmentsForUpstream(body.messages as unknown[], attachments);
-
       const stream = body.stream === true;
 
       // 客户端声明 `web_search` 工具时走 agent 循环：拦截工具调用并执行
@@ -592,21 +595,41 @@ async function handleAgentChat(
 ): Promise<void> {
   const messages = body.messages as Array<{ role?: unknown; content?: unknown }>;
   const lastUser = [...messages].reverse().find((message) => message.role === "user");
-  // 附件以 `@<网关侧绝对路径>` mention 追加（Waku 方式）：agent 与网关同机，直接读文件。
-  const text = [
-    lastUser ? extractTextFromMessage(lastUser) : "",
-    ...attachmentMentions(messages, attachments),
-  ]
+  const rawGoal =
+    typeof (body as Record<string, unknown>).goal === "string"
+      ? String((body as Record<string, unknown>).goal).trim()
+      : "";
+  const rawInstruction =
+    typeof (body as Record<string, unknown>).instruction === "string"
+      ? String((body as Record<string, unknown>).instruction).trim()
+      : "";
+  // Oh My Pi 优先：goal 与 review 均以高优 system 上下文注入，Pi 系对 [GOAL]/[REVIEW] 前缀有更明确的执行语义
+  const isOhMyPi = agentId === "pi" || agentId === "omp";
+  let goalBlock = "";
+  let goalPrefix = "";
+  if (rawGoal || rawInstruction) {
+    // 区分 goal 与 review/instruction，若仅 instruction 有值且疑似 review，则用 [REVIEW]（Oh My Pi 专用）
+    const isReviewLike =
+      !rawGoal && rawInstruction && /review|复审/i.test(rawInstruction.slice(0, 20));
+    if (isOhMyPi && isReviewLike) {
+      goalBlock = rawInstruction;
+      goalPrefix = `[REVIEW]\n${goalBlock}\n\n`;
+    } else {
+      goalBlock = [rawGoal, rawInstruction].filter(Boolean).join("\n\n");
+      goalPrefix = isOhMyPi ? `[OH_MY_PI_GOAL]\n${goalBlock}\n\n` : `[GOAL]\n${goalBlock}\n\n`;
+    }
+  }
+  const userText = lastUser ? extractTextFromMessage(lastUser as unknown) : "";
+  const text = [goalPrefix + userText, ...attachmentMentions(messages, attachments)]
     .filter(Boolean)
     .join(" ");
   if (!text.trim()) throw GatewayError.invalidRequest("本地 Agent 需要至少一条 user 消息");
   const conversationId =
     typeof body.conversationId === "string" && body.conversationId.trim()
       ? body.conversationId.trim()
-      : hashKey(messages.map((message) => extractTextFromMessage(message)));
+      : hashKey(messages.map((message) => extractTextFromMessage(message as unknown)));
   const projectPath = parseProjectPath(body.projectPath);
   const providerSessionId = optionalString(body.providerSessionId);
-
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
@@ -654,17 +677,29 @@ async function handleLocalChat(
   const messages = body.messages;
   // system prompt 经前端 transformParams 合并进了 messages[0]（role: system），
   // body.systemPrompt 字段不存在；这里从 messages 里提取。
-  const systemPrompt = messages
+  const baseSystemPrompt = messages
     .filter((m) => (m as { role?: unknown }).role === "system")
-    .map((m) => extractTextFromMessage(m))
+    .map((m) => extractTextFromMessage(m as unknown))
     .filter((text) => text.trim().length > 0)
     .join("\n");
+  const rawGoal =
+    typeof (body as Record<string, unknown>).goal === "string"
+      ? String((body as Record<string, unknown>).goal).trim()
+      : "";
+  const rawInstruction =
+    typeof (body as Record<string, unknown>).instruction === "string"
+      ? String((body as Record<string, unknown>).instruction).trim()
+      : "";
+  const goalBlock = [rawGoal, rawInstruction].filter(Boolean).join("\n\n");
+  const systemPrompt = goalBlock
+    ? `[GOAL]\n${goalBlock}${baseSystemPrompt ? `\n\n${baseSystemPrompt}` : ""}`
+    : baseSystemPrompt;
   const lastUser = [...messages].reverse().find((m) => {
     const role = (m as { role?: unknown }).role;
     return role === "user";
   });
   const text = [
-    lastUser ? extractTextFromMessage(lastUser) : "",
+    lastUser ? extractTextFromMessage(lastUser as unknown) : "",
     ...attachmentMentions(messages, attachments),
   ]
     .filter(Boolean)
@@ -676,7 +711,7 @@ async function handleLocalChat(
   const key =
     typeof conversationId === "string" && conversationId.trim()
       ? conversationId.trim()
-      : hashKey([systemPrompt, ...messages.map((m) => extractTextFromMessage(m))]);
+      : hashKey([systemPrompt, ...messages.map((m) => extractTextFromMessage(m as unknown))]);
   const projectPath = parseProjectPath((body as Record<string, unknown>).projectPath);
 
   const session = await localChat.getOrCreateSession(key, model, projectPath);
@@ -931,4 +966,23 @@ function injectAttachmentsForUpstream(messages: unknown[], store: AttachmentStor
     }
     if (parts.length > 0) record.content = parts;
   }
+}
+
+/** Sender 斜杠指令（/goal 等）注入：把独立字段转为最高优先级 system 消息。 */
+function injectGoalMessages(body: Record<string, unknown>): void {
+  const rawGoal = typeof body.goal === "string" ? body.goal.trim() : "";
+  const rawInstruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
+  const block = [rawGoal, rawInstruction].filter(Boolean).join("\n\n");
+  if (!block) return;
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return;
+  // 已通过前端 transformParams 注入过则不再重复
+  const alreadyHasGoal = messages.some((item) => {
+    if (typeof item !== "object" || item === null) return false;
+    if (!("content" in item)) return false;
+    const content = (item as { content: unknown }).content;
+    return typeof content === "string" && content.includes("[GOAL]");
+  });
+  if (alreadyHasGoal) return;
+  messages.unshift({ role: "system", content: `[GOAL]\n${block}` });
 }
