@@ -6,7 +6,7 @@
   "scripts": {
     "ready": "./node_modules/.bin/vp fmt && ./node_modules/.bin/vp lint && vp run server#build && vp run website#build && vp run @cc-heart/open-chat#build",
     "dev": "vp run dev:all",
-    "dev:all": "concurrently \"vp run server#dev\" \"vp run website#dev\"",
+    "dev:all": "concurrently --kill-others --kill-others-on-fail \"vp run server#dev\" \"vp run website#dev\"",
     "dev:website": "vp run website#dev",
     "dev:server": "vp run server#dev",
     "open-chat": "node tools/open-chat/bin/open-chat.mjs",
@@ -14,7 +14,9 @@
     "build": "pnpm open-chat --build",
     "build:cli": "vp run @cc-heart/open-chat#build",
     "build:package": "vp run website#build && vp run @cc-heart/open-chat#build && node tools/open-chat/scripts/stage-package.mjs",
-    "prepare": "vp config"
+    "prepare": "vp config",
+    "kill": "lsof -ti :3000 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :8082 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :4311 -sTCP:LISTEN | xargs kill -9 2>/dev/null; echo \"ports 3000/8082/4311 cleaned\"",
+    "kill:all": "lsof -ti :3000 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :8082 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :5173 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :4311 -sTCP:LISTEN | xargs kill -9 2>/dev/null; echo \"all dev ports cleaned\""
   },
   "dependencies": {
     "@antdv-next/x-sdk": "catalog:",

@@ -270,24 +270,61 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 提前挂信号处理：避免 Ctrl+C 时子进程（dev server）成为孤儿。
+  // 提前挂信号处理：避免 Ctrl+C / 终端关闭 / 父进程被 kill 时子进程（dev server）成为孤儿。
   let devChild: ChildProcess | undefined;
   let gateway: GatewayHandle | undefined;
   let shuttingDown = false;
+
+  const killDevChild = (signal: NodeJS.Signals = "SIGTERM"): void => {
+    if (!devChild || devChild.killed || devChild.pid === undefined) return;
+    // 优先杀进程组（detached 时子进程与其孙进程同组）
+    if (process.platform !== "win32") {
+      try {
+        process.kill(-devChild.pid, signal);
+      } catch {
+        // 进程组不存在时回退到单进程 kill
+      }
+    }
+    try {
+      devChild.kill(signal);
+    } catch {
+      // 已退出
+    }
+  };
+
   const shutdown = (signal: string): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n收到 ${signal}，正在停止 Open Chat…`);
-    if (devChild && !devChild.killed) {
-      devChild.kill("SIGTERM");
-      setTimeout(() => {
-        if (!devChild?.killed) devChild?.kill("SIGKILL");
-      }, 3000).unref();
+    killDevChild("SIGTERM");
+    setTimeout(() => killDevChild("SIGKILL"), 3000).unref();
+    // gateway.stop() 可能被 SSE/keep-alive 卡住，5s 兜底强制退出
+    const hardExit = setTimeout(() => process.exit(1), 5000).unref();
+    void gateway
+      ?.stop()
+      .then(() => {
+        clearTimeout(hardExit);
+        process.exit(0);
+      })
+      .catch(() => {
+        clearTimeout(hardExit);
+        process.exit(1);
+      });
+    // 无 gateway 时也退出（例如 dev server 还未起就收到信号）
+    if (!gateway) {
+      clearTimeout(hardExit);
+      // 给子进程 500ms 优雅退出时间
+      setTimeout(() => process.exit(0), 500).unref();
     }
-    void gateway?.stop().then(() => process.exit(0));
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGHUP", () => shutdown("SIGHUP"));
+  process.on("SIGQUIT", () => shutdown("SIGQUIT"));
+  // 终端关闭 / 父进程异常退出的兜底
+  process.on("exit", () => {
+    if (!shuttingDown) killDevChild("SIGTERM");
+  });
 
   try {
     if (opts.dev) {
@@ -300,6 +337,7 @@ async function main(): Promise<void> {
         cwd: REPO_ROOT,
         stdio: ["ignore", "inherit", "inherit"],
         env: { ...process.env, FORCE_COLOR: "1" },
+        detached: process.platform !== "win32",
       });
       await waitDevReady(devChild, DEV_URL);
     }
@@ -330,7 +368,7 @@ async function main(): Promise<void> {
     if (opts.open) openBrowser(targetUrl);
   } catch (err) {
     // 任何启动失败：清掉已拉起的子进程再退出。
-    if (devChild && !devChild.killed) devChild.kill("SIGTERM");
+    killDevChild("SIGTERM");
     throw err;
   }
 }

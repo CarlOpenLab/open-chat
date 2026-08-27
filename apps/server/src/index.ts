@@ -28,12 +28,27 @@ if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535))
 
 async function main(): Promise<void> {
   const gateway = await startGateway({ host, port, dev });
+  let shuttingDown = false;
   const shutdown = (signal: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`\nReceived ${signal}, shutting down…`);
-    void gateway.stop().then(() => process.exit(0));
+    const hardExit = setTimeout(() => process.exit(1), 5000).unref();
+    void gateway
+      .stop()
+      .then(() => {
+        clearTimeout(hardExit);
+        process.exit(0);
+      })
+      .catch(() => {
+        clearTimeout(hardExit);
+        process.exit(1);
+      });
   };
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGHUP", () => shutdown("SIGHUP"));
+  process.on("SIGQUIT", () => shutdown("SIGQUIT"));
 }
 
 main().catch((err) => {

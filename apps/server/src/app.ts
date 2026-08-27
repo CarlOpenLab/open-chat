@@ -518,8 +518,28 @@ export async function startGateway(options: GatewayStartOptions): Promise<Gatewa
 
   const server = createServer(app);
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, host, () => resolve());
+    const onError = (err: NodeJS.ErrnoException): void => {
+      if ((err as NodeJS.ErrnoException).code === "EADDRINUSE") {
+        reject(
+          new Error(
+            `端口 ${port} 已被占用（EADDRINUSE）。\n` +
+              `  解决：\n` +
+              `    1) pnpm kill                      # 清理 3000/8082/4311\n` +
+              `    2) lsof -ti :${port} | xargs kill -9\n` +
+              `    3) open-chat --port 0             # 自动分配可用端口\n` +
+              `    4) hub stop open-chat-app         # 如果是 omp 托管进程\n` +
+              `  原始错误: ${err.message}`,
+          ),
+        );
+        return;
+      }
+      reject(err);
+    };
+    server.once("error", onError);
+    server.listen(port, host, () => {
+      server.off("error", onError);
+      resolve();
+    });
   });
 
   const address = server.address();

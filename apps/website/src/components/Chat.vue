@@ -4,7 +4,7 @@ import type { ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest, useXChat } from "@antdv-next/x-sdk";
-import { message } from "antdv-next";
+import { Drawer, message } from "antdv-next";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import {
   API_BASE_URL,
@@ -27,6 +27,7 @@ import {
 } from "../utils/fileWorkspace";
 import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../utils/projectPath";
 import { FILE_WORKSPACE_SYSTEM_PROMPT } from "../prompts/fileWorkspace";
+import { deriveBoardStatus, hasPersistedError, type SessionStatus } from "../utils/sessionStatus";
 import { loadChatState, type QueuedChatMessage } from "../services/chatStorage";
 import {
   API_AGENT,
@@ -56,6 +57,7 @@ import {
   type OpenChatConversation,
 } from "../composables/useChatPersistence";
 import ChatSidebar from "./chat/ChatSidebar.vue";
+import BoardView from "./chat/BoardView.vue";
 import ChatHeader from "./chat/ChatHeader.vue";
 import ChatMessages from "./chat/ChatMessages.vue";
 import ChatInput from "./chat/ChatInput.vue";
@@ -118,7 +120,34 @@ const hasAcknowledgedOptimisticMessage = (
     lastUserMessage.message.content === pending.message.content
   );
 };
+
 const conversationsOpen = ref(true);
+/** 草稿会话在抽屉中的占位 key：不对应任何真实会话。 */
+const DRAFT_BOARD_KEY = "__draft__";
+/** 看板抽屉当前打开的会话；空串表示看板态（无聊天面板）。 */
+const boardOpenKey = ref("");
+/** 看板抽屉宽度：桌面默认 1080，上限视口 92%；移动端由 CSS 全屏接管。 */
+const DRAWER_WIDTH_DEFAULT = 1080;
+const drawerWidth = ref(
+  typeof window !== "undefined"
+    ? Math.min(DRAWER_WIDTH_DEFAULT, Math.floor(window.innerWidth * 0.92))
+    : DRAWER_WIDTH_DEFAULT,
+);
+/** 出错 / 手动停止后未恢复的会话：驱动「已终止」列。 */
+const stoppedConversationKeys = ref<Set<string>>(new Set());
+
+const boardStatusSignals = computed(
+  () =>
+    ({
+      busyStates: conversationBusyStates.value,
+      permissionKeys: new Set(
+        pendingPermission.value
+          ? [activeRequestConversationKey.value || currentConversationKey.value].filter(Boolean)
+          : [],
+      ),
+      stoppedKeys: stoppedConversationKeys.value,
+    }) satisfies import("../utils/sessionStatus").SessionStatusSignals,
+);
 const rightPanelOpen = ref(false);
 const deleteOpen = ref(false);
 const currentConversationKey = ref<string>("");
@@ -141,6 +170,7 @@ const activeRequestConversationKey = ref<string>("");
 /** 请求开始时间，供侧栏「工作中」条目计时 */
 const requestStartedAt = ref(0);
 let activeRequestOutcome: "pending" | "error" | "abort" | null = null;
+let pendingChatError: string | null = null;
 /**
  * Provider history often omits a transient turn.failed assistant message.
  * Keep the live message authoritative until the user explicitly acts.
@@ -698,11 +728,33 @@ const refreshAcpSession = async (force = false) => {
         conversation.providerSessionId = session.sessionId;
       }
       if (Array.isArray(session.messages) && session.messages.length > 0) {
-        conversation.messages = transcriptHistoryToModelMessages(session.messages);
-        if (String(conversation.key) === currentConversationKey.value && !isRequesting.value) {
-          setMessages(conversation.messages);
+        const hasLocalError = hasPersistedError(conversation);
+        if (hasLocalError) {
+          const serverMessages = transcriptHistoryToModelMessages(session.messages);
+          const hasServerError = hasPersistedError({
+            messages: serverMessages,
+            lastError: undefined,
+          });
+          if (hasServerError) {
+            conversation.messages = serverMessages;
+            if (String(conversation.key) === currentConversationKey.value && !isRequesting.value) {
+              setMessages(conversation.messages);
+            }
+            showWelcome.value = false;
+          } else if (!conversation.messages?.length) {
+            conversation.messages = serverMessages;
+            if (String(conversation.key) === currentConversationKey.value && !isRequesting.value) {
+              setMessages(conversation.messages);
+            }
+            showWelcome.value = false;
+          }
+        } else {
+          conversation.messages = transcriptHistoryToModelMessages(session.messages);
+          if (String(conversation.key) === currentConversationKey.value && !isRequesting.value) {
+            setMessages(conversation.messages);
+          }
+          showWelcome.value = false;
         }
-        showWelcome.value = false;
       }
       schedulePersistState();
     }
@@ -847,10 +899,11 @@ const updateConversationMessages = (
 };
 
 const handleNewConversation = () => {
+  // 看板主页：新任务直接以抽屉形态打开草稿会话
+  boardOpenKey.value = DRAFT_BOARD_KEY;
   // 草稿态下重复点击只提示，不重复创建
   if (isInDraftMode.value) {
     showWelcome.value = true;
-    message.info("当前已经是新对话");
     return;
   }
 
@@ -970,7 +1023,8 @@ const pendingPermission = ref<PermissionRequest | null>(null);
 provider.onPermissionRequest = (request) => {
   pendingPermission.value = request;
 };
-provider.onChatError = () => {
+provider.onChatError = (message: string) => {
+  pendingChatError = typeof message === "string" && message.trim() ? message.trim() : "请求失败";
   if (activeRequestOutcome === "pending") activeRequestOutcome = "error";
 };
 provider.onProviderSession = ({ agentId, sessionId }) => {
@@ -1009,6 +1063,7 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
   requestFallback: (_, { error, errorInfo, messageInfo }) => {
     if (error.name === "AbortError") {
       activeRequestOutcome = "abort";
+      pendingChatError = "请求已中止";
       const existing =
         typeof messageInfo?.message?.content === "string" ? messageInfo.message.content : "";
       return {
@@ -1017,6 +1072,10 @@ const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useX
       };
     }
     activeRequestOutcome = "error";
+    pendingChatError =
+      (typeof errorInfo?.error?.message === "string" && errorInfo.error.message.trim()) ||
+      (error instanceof Error && error.message.trim()) ||
+      "请求失败，请重试！";
     return {
       content: errorInfo?.error?.message || "请求失败，请重试！",
       role: "assistant",
@@ -1465,6 +1524,101 @@ const attachPendingSearchSources = () => {
   });
 };
 
+const setConversationLastError = (conversationKey: string, errorMessage: string) => {
+  const conv = conversationList.value.find((item) => String(item.key) === conversationKey);
+  if (!conv) return;
+  conv.lastError = errorMessage.trim() ? errorMessage.trim().slice(0, 2000) : "请求失败";
+  if (conv.statusOverride) conv.statusOverride = "";
+  // 确保抽屉打开时能看到与聊天一致的红色错误条：给最后一条 assistant 消息补 chatError
+  if (conv.messages?.length) {
+    const lastAssistant = [...conv.messages]
+      .reverse()
+      .find((item) => item.message.role === "assistant");
+    if (lastAssistant) {
+      const msg = lastAssistant.message as unknown as Record<string, unknown>;
+      const extra = (lastAssistant.extraInfo as Record<string, unknown> | undefined) ?? {};
+      if (typeof msg.chatError !== "string" || !msg.chatError) {
+        msg.chatError = conv.lastError;
+      }
+      if (typeof extra.chatError !== "string" || !extra.chatError) {
+        lastAssistant.extraInfo = { ...extra, chatError: conv.lastError };
+      }
+    }
+  }
+  conv.updatedAt = Date.now();
+  schedulePersistState();
+};
+const clearConversationLastError = (conversationKey: string) => {
+  const conv = conversationList.value.find((item) => String(item.key) === conversationKey);
+  if (!conv) return;
+  const hadError = Boolean(conv.lastError);
+  if ("lastError" in conv) delete conv.lastError;
+  // 同步清理最后一条 assistant 消息上的 chatError，避免历史错误导致 hasPersistedError 误判
+  if (conv.messages?.length) {
+    const lastAssistant = [...conv.messages].reverse().find((item) => {
+      if (!item || typeof item !== "object" || !("message" in item)) return false;
+      const message = item.message;
+      if (!message || typeof message !== "object" || !("role" in message)) return false;
+      const role = message.role;
+      return role === "assistant";
+    });
+    if (lastAssistant && typeof lastAssistant === "object") {
+      let changed = false;
+      if ("message" in lastAssistant) {
+        const message = lastAssistant.message;
+        if (message && typeof message === "object" && "chatError" in message) {
+          const chatError = message.chatError;
+          if (typeof chatError === "string" && chatError.trim()) {
+            delete (message as Record<string, unknown>).chatError;
+            changed = true;
+          }
+        }
+      }
+      if ("extraInfo" in lastAssistant) {
+        const extraInfo = lastAssistant.extraInfo;
+        if (extraInfo && typeof extraInfo === "object" && "chatError" in extraInfo) {
+          const chatError = extraInfo.chatError;
+          if (typeof chatError === "string" && chatError.trim()) {
+            const nextExtra = { ...(extraInfo as Record<string, unknown>) };
+            delete nextExtra.chatError;
+            lastAssistant.extraInfo = Object.keys(nextExtra).length
+              ? (nextExtra as never)
+              : undefined;
+            changed = true;
+          }
+        }
+      }
+      if (hadError || changed) schedulePersistState();
+      return;
+    }
+  }
+  if (hadError) schedulePersistState();
+};
+
+const getConversationErrorMessage = (key: string): string => {
+  if (pendingChatError && String(activeRequestConversationKey.value) === key)
+    return pendingChatError;
+  const conv = conversationList.value.find((item) => String(item.key) === key);
+  if (conv?.messages?.length) {
+    const lastAssistant = [...conv.messages]
+      .reverse()
+      .find((item) => item.message.role === "assistant");
+    if (lastAssistant) {
+      const msg = lastAssistant.message as unknown as { chatError?: unknown; content?: unknown };
+      if (typeof msg.chatError === "string" && msg.chatError.trim()) return msg.chatError.trim();
+      const extraInfo = lastAssistant.extraInfo as { chatError?: unknown } | undefined;
+      if (extraInfo && typeof extraInfo.chatError === "string" && extraInfo.chatError.trim()) {
+        return extraInfo.chatError.trim();
+      }
+      if (typeof msg.content === "string" && msg.content.trim()) {
+        const text = msg.content.trim();
+        if (text !== WEB_SEARCHING_MARKER && text.length > 0) return text.slice(0, 2000);
+      }
+    }
+  }
+  return pendingChatError || "请求失败";
+};
+
 watch(isRequesting, (requesting) => {
   if (requesting) {
     requestStartedAt.value = Date.now();
@@ -1475,16 +1629,24 @@ watch(isRequesting, (requesting) => {
   const completedConversationKey = activeRequestConversationKey.value;
   const completedRequestStartedAt = requestStartedAt.value;
   const completedOutcome = activeRequestOutcome;
-  if (completedConversationKey) {
-    if (completedOutcome === "error") {
-      failedHistoryRefreshLocks.add(completedConversationKey);
-    } else if (completedOutcome === "pending") {
-      failedHistoryRefreshLocks.delete(completedConversationKey);
-    }
-  }
   const manuallyStopped = completedConversationKey
     ? manuallyStoppedConversationKeys.delete(completedConversationKey)
     : false;
+  if (completedConversationKey) {
+    if (completedOutcome === "error") {
+      failedHistoryRefreshLocks.add(completedConversationKey);
+      const errorText = getConversationErrorMessage(completedConversationKey);
+      setConversationLastError(completedConversationKey, errorText);
+    } else if (completedOutcome === "abort" || manuallyStopped) {
+      failedHistoryRefreshLocks.delete(completedConversationKey);
+      const abortText =
+        pendingChatError && pendingChatError !== "请求已中止" ? pendingChatError : "已手动停止";
+      setConversationLastError(completedConversationKey, abortText);
+    } else if (completedOutcome === "pending") {
+      failedHistoryRefreshLocks.delete(completedConversationKey);
+      clearConversationLastError(completedConversationKey);
+    }
+  }
   if (completedConversationKey) {
     // The request SSE closing is authoritative. Clear the cached state result
     // before the live-stream watcher runs, otherwise it can subscribe to a run
@@ -1505,6 +1667,7 @@ watch(isRequesting, (requesting) => {
     });
   }
   activeRequestOutcome = null;
+  pendingChatError = null;
   if (completedConversationKey) {
     const conversation = conversationList.value.find(
       (item) => String(item.key) === completedConversationKey,
@@ -1646,16 +1809,25 @@ const startAcpLiveStream = () => {
       // stream and creates a tight request loop.
       markConversationRunIdle(conversationId);
       acpRunState.value = null;
+      const manuallyStopped = manuallyStoppedConversationKeys.delete(conversationId);
       if (outcome === "failed") {
         failedHistoryRefreshLocks.add(conversationId);
-      } else {
+        // 持久化已终止：保证看板归入已终止且刷新后不消失
+        const errorText = getConversationErrorMessage(conversationId);
+        setConversationLastError(conversationId, errorText);
+      } else if (outcome === "completed" && !manuallyStopped) {
         failedHistoryRefreshLocks.delete(conversationId);
+        clearConversationLastError(conversationId);
+      } else {
+        if (outcome !== "failed") failedHistoryRefreshLocks.delete(conversationId);
+        if (manuallyStopped) {
+          setConversationLastError(conversationId, "已手动停止");
+        }
       }
       // A failed retry already has its error attached to the live assistant
       // message. Do not reload history here: providers generally do not
       // persist that transient error, so a refresh would immediately hide it.
       if (outcome === "completed") void refreshAcpSession();
-      const manuallyStopped = manuallyStoppedConversationKeys.delete(conversationId);
       if (outcome === "completed" && !manuallyStopped) {
         if (conversation.queuedMessages?.length) {
           conversation.queuePaused = false;
@@ -2050,10 +2222,16 @@ const sendMessageNow = (
     draftConversationKey.value = "";
     syncConversationRoute("push");
   }
-
   const conversation = getCurrentConversation();
   if (!conversation) return false;
   failedHistoryRefreshLocks.delete(String(conversation.key));
+  // 再次发送视为对错误/停止的显式恢复：清掉已终止标记与旧拖拽覆盖
+  const hadError = Boolean(conversation.lastError);
+  const hadOverride = Boolean(conversation.statusOverride);
+  if (conversation.lastError) delete conversation.lastError;
+  if (conversation.statusOverride) conversation.statusOverride = "";
+  pendingChatError = null;
+  if (hadError || hadOverride) schedulePersistState();
   if (options.systemPrompt !== undefined) {
     conversation.systemPrompt = options.systemPrompt.trim();
   }
@@ -2451,7 +2629,13 @@ const handleReloadMessage = (messageId: string | number) => {
 
   setMessages(currentConversationMessages.value);
   const currentConversation = getCurrentConversation();
-  if (currentConversation) failedHistoryRefreshLocks.delete(String(currentConversation.key));
+  if (currentConversation) {
+    failedHistoryRefreshLocks.delete(String(currentConversation.key));
+    if (currentConversation.lastError) delete currentConversation.lastError;
+    if (currentConversation.statusOverride) currentConversation.statusOverride = "";
+    pendingChatError = null;
+    schedulePersistState();
+  }
   activeRequestConversationKey.value = currentConversationKey.value;
   const baseSystemPrompt = currentConversation?.systemPrompt ?? "";
   const forwardProvider = getForwardProvider(currentModel.value);
@@ -2533,6 +2717,55 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
   message.success("对话名称已更新");
 };
 
+// ============ 看板 ============
+
+/** 看板卡片点击：切换到对应供应商并打开抽屉（复用 handleActiveChange 的供应商切换逻辑）。 */
+const handleBoardOpenConversation = (key: string) => {
+  if (isRequesting.value && key !== currentConversationKey.value) {
+    message.warning("请先停止当前任务再打开其他会话");
+    return;
+  }
+  boardOpenKey.value = key;
+  if (key !== currentConversationKey.value) {
+    handleActiveChange(key);
+  }
+};
+
+const closeBoardDrawer = () => {
+  boardOpenKey.value = "";
+  syncConversationRoute("replace");
+};
+
+/** 拖拽归列 / 抽屉改列：写入覆盖标记，真实活动信号仍优先（见 deriveBoardStatus）。 */
+const handleBoardMoveConversation = (key: string, status: SessionStatus) => {
+  const conversation = conversationList.value.find((item) => String(item.key) === key);
+  if (!conversation) return;
+  // 从已终止拖出视为用户已确认该错误，清除持久错误标记以允许归列生效
+  if (conversation.lastError && status !== "stopped") {
+    delete conversation.lastError;
+  }
+  conversation.statusOverride = status === "done" ? "" : status;
+  // 若仍为已终止列，保持 lastError；否则已在上方清除
+  schedulePersistState();
+};
+
+const handleBoardPinConversation = (key: string) => {
+  handlePinConversation(key);
+};
+
+const handleBoardArchiveConversation = (key: string) => {
+  handleArchiveConversation(key);
+  if (boardOpenKey.value === key) closeBoardDrawer();
+};
+
+const handleBoardDeleteConversation = (key: string) => {
+  // 与原侧栏一致：删除需确认；确认后由 handleDeleteConversation 收尾
+  if (window.confirm("确定删除该对话吗？此操作不可恢复。")) {
+    handleDeleteConversation(key);
+    if (boardOpenKey.value === key) closeBoardDrawer();
+  }
+};
+
 // ============ 命令面板 / 设置 ============
 
 const handleCommandPaletteSelectConversation = (key: string) => {
@@ -2569,11 +2802,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         <div class="h-full" :style="{ width: sidebarWidth + 'px' }">
           <ChatSidebar
             :open="conversationsOpen"
-            :conversation-list="visibleConversationList"
-            :current-key="currentConversationKey"
-            :can-go-back="historyBack.length > 0"
-            :can-go-forward="historyForward.length > 0"
-            :busy-states="conversationBusyStates"
             :dark="dark"
             :agents="agents"
             :active-agent-id="activeAgentId"
@@ -2582,11 +2810,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
             @new-conversation="handleNewConversation"
             @open-search="commandPaletteOpen = true"
             @open-settings="settingsOpen = true"
-            @active-change="handleActiveChange"
-            @rename="handleSidebarRename"
-            @pin="handlePinConversation"
-            @archive="handleArchiveConversation"
-            @delete="handleDeleteConversation"
             @agent-change="handleAgentChange"
           />
         </div>
@@ -2601,123 +2824,160 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       ></button>
     </div>
 
-    <!-- 主区 -->
+    <!-- 主区：看板为默认主页 -->
     <div class="chat-main flex min-w-0 flex-1 flex-col overflow-hidden bg-brand-workspace">
-      <ChatHeader
-        :title="currentConversationTitle"
-        :sidebar-open="conversationsOpen"
-        :right-panel-open="rightPanelOpen"
-        :right-panel-available="workspaceAvailable"
-        :syncing="isRequesting"
-        :can-go-back="historyBack.length > 0"
-        :can-go-forward="historyForward.length > 0"
-        :diff-added="workspaceDiffStats.added"
-        :diff-removed="workspaceDiffStats.removed"
-        @toggle-sidebar="handleSidebarToggle"
-        @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
-        @export="handleExportLocalHistory"
-        @rename="handleRenameConversation"
-        @pin="handlePinConversation"
-        @archive="handleArchiveConversation"
-        @delete="deleteOpen = true"
-      />
-
-      <!-- 消息区 -->
-      <div class="relative min-h-0 flex-1 overflow-hidden">
-        <ChatMessages
-          :show-welcome="
-            showWelcome && currentConversationMessages.length === 0 && !currentConversationBusyState
-          "
-          :bubble-items="bubbleItems"
-          :dark="dark"
-          :conversation-key="currentConversationKey"
-          :search-results-by-message-id="searchResultsByMessageId"
-          :working="Boolean(currentConversationBusyState)"
-          :working-started-at-ms="currentConversationBusyState?.startedAt"
-          :auto-scroll-mode="autoScrollMode"
-          :project-path="projectPath"
-          :project-path-options="projectPathOptions"
-          @reload="handleReloadMessage"
-          @prompt-click="handlePromptClick"
-          @project-path-change="handleProjectPathChange"
-          @project-path-remove="handleProjectPathRemove"
-        />
-      </div>
-
-      <ChatInput
-        v-model="content"
-        :loading="inputRunning"
-        :disabled="inputUnavailable"
-        :queued-messages="currentQueuedMessages"
-        :queue-paused="currentQueuePaused"
-        :run-state="acpRunState?.state ?? null"
-        :current-model="inputCurrentModel"
-        :current-model-label="inputCurrentModelLabel"
-        :model-catalog="inputModelCatalog"
-        :thinking-enabled="thinkingEnabled"
-        :mode="workMode"
-        :permission="effectivePermissionMode"
-        :permission-locked="isPiAgent"
-        :pending-permission="pendingPermission"
-        :file-mode-enabled="fileModeEnabled"
-        :project-path="projectPath"
-        :project-path-options="projectPathOptions"
-        :project-path-enabled="projectPathEnabled"
-        :agent-mode="isAcpAgent"
-        :agent-available="activeAgent.available"
-        :agent-configuring="acpSessionLoading"
-        :is-oh-my-pi="isPiAgent"
-        @change="handleChange"
-        @cancel="handleCancel"
-        @submit="handleSubmit"
-        @queued-message-change="handleQueuedMessageChange"
-        @queued-message-remove="handleQueuedMessageRemove"
-        @queued-message-clear="handleQueuedMessageClear"
-        @queued-message-send="handleQueuedMessageSend"
-        @model-change="handleModelChange"
-        @thinking-change="handleThinkingChange"
-        @mode-change="handleModeChange"
-        @permission-change="handlePermissionChange"
-        @permission-response="handlePermissionResponse"
-        @file-mode-change="handleFileModeChange"
-        @project-path-change="handleProjectPathChange"
-        @project-path-remove="handleProjectPathRemove"
+      <BoardView
+        :conversation-list="visibleConversationList"
+        :open-key="boardOpenKey"
+        :status-signals="boardStatusSignals"
+        :agents="agents"
+        @open-conversation="handleBoardOpenConversation"
+        @move-conversation="handleBoardMoveConversation"
+        @pin-conversation="handleBoardPinConversation"
+        @archive-conversation="handleBoardArchiveConversation"
+        @delete-conversation="handleBoardDeleteConversation"
       />
     </div>
 
-    <!-- 右侧面板：可拖拽宽度 -->
-    <div
-      v-if="rightPanelOpen"
-      class="right-panel-shell relative flex h-full flex-none"
-      :class="{ 'right-panel-shell-open': rightPanelOpen }"
-      :style="{ width: rightPanelWidth + 'px' }"
+    <!-- 会话抽屉：完整聊天（消息 + 输入 + 右侧工作区入口） -->
+    <Drawer
+      class="board-drawer"
+      :open="Boolean(boardOpenKey)"
+      placement="right"
+      :width="drawerWidth"
+      :keyboard="false"
+      :body-style="{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }"
+      :header-style="{ display: 'none' }"
+      destroy-on-close
+      @close="closeBoardDrawer"
     >
-      <button
-        type="button"
-        class="absolute top-0 left-[-3px] z-10 h-full w-[6px] cursor-col-resize border-0 bg-transparent p-0 hover:bg-brand-resize"
-        :class="{ 'bg-brand-resize': resizing === 'right-panel' }"
-        aria-label="调整右侧面板宽度"
-        @mousedown="handleResizeStart('right-panel')"
-      ></button>
-      <RightPanel
-        :open="true"
-        :dark="dark"
-        :files="editableWorkspaceFiles"
-        :workspace-pending="
-          isRequesting &&
-          fileModeEnabled &&
-          (currentFileWorkspace.pending || currentFileWorkspace.files.length === 0)
-        "
-        :selected-path="selectedWorkspacePath"
-        @update:open="rightPanelOpen = $event"
-        @update:selected-path="selectedWorkspacePath = $event"
-        @file-change="handleWorkspaceFileChange"
-        @reset-file="clearWorkspaceDraft($event, '已恢复 AI 版本')"
-        @accept-incoming="clearWorkspaceDraft($event, '已采用 AI 新版本')"
-      />
-    </div>
+      <template v-if="boardOpenKey">
+        <div class="flex h-full min-h-0 flex-col overflow-hidden">
+          <ChatHeader
+            :title="currentConversationTitle"
+            :sidebar-open="conversationsOpen"
+            :right-panel-open="rightPanelOpen"
+            :right-panel-available="workspaceAvailable"
+            :syncing="isRequesting"
+            :can-go-back="historyBack.length > 0"
+            :can-go-forward="historyForward.length > 0"
+            :diff-added="workspaceDiffStats.added"
+            :diff-removed="workspaceDiffStats.removed"
+            :show-close="true"
+            @toggle-sidebar="handleSidebarToggle"
+            @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
+            @export="handleExportLocalHistory"
+            @rename="handleRenameConversation"
+            @pin="handlePinConversation"
+            @archive="handleBoardArchiveConversation(currentConversationKey)"
+            @delete="handleBoardDeleteConversation(currentConversationKey)"
+            @close="closeBoardDrawer"
+          />
 
-    <DeleteConversationModal v-model:open="deleteOpen" @confirm="handleDeleteConversation" />
+          <!-- 消息区 -->
+          <div class="relative min-h-0 flex-1 overflow-hidden">
+            <ChatMessages
+              :show-welcome="
+                showWelcome &&
+                currentConversationMessages.length === 0 &&
+                !currentConversationBusyState
+              "
+              :bubble-items="bubbleItems"
+              :dark="dark"
+              :conversation-key="currentConversationKey"
+              :search-results-by-message-id="searchResultsByMessageId"
+              :working="Boolean(currentConversationBusyState)"
+              :working-started-at-ms="currentConversationBusyState?.startedAt"
+              :auto-scroll-mode="autoScrollMode"
+              :project-path="projectPath"
+              :project-path-options="projectPathOptions"
+              @reload="handleReloadMessage"
+              @prompt-click="handlePromptClick"
+              @project-path-change="handleProjectPathChange"
+              @project-path-remove="handleProjectPathRemove"
+            />
+          </div>
+
+          <ChatInput
+            v-model="content"
+            :loading="inputRunning"
+            :disabled="inputUnavailable"
+            :queued-messages="currentQueuedMessages"
+            :queue-paused="currentQueuePaused"
+            :run-state="acpRunState?.state ?? null"
+            :current-model="inputCurrentModel"
+            :current-model-label="inputCurrentModelLabel"
+            :model-catalog="inputModelCatalog"
+            :thinking-enabled="thinkingEnabled"
+            :mode="workMode"
+            :permission="effectivePermissionMode"
+            :permission-locked="isPiAgent"
+            :pending-permission="pendingPermission"
+            :file-mode-enabled="fileModeEnabled"
+            :project-path="projectPath"
+            :project-path-options="projectPathOptions"
+            :project-path-enabled="projectPathEnabled"
+            :agent-mode="isAcpAgent"
+            :agent-available="activeAgent.available"
+            :agent-configuring="acpSessionLoading"
+            :is-oh-my-pi="isPiAgent"
+            @change="handleChange"
+            @cancel="handleCancel"
+            @submit="handleSubmit"
+            @queued-message-change="handleQueuedMessageChange"
+            @queued-message-remove="handleQueuedMessageRemove"
+            @queued-message-clear="handleQueuedMessageClear"
+            @queued-message-send="handleQueuedMessageSend"
+            @model-change="handleModelChange"
+            @thinking-change="handleThinkingChange"
+            @mode-change="handleModeChange"
+            @permission-change="handlePermissionChange"
+            @permission-response="handlePermissionResponse"
+            @file-mode-change="handleFileModeChange"
+            @project-path-change="handleProjectPathChange"
+            @project-path-remove="handleProjectPathRemove"
+          />
+        </div>
+
+        <!-- 抽屉内右面板：覆盖式，不挤压消息流 -->
+        <div v-if="rightPanelOpen" class="board-drawer-panel">
+          <RightPanel
+            :open="true"
+            :dark="dark"
+            :files="editableWorkspaceFiles"
+            :workspace-pending="
+              isRequesting &&
+              fileModeEnabled &&
+              (currentFileWorkspace.pending || currentFileWorkspace.files.length === 0)
+            "
+            :selected-path="selectedWorkspacePath"
+            @update:open="rightPanelOpen = $event"
+            @update:selected-path="selectedWorkspacePath = $event"
+            @file-change="handleWorkspaceFileChange"
+            @reset-file="clearWorkspaceDraft($event, '已恢复 AI 版本')"
+            @accept-incoming="clearWorkspaceDraft($event, '已采用 AI 新版本')"
+          />
+        </div>
+      </template>
+    </Drawer>
+    <!-- 抽屉左缘拖拽调宽 -->
+    <button
+      v-if="boardOpenKey"
+      type="button"
+      class="board-drawer-resize"
+      aria-label="调整抽屉宽度"
+      @mousedown.prevent="
+        (event) => {
+          const move = (e: MouseEvent) => handleDrawerResizeMove(e);
+          const up = () => {
+            window.removeEventListener('mousemove', move);
+            window.removeEventListener('mouseup', up);
+          };
+          window.addEventListener('mousemove', move);
+          window.addEventListener('mouseup', up);
+        }
+      "
+    ></button>
 
     <CommandPalette
       :open="commandPaletteOpen"
@@ -2770,11 +3030,40 @@ const handleCommandPaletteSelectConversation = (key: string) => {
   color: var(--brand-accent);
 }
 
-@media (max-width: 767px) {
-  .sidebar-backdrop {
-    display: block;
-  }
+/* 抽屉内右面板：覆盖在消息流之上 */
+:deep(.board-drawer .ant-drawer-body) {
+  position: relative;
+}
 
+.board-drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-sidebar);
+  width: min(420px, 60%);
+  box-shadow: -18px 0 46px rgba(9, 9, 11, 0.18);
+  background: var(--brand-workspace);
+}
+
+/* 抽屉左缘拖拽手柄 */
+.board-drawer-resize {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  z-index: calc(var(--z-modal) + 1);
+  width: 6px;
+  border: 0;
+  padding: 0;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.board-drawer-resize:hover {
+  background: var(--brand-resize, rgba(24, 24, 27, 0.12));
+}
+
+@media (max-width: 767px) {
   .chat-main {
     width: 100%;
   }

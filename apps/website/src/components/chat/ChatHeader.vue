@@ -11,6 +11,7 @@ import {
   PanelLeftOpen,
   PanelRight,
   Trash2,
+  X,
 } from "@lucide/vue";
 import { Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, h, nextTick, ref, watch } from "vue";
@@ -26,8 +27,9 @@ interface Props {
   /** 工作区草稿相对 AI 版本的增删行数，两者皆为 0 时不展示 */
   diffAdded?: number;
   diffRemoved?: number;
+  /** 是否显示右上角关闭抽屉按钮 */
+  showClose?: boolean;
 }
-
 interface Emits {
   (e: "toggleSidebar"): void;
   (e: "navigateBack"): void;
@@ -38,8 +40,8 @@ interface Emits {
   (e: "pin"): void;
   (e: "archive"): void;
   (e: "delete"): void;
+  (e: "close"): void;
 }
-
 const props = withDefaults(defineProps<Props>(), {
   rightPanelAvailable: true,
   syncing: false,
@@ -47,6 +49,7 @@ const props = withDefaults(defineProps<Props>(), {
   canGoForward: false,
   diffAdded: 0,
   diffRemoved: 0,
+  showClose: false,
 });
 const emit = defineEmits<Emits>();
 
@@ -213,6 +216,16 @@ const titleMenu = computed<MenuProps>(() => ({
           class="!h-[14px] !w-[14px]"
           :class="rightPanelOpen ? 'text-brand-foreground' : ''"
         />
+      </button>
+    </Tooltip>
+    <Tooltip v-if="showClose" title="关闭抽屉">
+      <button
+        type="button"
+        :class="[iconButtonClass, 'ml-1']"
+        aria-label="关闭抽屉"
+        @click="emit('close')"
+      >
+        <X class="!h-[14px] !w-[14px]" />
       </button>
     </Tooltip>
   </header>

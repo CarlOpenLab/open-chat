@@ -23,8 +23,10 @@ export interface OpenChatConversation extends ConversationItemType {
   queuePaused?: boolean;
   systemPrompt?: string;
   projectPath?: string;
-  /** ACP 供应商返回的真实会话 id；key 仍是 Open Chat 的本地 UI key。 */
-  providerSessionId?: string;
+  /** 看板手动归列的覆盖状态；缺省时按运行信号自动推导。 */
+  statusOverride?: string;
+  /** 出错或手动停止的持久标记，用于看板已终止归类。 */
+  lastError?: string;
 }
 
 export const getMessagePreview = (content: string, maxLength: number = 20): string => {
@@ -126,6 +128,12 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
           conversation.providerSessionId.trim()
             ? { providerSessionId: conversation.providerSessionId.trim() }
             : {}),
+          ...(typeof conversation.statusOverride === "string" && conversation.statusOverride
+            ? { statusOverride: conversation.statusOverride }
+            : {}),
+          ...(typeof conversation.lastError === "string" && conversation.lastError.trim()
+            ? { lastError: conversation.lastError.trim() }
+            : {}),
           agentId:
             typeof conversation.agentId === "string" && conversation.agentId
               ? conversation.agentId
@@ -137,7 +145,6 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
         };
       });
   };
-
   const resetToDraftConversation = () => {
     activeRequestConversationKey.value = "";
     conversationList.value = [];

@@ -1,37 +1,20 @@
 <script setup lang="ts">
-import type { ConversationItemType, ConversationsProps } from "@antdv-next/x";
-import { Conversations } from "@antdv-next/x";
 import {
-  Archive,
   Bot,
   ChevronDown,
   Circle,
-  Ellipsis,
-  LoaderCircle,
   Moon,
   PanelLeftClose,
-  Pencil,
-  Pin,
   Settings,
   SquarePen,
   Sun,
-  Trash2,
 } from "@lucide/vue";
-import { Input, Modal, Tooltip, message } from "antdv-next";
-import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { getMessagePreview, type OpenChatConversation } from "../../composables/useChatPersistence";
-import { resolveConversationGroup } from "../../utils/sessionDateGroup";
-import { formatElapsedDuration, formatRelativeTime } from "../../utils/relativeTime";
+import { Modal, Tooltip } from "antdv-next";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { AgentView } from "../../services/acp";
 
 interface Props {
   open: boolean;
-  conversationList: OpenChatConversation[];
-  currentKey: string;
-  canGoBack?: boolean;
-  canGoForward?: boolean;
-  /** 所有运行中会话；key 为本地会话 key，值包含任务开始时间。 */
-  busyStates?: Record<string, { startedAt: number }>;
   /** 当前是否深色主题，底栏的主题切换按钮据此换图标 */
   dark?: boolean;
   agents?: AgentView[];
@@ -44,108 +27,17 @@ interface Emits {
   (e: "newConversation"): void;
   (e: "openSearch"): void;
   (e: "openSettings"): void;
-  (e: "navigateBack"): void;
-  (e: "navigateForward"): void;
-  (e: "activeChange", key: string): void;
-  (e: "rename", key: string, title: string): void;
-  (e: "pin", key: string): void;
-  (e: "archive", key: string): void;
-  (e: "delete", key: string): void;
   (e: "agentChange", agentId: string): void;
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  canGoBack: false,
-  canGoForward: false,
-  busyStates: () => ({}),
   dark: true,
   agents: () => [],
   activeAgentId: "api",
 });
 const emit = defineEmits<Emits>();
 
-const search = ref("");
-const renameOpen = ref(false);
-const renameKey = ref("");
-const renameDraft = ref("");
 const agentDialogOpen = ref(false);
-
-// 条目副行的时间需要随时间走动：进行中每秒刷新（要显示秒），空闲时 30 秒刷新即可。
-const nowTick = ref(Date.now());
-let tickTimer: ReturnType<typeof setInterval> | undefined;
-
-const stopTick = () => {
-  if (!tickTimer) return;
-  clearInterval(tickTimer);
-  tickTimer = undefined;
-};
-
-const startTick = (periodMs: number) => {
-  stopTick();
-  tickTimer = setInterval(() => {
-    nowTick.value = Date.now();
-  }, periodMs);
-};
-
-const GROUP_WEIGHT: Record<string, number> = {
-  置顶: 0,
-  今天: 1,
-  昨天: 2,
-  本周: 3,
-  本月: 4,
-  今年: 5,
-  更早: 6,
-};
-
-const agentNameMap = computed(() => {
-  const map = new Map<string, string>();
-  for (const agent of props.agents) map.set(agent.id, agent.name);
-  map.set("api", "API");
-  return map;
-});
-
-const getConversationAgentLabel = (conversation: OpenChatConversation): string => {
-  const agentId = (conversation.agentId || "api") as string;
-  return agentNameMap.value.get(agentId) ?? agentId;
-};
-
-const getConversationModelShort = (conversation: OpenChatConversation): string => {
-  const raw = typeof conversation.modelId === "string" ? conversation.modelId.trim() : "";
-  if (!raw) return "";
-  const parts = raw.split("/");
-  return parts[parts.length - 1] || raw;
-};
-
-const groupedConversations = computed<ConversationItemType[]>(() => {
-  const query = search.value.trim().toLocaleLowerCase();
-  const list = props.conversationList
-    .map((item) => ({
-      ...item,
-      group: resolveConversationGroup(item.updatedAt, item.group),
-    }))
-    .filter((item) => {
-      if (!query) return true;
-      const conv = item as OpenChatConversation;
-      const haystack = [
-        String(item.label ?? ""),
-        getConversationAgentLabel(conv),
-        String(conv.modelId ?? ""),
-        String((conv as OpenChatConversation).projectPath ?? ""),
-      ]
-        .join(" ")
-        .toLocaleLowerCase();
-      return haystack.includes(query);
-    });
-
-  return list.sort((a, b) => {
-    const ga = GROUP_WEIGHT[a.group ?? "今天"] ?? 6;
-    const gb = GROUP_WEIGHT[b.group ?? "今天"] ?? 6;
-    if (ga !== gb) return ga - gb;
-    return String(b.updatedAt ?? 0) - String(a.updatedAt ?? 0);
-  });
-});
-
-const hasConversations = computed(() => props.conversationList.length > 0);
 
 const activeAgent = computed(
   () => props.agents.find((agent) => agent.id === props.activeAgentId) ?? props.agents[0],
@@ -167,132 +59,22 @@ const selectAgent = (agentId: string) => {
   emit("agentChange", agentId);
 };
 
-/**
- * Conversations 的 expandedKeys 默认是空数组，只要开了 collapsible，
- * 「今天 / 昨天」这些分组一上来就是折叠的、一条会话都看不见。
- * 这里改成受控：默认全展开，只记住用户手动折叠过的分组，新出现的分组也是展开的。
- */
-const collapsedGroups = ref<string[]>([]);
-
-const groupNames = computed(() =>
-  Array.from(new Set(groupedConversations.value.map((item) => item.group ?? "今天"))),
-);
-
-const groupable = computed<ConversationsProps["groupable"]>(() => ({
-  collapsible: true,
-  expandedKeys: groupNames.value.filter((name) => !collapsedGroups.value.includes(name)),
-  onExpand: (keys) => {
-    collapsedGroups.value = groupNames.value.filter((name) => !keys.includes(name));
-  },
-}));
-
-/** 副行以项目为主；API/旧会话没有项目时回退到最后一条消息摘要。 */
-const conversationMeta = (conversation: OpenChatConversation): string => {
-  const projectPath = conversation.projectPath?.trim();
-  if (projectPath) {
-    return projectPath.split(/[\\/]/).filter(Boolean).pop() || projectPath;
-  }
-  const messages = conversation.messages ?? [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const content = messages[index]?.message?.content;
-    if (typeof content === "string" && content.trim()) return getMessagePreview(content, 18);
-  }
-  return "";
-};
-
-// template slot 版本所需的小助手（供 #labelRender 内联调用）
-const getConversationTitle = (item: ConversationItemType) =>
-  String((item as OpenChatConversation).label ?? "").trim() || "新对话";
-
-const getProviderMeta = (item: ConversationItemType) => {
-  const c = item as OpenChatConversation;
-  const agentLabel = getConversationAgentLabel(c);
-  const modelShort = getConversationModelShort(c);
-  return modelShort ? `${agentLabel} · ${modelShort}` : agentLabel;
-};
-
-const getBusyState = (key: string) => props.busyStates[key];
-
-const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
-  emit("activeChange", String(key));
-};
-
-const openRename = (item: ConversationItemType) => {
-  renameKey.value = item.key;
-  renameDraft.value = String(item.label ?? "").trim();
-  renameOpen.value = true;
-};
-
-const confirmRename = () => {
-  const title = renameDraft.value.trim();
-  if (!renameKey.value || !title) {
-    message.warning("请输入对话名称");
-    return;
-  }
-  emit("rename", renameKey.value, title);
-  renameOpen.value = false;
-};
-
-const conversationMenu: ConversationsProps["menu"] = (item) => ({
-  trigger: () =>
-    h(
-      "button",
-      {
-        type: "button",
-        class: "conversation-menu-trigger",
-        "aria-label": "打开对话操作菜单",
-      },
-      [h(Ellipsis)],
-    ),
-  items: [
-    { key: "rename", label: "重命名", icon: h(Pencil) },
-    { key: "pin", label: item.group === "置顶" ? "取消置顶" : "置顶对话", icon: h(Pin) },
-    { key: "archive", label: "归档对话", icon: h(Archive) },
-    { type: "divider" },
-    { key: "delete", label: "删除对话", icon: h(Trash2), danger: true },
-  ],
-  onClick: ({ key }) => {
-    if (key === "rename") openRename(item);
-    if (key === "pin") emit("pin", item.key);
-    if (key === "archive") emit("archive", item.key);
-    if (key === "delete") emit("delete", item.key);
-  },
-});
-
 const iconButtonClass =
   "grid h-[26px] w-[26px] flex-none place-items-center rounded-[6px] border-0 bg-transparent p-0 text-brand-muted-strong cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground active:opacity-80";
 
-/* 新任务是侧栏唯一的「主操作」：带边框的软按钮，与下面的幽灵行拉开层级 */
+/* 新任务是侧栏唯一的「主操作」：带边框的软按钮 */
 const newTaskRowClass =
   "flex h-[32px] w-full flex-none items-center gap-[8px] rounded-[8px] border border-solid border-brand-border bg-transparent px-[9px] text-left text-[13px] font-medium text-brand-foreground cursor-pointer transition-colors duration-150 hover:border-brand-border-strong hover:bg-brand-surface-subtle active:opacity-80";
-
-const actionRowClass =
-  "flex h-[32px] w-full flex-none items-center gap-[10px] rounded-[7px] border-0 bg-transparent px-[10px] text-left text-[13px] text-brand-muted cursor-pointer hover:bg-brand-surface-subtle hover:text-brand-foreground active:opacity-80";
 
 const handleShortcut = (event: KeyboardEvent) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
     event.preventDefault();
     emit("openSearch");
   }
-  if (event.key === "Escape") {
-    renameOpen.value = false;
-  }
 };
 
-watch(
-  () => Object.keys(props.busyStates).length > 0,
-  (busy) => {
-    nowTick.value = Date.now();
-    startTick(busy ? 1000 : 30000);
-  },
-  { immediate: true },
-);
-
 onMounted(() => window.addEventListener("keydown", handleShortcut));
-onBeforeUnmount(() => {
-  window.removeEventListener("keydown", handleShortcut);
-  stopTick();
-});
+onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
 </script>
 
 <template>
@@ -313,7 +95,7 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <!-- CLI / API 供应商切换：下方会话列表始终只属于当前供应商。 -->
+    <!-- CLI / API 供应商切换 -->
     <div class="px-[10px] pb-[8px]">
       <button
         type="button"
@@ -343,87 +125,16 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <!-- 新任务 / 搜索 -->
-    <!-- 动作行紧贴 titlebar，搜索行下方留 10px（SIDEBAR_SEARCH_BOTTOM_GAP） -->
+    <!-- 新任务（主操作） -->
     <div class="flex flex-none flex-col gap-[4px] px-[10px] pb-[10px]">
       <button type="button" :class="newTaskRowClass" @click="emit('newConversation')">
         <SquarePen class="!h-[14px] !w-[14px] flex-none text-brand-accent" />
         <span class="min-w-0 flex-1 truncate">新任务</span>
       </button>
-      <!-- <button type="button" :class="actionRowClass" @click="emit('openSearch')"> -->
-      <!--   <Search class="!h-[15px] !w-[15px] flex-none" /> -->
-      <!--   <span class="min-w-0 flex-1 truncate">搜索</span> -->
-      <!--   <kbd -->
-      <!--     class="flex h-[18px] flex-none items-center rounded-[4px] border border-solid border-brand-border bg-transparent px-[5px] text-[10px] tracking-[0.5px] text-brand-muted-strong [font-family:inherit]" -->
-      <!--     >⌘K</kbd -->
-      <!--   > -->
-      <!-- </button> -->
     </div>
 
-    <!-- 会话列表（按日期分组） -->
-    <div class="conversation-scroll relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-      <!-- 空列表：安静的两行文案，靠上放置，不用图标撑场面 -->
-      <div
-        v-if="!hasConversations"
-        class="flex flex-col items-center gap-[3px] px-6 pt-[56px] text-center"
-      >
-        <span class="text-[12px] text-brand-muted">还没有对话</span>
-        <span class="text-[11px] text-brand-ghost">点击「新任务」开始</span>
-      </div>
-      <Conversations
-        v-else
-        :items="groupedConversations"
-        :active-key="currentKey"
-        :groupable="groupable"
-        :menu="conversationMenu"
-        @active-change="handleActiveChange"
-      >
-        <template #labelRender="{ item }">
-          <span class="conversation-entry">
-            <span class="conversation-entry-body">
-              <span class="conversation-entry-head">
-                <span class="conversation-entry-title">{{ getConversationTitle(item) }}</span>
-                <LoaderCircle
-                  v-if="getBusyState(String(item.key))"
-                  class="conversation-entry-spinner"
-                />
-              </span>
-              <span class="conversation-entry-meta">
-                <!-- 副行：供应商/模型 + 项目/消息摘要 + 时间，时间始终贴右 -->
-                <span class="conversation-entry-provider">{{ getProviderMeta(item) }}</span>
-                <span
-                  v-if="conversationMeta(item as OpenChatConversation)"
-                  class="conversation-entry-sep"
-                  >·</span
-                >
-                <span
-                  v-if="conversationMeta(item as OpenChatConversation)"
-                  class="conversation-entry-project"
-                  >{{ conversationMeta(item as OpenChatConversation) }}</span
-                >
-                <span v-else class="conversation-entry-project is-empty" />
-                <span
-                  :class="
-                    getBusyState(String(item.key))
-                      ? 'conversation-entry-time is-busy'
-                      : 'conversation-entry-time'
-                  "
-                >
-                  {{
-                    getBusyState(String(item.key))
-                      ? `工作中 · ${formatElapsedDuration(nowTick - (getBusyState(String(item.key))?.startedAt ?? nowTick))}`
-                      : formatRelativeTime(
-                          (item as OpenChatConversation).updatedAt as number | undefined,
-                          nowTick,
-                        )
-                  }}
-                </span>
-              </span>
-            </span>
-          </span>
-        </template>
-      </Conversations>
-    </div>
+    <!-- 会话列表已迁移至看板主页；此处留白让底栏贴底 -->
+    <div class="min-h-0 flex-1"></div>
 
     <!-- 底栏：设置在左，主题切换在右，两端平衡 -->
     <div class="flex h-[40px] flex-none items-center px-[10px]">
@@ -481,34 +192,10 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </Modal>
-    <Modal
-      v-model:open="renameOpen"
-      title="重命名对话"
-      ok-text="保存"
-      cancel-text="取消"
-      :width="360"
-      @ok="confirmRename"
-    >
-      <Input
-        v-model:value="renameDraft"
-        autofocus
-        aria-label="对话名称"
-        placeholder="输入对话名称"
-        @press-enter="confirmRename"
-      />
-    </Modal>
   </aside>
 </template>
 
 <style scoped>
-/* 保留原因：以下全部是 antd/x Conversations 内部类（.antd-*）与滚动条伪元素的
-   :deep 覆盖，无法迁移为模板工具类。 */
-/* 侧栏整列（含新任务/搜索行）都是 px 10 内缩，会话列表必须同轴 */
-.chat-sidebar :deep(.antd-conversations) {
-  min-height: 100%;
-  padding: 0 10px 10px;
-}
-
 .agent-provider-trigger {
   display: flex;
   width: 100%;
@@ -607,222 +294,5 @@ onBeforeUnmount(() => {
   color: var(--brand-accent);
   font-size: 10px;
   font-weight: 600;
-}
-/* 行距只由 SIDEBAR_SESSION_ROW_GAP = 1 决定，清掉组件自带的 gap / 顶部留白 */
-.chat-sidebar :deep(.antd-conversations-list) {
-  padding-top: 0;
-  gap: 0;
-}
-/* session_group_header()：h 28 / px 8 / 12.5px medium / text_tertiary */
-.chat-sidebar :deep(.antd-conversations-group-title) {
-  height: 28px;
-  min-height: 28px;
-  align-items: center;
-  margin-top: 10px;
-  padding: 0 8px;
-  color: var(--brand-muted-strong);
-  font-size: 12.5px;
-  font-weight: 500;
-  line-height: 28px;
-}
-/* 折叠箭头紧跟分组名（gap 5），且只在分组 hover 时显形 */
-.chat-sidebar :deep(.antd-conversations-group-label) {
-  flex: none;
-}
-.chat-sidebar :deep(.antd-conversations-group-collapse-trigger) {
-  margin-inline-start: 5px;
-  color: var(--brand-ghost);
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.chat-sidebar
-  :deep(.antd-conversations-group-title:hover .antd-conversations-group-collapse-trigger) {
-  opacity: 1;
-}
-/* SIDEBAR_SESSION_CARD_HEIGHT = 51 = py 7×2 + 标题行 18 + gap 4 + 副行 15，
-   行间距 SIDEBAR_SESSION_ROW_GAP = 1 */
-.chat-sidebar :deep(.antd-conversations-item) {
-  position: relative;
-  min-height: 51px;
-  align-items: flex-start;
-  margin-bottom: 1px;
-  padding-block: 7px;
-  padding-inline: 8px;
-  border: 0;
-  border-radius: 7px;
-  color: var(--brand-muted);
-  font-size: 13.5px;
-  transition:
-    background 160ms ease,
-    color 160ms ease;
-}
-
-/* 两行条目（标题行 / 项目与时间副行），无左侧类型图标。 */
-.chat-sidebar :deep(.conversation-entry) {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-}
-.chat-sidebar :deep(.conversation-entry-body) {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 4px;
-  padding-right: 0;
-}
-
-.chat-sidebar :deep(.antd-conversations-item:hover .conversation-entry-body) {
-  padding-right: 28px;
-}
-.chat-sidebar :deep(.conversation-entry-head) {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-.chat-sidebar :deep(.conversation-entry-title) {
-  overflow: hidden;
-  min-width: 0;
-  flex: 1 1 auto;
-  /* 标题恒用主文字色并加半粗，与灰阶副行形成两级层次 */
-  color: var(--brand-foreground);
-  font-size: 13.5px;
-  font-weight: 500;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-sidebar :deep(.conversation-entry-meta) {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  color: var(--brand-muted-strong);
-  font-size: 11.5px;
-  font-weight: 400;
-  line-height: 15px;
-}
-.chat-sidebar :deep(.conversation-entry-provider) {
-  flex: none;
-  max-width: 44%;
-  overflow: hidden;
-  color: var(--brand-muted-strong);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-sidebar :deep(.conversation-entry-sep) {
-  flex: none;
-  color: var(--brand-ghost);
-}
-.chat-sidebar :deep(.conversation-entry-project) {
-  overflow: hidden;
-  min-width: 0;
-  flex: 1 1 auto;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-sidebar :deep(.conversation-entry-project.is-empty) {
-  flex: 0 0 auto;
-}
-/* 闲置条目的时间比项目名更暗（text_ghost），进行中时提到 text_tertiary。
-   margin-left:auto 保证即使副行没有文案，时间也始终贴右 */
-.chat-sidebar :deep(.conversation-entry-time) {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  margin-left: auto;
-  color: var(--brand-ghost);
-  white-space: nowrap;
-}
-.chat-sidebar :deep(.conversation-entry-time.is-busy) {
-  color: var(--brand-muted-strong);
-}
-.chat-sidebar :deep(.conversation-entry-spinner) {
-  width: 12px;
-  height: 12px;
-  flex: none;
-  color: var(--brand-accent);
-  animation: conversation-spin 900ms linear infinite;
-}
-@keyframes conversation-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-.chat-sidebar :deep(.antd-conversations-item:hover) {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-/* 选中 / hover / 按下都是同一层 6% 中性色，不加粗 */
-.chat-sidebar :deep(.antd-conversations-item-active) {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-.chat-sidebar :deep(.antd-conversations-item:focus-visible) {
-  outline: 2px solid var(--brand-ring);
-  outline-offset: 1px;
-}
-/* 菜单触发按钮不再参与布局：覆盖在条目右缘（垂直居中），hover / 聚焦时才显形。
-   时间因此可以贴齐条目右缘，右侧始终保持干净对齐。 */
-.chat-sidebar :deep(.antd-conversations-item > div:has(.conversation-menu-trigger)) {
-  position: absolute;
-  top: 50%;
-  right: 8px;
-  z-index: 1;
-  transform: translateY(-50%);
-}
-.chat-sidebar :deep(.conversation-menu-trigger) {
-  display: inline-grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  padding: 5px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--brand-muted-strong);
-  cursor: pointer;
-  opacity: 0;
-  transition:
-    background 160ms ease,
-    color 160ms ease,
-    opacity 90ms ease;
-}
-.chat-sidebar :deep(.conversation-menu-trigger svg) {
-  width: 16px;
-  height: 16px;
-}
-/* 活跃条目也只在 hover 时露出菜单，避免长期盖住右缘的时间 */
-.chat-sidebar :deep(.antd-conversations-item:hover .conversation-menu-trigger),
-.chat-sidebar :deep(.conversation-menu-trigger:focus-visible) {
-  opacity: 1;
-  /* 菜单稍晚淡入（120ms），等右侧时间先清场，过渡期间不与时间重叠 */
-  transition:
-    background 160ms ease,
-    color 160ms ease,
-    opacity 90ms ease 120ms;
-}
-.chat-sidebar :deep(.conversation-menu-trigger:hover) {
-  background: var(--brand-surface-subtle);
-  color: var(--brand-foreground);
-}
-/* hover 时右侧状态（相对时间 / 进行中图标）快速淡出并彻底隐藏，
-   ⋯ 原位顶替；visibility 让时间在淡出后完全消失、不参与命中与绘制 */
-.chat-sidebar :deep(.conversation-entry-time),
-.chat-sidebar :deep(.conversation-entry-spinner) {
-  transition:
-    opacity 90ms ease,
-    visibility 0s linear 90ms;
-}
-.chat-sidebar :deep(.antd-conversations-item:hover .conversation-entry-time),
-.chat-sidebar :deep(.antd-conversations-item:hover .conversation-entry-spinner) {
-  opacity: 0;
-  visibility: hidden;
-}
-.chat-sidebar .conversation-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: var(--brand-border-strong) transparent;
 }
 </style>

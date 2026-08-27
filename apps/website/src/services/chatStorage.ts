@@ -14,6 +14,10 @@ export interface QueuedChatMessage {
 }
 
 export interface PersistedConversation extends Omit<ConversationItemType, "messages"> {
+  /** 看板手动归列的覆盖状态（sessionStatus.SessionStatus）。 */
+  statusOverride?: string;
+  /** 出错或手动停止的持久标记，用于看板已终止归类与刷新后保留。 */
+  lastError?: string;
   agentId?: string;
   modelId?: string;
   messages: DefaultMessageInfo<XModelMessage>[];
@@ -118,6 +122,12 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
             return normalized ? [normalized] : [];
           })
         : [];
+      // lastError 需要严格为非空字符串，兼容旧数据的消息扫描由 sessionStatus.hasPersistedError 兜底
+      const rawLastError = conversation.lastError;
+      const normalizedLastError =
+        typeof rawLastError === "string" && rawLastError.trim().length > 0
+          ? rawLastError.trim()
+          : undefined;
       return {
         ...persistedConversation,
         ...(typeof conversation.modelId === "string" && conversation.modelId
@@ -135,6 +145,7 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
         ...(typeof providerSessionId === "string" && providerSessionId.trim()
           ? { providerSessionId: providerSessionId.trim() }
           : {}),
+        ...(normalizedLastError ? { lastError: normalizedLastError } : {}),
       };
     }),
   };
