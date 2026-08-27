@@ -58,6 +58,8 @@ import {
 } from "../composables/useChatPersistence";
 import ChatSidebar from "./chat/ChatSidebar.vue";
 import BoardView from "./chat/BoardView.vue";
+import TaskBoardView from "./chat/TaskBoardView.vue";
+import TaskDetailDrawer from "./chat/TaskDetailDrawer.vue";
 import ChatHeader from "./chat/ChatHeader.vue";
 import ChatMessages from "./chat/ChatMessages.vue";
 import ChatInput from "./chat/ChatInput.vue";
@@ -65,7 +67,15 @@ import RightPanel from "./chat/RightPanel.vue";
 import CommandPalette from "./chat/CommandPalette.vue";
 import SettingsDialog from "./chat/SettingsDialog.vue";
 import DeleteConversationModal from "./chat/DeleteConversationModal.vue";
-
+import {
+  loadTasks,
+  saveTasks,
+  createTaskInput,
+  updateTaskInList,
+  duplicateTask,
+  type Task,
+} from "../services/taskStorage";
+import { TASK_STATUS_META, type TaskStatus } from "../utils/taskStatus";
 interface Props {
   dark: boolean;
   /** 主题模式：跟随系统 / 浅色 / 深色 */
@@ -126,6 +136,20 @@ const conversationsOpen = ref(true);
 const DRAFT_BOARD_KEY = "__draft__";
 /** 看板抽屉当前打开的会话；空串表示看板态（无聊天面板）。 */
 const boardOpenKey = ref("");
+/** 任务详情抽屉：打开的任务 id，空串表示未打开。 */
+const openTaskId = ref("");
+/** 任务列表（全局跨项目），与会话解耦。 */
+const taskList = ref<Task[]>([]);
+/** 任务持久化防抖句柄。 */
+let persistTaskTimer: ReturnType<typeof setTimeout> | null = null;
+const schedulePersistTasks = () => {
+  if (isHydrating.value) return;
+  if (persistTaskTimer) clearTimeout(persistTaskTimer);
+  persistTaskTimer = setTimeout(() => {
+    persistTaskTimer = null;
+    void saveTasks(taskList.value);
+  }, 300);
+};
 /** 看板抽屉宽度：桌面默认 1080，上限视口 92%；移动端由 CSS 全屏接管。 */
 const DRAWER_WIDTH_DEFAULT = 1080;
 const drawerWidth = ref(
@@ -135,7 +159,6 @@ const drawerWidth = ref(
 );
 /** 出错 / 手动停止后未恢复的会话：驱动「已终止」列。 */
 const stoppedConversationKeys = ref<Set<string>>(new Set());
-
 const boardStatusSignals = computed(
   () =>
     ({
@@ -1153,6 +1176,20 @@ const currentConversationBusyState = computed(() =>
     ? conversationBusyStates.value[currentConversationKey.value]
     : undefined,
 );
+/** 共享计时 tick：驱动任务卡片/抽屉内会话的耗时显示 */
+const taskNowTick = ref(Date.now());
+let taskTickTimer: ReturnType<typeof setInterval> | undefined;
+const stopTaskTick = () => {
+  if (taskTickTimer) clearInterval(taskTickTimer);
+  taskTickTimer = undefined;
+};
+const startTaskTick = (periodMs: number) => {
+  stopTaskTick();
+  taskTickTimer = setInterval(() => (taskNowTick.value = Date.now()), periodMs);
+};
+const hasTaskBusy = computed(() => Object.keys(conversationBusyStates.value).length > 0);
+watch(hasTaskBusy, (busy) => startTaskTick(busy ? 1000 : 30000), { immediate: true });
+onBeforeUnmount(stopTaskTick);
 
 // ============ 会话持久化 ============
 
@@ -1951,17 +1988,16 @@ onMounted(async () => {
     conversationsOpen.value = false;
     rightPanelOpen.value = false;
   }
-
   const initialChatPath = window.location.pathname;
-  const [persistedState, loadedAgents, loadedDefaultProjectPath] = await Promise.all([
+  const [persistedState, loadedAgents, loadedDefaultProjectPath, loadedTasks] = await Promise.all([
     loadChatState(),
     loadAcpAgents().catch((error) => {
       console.error("Failed to load local agents:", error);
       return [API_AGENT];
     }),
     aiService.getDefaultProjectPath().catch(() => ""),
+    loadTasks().catch(() => [] as Task[]),
   ]);
-  if (componentUnmounted) return;
   defaultProjectPath.value = loadedDefaultProjectPath;
   if (loadedDefaultProjectPath) {
     projectPathHistory.value = uniqueDirectoryPaths(
@@ -1985,7 +2021,16 @@ onMounted(async () => {
     currentConversationKey.value = "";
     showWelcome.value = true;
   }
-
+  taskList.value = loadedTasks;
+  // 清理悬空会话引用（会话已被删除）
+  const validKeys = new Set(conversationList.value.map((c) => String(c.key)));
+  let tasksChanged = false;
+  for (const task of taskList.value) {
+    const before = task.sessionKeys.length;
+    task.sessionKeys = task.sessionKeys.filter((k) => validKeys.has(k));
+    if (task.sessionKeys.length !== before) tasksChanged = true;
+  }
+  if (tasksChanged) void saveTasks(taskList.value);
   if (componentUnmounted) return;
   // URL 直达：打开复制的链接时恢复对应供应商与会话（仅本地会话，不再预拉供应商全量）
   await restoreRouteConversation(initialChatPath);
@@ -2187,25 +2232,14 @@ interface SubmitMessageOptions {
   instruction?: string;
 }
 
-const sendMessageNow = (
-  nextContent: string,
-  options: SubmitMessageOptions = {},
-  clearComposer = true,
-): boolean => {
-  if ((!nextContent || !nextContent.trim()) && !options.attachments?.length) return false;
-  if (inputUnavailable.value || inputRunning.value) return false;
-  if (!activeAgent.value.available) {
-    message.warning(
-      activeAgent.value.adapterHint ||
-        `${activeAgent.value.name} 当前不可用，请检查本地 CLI 安装与登录状态`,
-    );
-    return false;
-  }
-
-  // 草稿态首次发送时，才创建真实会话并写入侧栏
+/**
+ * 草稿态落地当前会话：需要发送或入队时若还没有会话则新建并写入侧栏，
+ * 返回当前会话（草稿态创建失败时为 undefined）。
+ */
+const ensureActiveConversation = (systemPrompt = ""): OpenChatConversation | undefined => {
   if (isInDraftMode.value) {
     const newConversation = createNewConversation(
-      options.systemPrompt ?? "",
+      systemPrompt,
       isAcpAgent.value ? ensureDraftConversationKey() : "",
       inputCurrentModel.value,
     );
@@ -2222,7 +2256,26 @@ const sendMessageNow = (
     draftConversationKey.value = "";
     syncConversationRoute("push");
   }
-  const conversation = getCurrentConversation();
+  return getCurrentConversation();
+};
+
+const sendMessageNow = (
+  nextContent: string,
+  options: SubmitMessageOptions = {},
+  clearComposer = true,
+): boolean => {
+  if ((!nextContent || !nextContent.trim()) && !options.attachments?.length) return false;
+  if (inputUnavailable.value || inputRunning.value) return false;
+  if (!activeAgent.value.available) {
+    message.warning(
+      activeAgent.value.adapterHint ||
+        `${activeAgent.value.name} 当前不可用，请检查本地 CLI 安装与登录状态`,
+    );
+    return false;
+  }
+
+  // 草稿态首次发送时，才创建真实会话并写入侧栏
+  const conversation = ensureActiveConversation(options.systemPrompt ?? "");
   if (!conversation) return false;
   failedHistoryRefreshLocks.delete(String(conversation.key));
   // 再次发送视为对错误/停止的显式恢复：清掉已终止标记与旧拖拽覆盖
@@ -2425,9 +2478,14 @@ const handleSubmit = (
     return;
   }
 
-  const conversation = getCurrentConversation();
+  // 有请求在跑（或已有排队消息）时，新消息进入队列；草稿态先落地会话再入队，
+  // 避免「发不出去」——消息被静默丢弃且无任何提示。
+  let conversation = getCurrentConversation();
   if (inputRunning.value || conversation?.queuedMessages?.length) {
-    if (!conversation) return;
+    if (!conversation) {
+      conversation = ensureActiveConversation(options.systemPrompt ?? "");
+      if (!conversation) return;
+    }
     queueMessage(conversation, nextContent, options.attachments);
     if (!inputRunning.value && !conversation.queuePaused) {
       scheduleNextQueuedMessage(String(conversation.key));
@@ -2687,6 +2745,16 @@ const handleArchiveConversation = (conversationKey: string = currentConversation
   conversationList.value = conversationList.value.filter(
     (conversation) => String(conversation.key) !== conversationKey,
   );
+  // 清理任务中的会话引用（归档对话从侧栏移除，任务侧也移除以保持一致）
+  let tasksPruned = false;
+  for (const task of taskList.value) {
+    if (task.sessionKeys.includes(conversationKey)) {
+      task.sessionKeys = task.sessionKeys.filter((k) => k !== conversationKey);
+      task.updatedAt = Date.now();
+      tasksPruned = true;
+    }
+  }
+  if (tasksPruned) schedulePersistTasks();
   if (conversationKey === currentConversationKey.value) {
     resetAfterRemovingConversation();
   } else {
@@ -2700,6 +2768,16 @@ const handleDeleteConversation = (conversationKey: string = currentConversationK
   conversationList.value = conversationList.value.filter(
     (conversation) => String(conversation.key) !== conversationKey,
   );
+  // 同步清理任务中的悬空会话引用
+  let tasksPruned = false;
+  for (const task of taskList.value) {
+    if (task.sessionKeys.includes(conversationKey)) {
+      task.sessionKeys = task.sessionKeys.filter((k) => k !== conversationKey);
+      task.updatedAt = Date.now();
+      tasksPruned = true;
+    }
+  }
+  if (tasksPruned) schedulePersistTasks();
   deleteOpen.value = false;
   if (conversationKey === currentConversationKey.value) {
     resetAfterRemovingConversation();
@@ -2755,15 +2833,172 @@ const handleBoardPinConversation = (key: string) => {
 
 const handleBoardArchiveConversation = (key: string) => {
   handleArchiveConversation(key);
-  if (boardOpenKey.value === key) closeBoardDrawer();
 };
 
 const handleBoardDeleteConversation = (key: string) => {
-  // 与原侧栏一致：删除需确认；确认后由 handleDeleteConversation 收尾
-  if (window.confirm("确定删除该对话吗？此操作不可恢复。")) {
-    handleDeleteConversation(key);
-    if (boardOpenKey.value === key) closeBoardDrawer();
+  if (!key) return;
+  // 复用删除逻辑但走侧栏的确认流：直接删
+  handleDeleteConversation(key);
+};
+
+// ============ 任务看板（Task — 人） ============
+
+const handleTaskOpen = (id: string) => {
+  openTaskId.value = id;
+};
+
+const closeTaskDrawer = () => {
+  openTaskId.value = "";
+  // 任务抽屉关闭时同步收起其中的会话抽屉：若 boardOpenKey 残留，
+  // 独立会话抽屉（v-if="!openTaskId"）会在任务抽屉收起后弹出来。
+  boardOpenKey.value = "";
+  syncConversationRoute("replace");
+};
+
+const handleTaskMove = (id: string, status: TaskStatus) => {
+  try {
+    taskList.value = updateTaskInList(taskList.value, id, { status });
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "移动失败");
+    return;
   }
+  schedulePersistTasks();
+  message.success(`已移至 ${TASK_STATUS_META[status].name}`);
+};
+
+const handleTaskCreate = (payload: {
+  title: string;
+  projectPath: string | null;
+  templateId?: string;
+  status?: TaskStatus;
+}) => {
+  const normalizedPath =
+    payload.projectPath !== null && payload.projectPath !== undefined
+      ? normalizeProjectPath(String(payload.projectPath)) || null
+      : null;
+  if (normalizedPath) rememberProjectPath(normalizedPath);
+  const task = createTaskInput({
+    title: payload.title || undefined,
+    projectPath: normalizedPath,
+    status: payload.status,
+    templateId: payload.templateId as unknown as
+      | import("../services/taskStorage").TaskTemplateId
+      | undefined,
+  });
+  taskList.value = [task, ...taskList.value];
+  schedulePersistTasks();
+  openTaskId.value = task.id;
+  message.success("任务已创建");
+};
+
+const handleTaskUpdateTitle = (id: string, title: string) => {
+  try {
+    taskList.value = updateTaskInList(taskList.value, id, { title });
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "更新失败");
+    return;
+  }
+  schedulePersistTasks();
+};
+
+const handleTaskUpdate = (id: string, patch: Partial<Task>) => {
+  try {
+    if (patch.projectPath !== undefined) {
+      if (patch.projectPath === null || patch.projectPath === "") {
+        patch.projectPath = null;
+      } else {
+        const normalized = normalizeProjectPath(String(patch.projectPath));
+        patch.projectPath = normalized || null;
+        if (patch.projectPath) rememberProjectPath(patch.projectPath);
+      }
+    }
+    taskList.value = updateTaskInList(taskList.value, id, patch);
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "更新失败");
+    return;
+  }
+  schedulePersistTasks();
+};
+
+const handleTaskArchive = (id: string) => {
+  handleTaskMove(id, "archived");
+};
+
+const handleTaskDuplicate = (id: string) => {
+  const task = taskList.value.find((t) => t.id === id);
+  if (!task) return;
+  const dup = duplicateTask(task);
+  taskList.value = [dup, ...taskList.value];
+  schedulePersistTasks();
+  message.success("已基于此再建");
+};
+
+const handleTaskDelete = (id: string) => {
+  taskList.value = taskList.value.filter((t) => t.id !== id);
+  if (openTaskId.value === id) closeTaskDrawer();
+  schedulePersistTasks();
+  message.success("任务已删除");
+};
+
+const currentTask = computed(() => taskList.value.find((t) => t.id === openTaskId.value) ?? null);
+
+const handleCreateSessionForTask = (taskId: string) => {
+  const task = taskList.value.find((t) => t.id === taskId);
+  if (!task) return;
+  const targetProject = task.projectPath ?? projectPath.value.trim() ?? "";
+  if (targetProject) {
+    projectPath.value = targetProject;
+  }
+  const newKey = `acp:${activeAgentId.value}:${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const newConversation: OpenChatConversation = {
+    key: newKey,
+    label: task.title.slice(0, 40) || "新对话",
+    group: "今天",
+    agentId: activeAgentId.value,
+    modelId: currentModel.value,
+    messages: [],
+    projectPath: targetProject,
+  } as OpenChatConversation;
+  conversationList.value.unshift(newConversation);
+  try {
+    taskList.value = updateTaskInList(taskList.value, taskId, {
+      sessionKeys: [...task.sessionKeys, String(newKey)],
+    });
+  } catch {
+    // ignore
+  }
+  schedulePersistTasks();
+  schedulePersistState();
+  boardOpenKey.value = String(newKey);
+  currentConversationKey.value = String(newKey);
+};
+
+const handleOpenSessionFromTask = (sessionKey: string) => {
+  if (isRequesting.value && sessionKey !== currentConversationKey.value) {
+    message.warning("请先停止当前任务再打开其他会话");
+    return;
+  }
+  boardOpenKey.value = sessionKey;
+  if (sessionKey !== currentConversationKey.value) handleActiveChange(sessionKey);
+};
+
+const handleRetrySessionForTask = (taskId: string, _sessionKey: string) => {
+  // 重试仅新建空会话，不自动发送，原会话内容由用户自行决定
+  handleCreateSessionForTask(taskId);
+};
+
+const handleRemoveSessionLink = (taskId: string, sessionKey: string) => {
+  const task = taskList.value.find((t) => t.id === taskId);
+  if (!task) return;
+  try {
+    taskList.value = updateTaskInList(taskList.value, taskId, {
+      sessionKeys: task.sessionKeys.filter((k) => k !== sessionKey),
+    });
+  } catch {
+    return;
+  }
+  schedulePersistTasks();
+  message.success("已移除关联");
 };
 
 // ============ 命令面板 / 设置 ============
@@ -2824,23 +3059,132 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       ></button>
     </div>
 
-    <!-- 主区：看板为默认主页 -->
     <div class="chat-main flex min-w-0 flex-1 flex-col overflow-hidden bg-brand-workspace">
-      <BoardView
-        :conversation-list="visibleConversationList"
-        :open-key="boardOpenKey"
+      <TaskBoardView
+        :tasks="taskList"
+        :conversation-list="conversationList"
+        :open-task-id="openTaskId"
         :status-signals="boardStatusSignals"
         :agents="agents"
-        @open-conversation="handleBoardOpenConversation"
-        @move-conversation="handleBoardMoveConversation"
-        @pin-conversation="handleBoardPinConversation"
-        @archive-conversation="handleBoardArchiveConversation"
-        @delete-conversation="handleBoardDeleteConversation"
+        :project-path-options="projectPathOptions"
+        :current-project-path="projectPath"
+        @open-task="handleTaskOpen"
+        @move-task="handleTaskMove"
+        @create-task="handleTaskCreate"
+        @update-task-title="handleTaskUpdateTitle"
+        @archive-task="handleTaskArchive"
+        @duplicate-task="handleTaskDuplicate"
+        @delete-task="handleTaskDelete"
       />
     </div>
+    <!-- 任务抽屉：split 模式 左任务｜右对话（新建/打开会话同屉） -->
+    <TaskDetailDrawer
+      :open="Boolean(openTaskId)"
+      :task="currentTask"
+      :conversation-list="conversationList"
+      :status-signals="boardStatusSignals"
+      :now-tick="taskNowTick"
+      :split="true"
+      :active-session-key="boardOpenKey"
+      :project-path-options="projectPathOptions"
+      @close="closeTaskDrawer"
+      @update-task="handleTaskUpdate"
+      @create-session="handleCreateSessionForTask"
+      @open-session="handleOpenSessionFromTask"
+      @retry-session="handleRetrySessionForTask"
+      @remove-session-link="handleRemoveSessionLink"
+    >
+      <template #chat>
+        <template v-if="boardOpenKey">
+          <div class="flex h-full min-h-0 flex-col overflow-hidden">
+            <ChatHeader
+              :sidebar-open="conversationsOpen"
+              :right-panel-open="rightPanelOpen"
+              :right-panel-available="workspaceAvailable"
+              :syncing="isRequesting"
+              :can-go-back="historyBack.length > 0"
+              :can-go-forward="historyForward.length > 0"
+              :diff-added="workspaceDiffStats.added"
+              :diff-removed="workspaceDiffStats.removed"
+              :show-close="true"
+              @toggle-sidebar="handleSidebarToggle"
+              @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
+              @export="handleExportLocalHistory"
+              @rename="handleRenameConversation"
+              @pin="handlePinConversation"
+              @archive="handleBoardArchiveConversation(currentConversationKey)"
+              @delete="handleBoardDeleteConversation(currentConversationKey)"
+              @close="closeBoardDrawer"
+            />
+            <div class="relative min-h-0 flex-1 overflow-hidden">
+              <ChatMessages
+                :show-welcome="
+                  showWelcome &&
+                  currentConversationMessages.length === 0 &&
+                  !currentConversationBusyState
+                "
+                :bubble-items="bubbleItems"
+                :dark="dark"
+                :conversation-key="currentConversationKey"
+                :search-results-by-message-id="searchResultsByMessageId"
+                :working="Boolean(currentConversationBusyState)"
+                :working-started-at-ms="currentConversationBusyState?.startedAt"
+                :auto-scroll-mode="autoScrollMode"
+                :project-path="projectPath"
+                :project-path-options="projectPathOptions"
+                @reload="handleReloadMessage"
+                @prompt-click="handlePromptClick"
+                @project-path-change="handleProjectPathChange"
+                @project-path-remove="handleProjectPathRemove"
+              />
+            </div>
+            <ChatInput
+              v-model="content"
+              :loading="inputRunning"
+              :disabled="inputUnavailable"
+              :queued-messages="currentQueuedMessages"
+              :queue-paused="currentQueuePaused"
+              :run-state="acpRunState?.state ?? null"
+              :current-model="inputCurrentModel"
+              :current-model-label="inputCurrentModelLabel"
+              :model-catalog="inputModelCatalog"
+              :thinking-enabled="thinkingEnabled"
+              :mode="workMode"
+              :permission="effectivePermissionMode"
+              :permission-locked="isPiAgent"
+              :pending-permission="pendingPermission"
+              :file-mode-enabled="fileModeEnabled"
+              :project-path="projectPath"
+              :project-path-options="projectPathOptions"
+              :project-path-enabled="projectPathEnabled"
+              :agent-mode="isAcpAgent"
+              :agent-available="activeAgent.available"
+              :agent-configuring="acpSessionLoading"
+              :is-oh-my-pi="isPiAgent"
+              @change="handleChange"
+              @cancel="handleCancel"
+              @submit="handleSubmit"
+              @queued-message-change="handleQueuedMessageChange"
+              @queued-message-remove="handleQueuedMessageRemove"
+              @queued-message-clear="handleQueuedMessageClear"
+              @queued-message-send="handleQueuedMessageSend"
+              @model-change="handleModelChange"
+              @thinking-change="handleThinkingChange"
+              @mode-change="handleModeChange"
+              @permission-change="handlePermissionChange"
+              @permission-response="handlePermissionResponse"
+              @file-mode-change="handleFileModeChange"
+              @project-path-change="handleProjectPathChange"
+              @project-path-remove="handleProjectPathRemove"
+            />
+          </div>
+        </template>
+      </template>
+    </TaskDetailDrawer>
 
-    <!-- 会话抽屉：完整聊天（消息 + 输入 + 右侧工作区入口） -->
+    <!-- 会话抽屉：仅当未打开任务时（侧栏直接打开会话） -->
     <Drawer
+      v-if="!openTaskId"
       class="board-drawer"
       :open="Boolean(boardOpenKey)"
       placement="right"
@@ -2852,132 +3196,89 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       @close="closeBoardDrawer"
     >
       <template v-if="boardOpenKey">
-        <div class="flex h-full min-h-0 flex-col overflow-hidden">
-          <ChatHeader
-            :title="currentConversationTitle"
-            :sidebar-open="conversationsOpen"
-            :right-panel-open="rightPanelOpen"
-            :right-panel-available="workspaceAvailable"
-            :syncing="isRequesting"
-            :can-go-back="historyBack.length > 0"
-            :can-go-forward="historyForward.length > 0"
-            :diff-added="workspaceDiffStats.added"
-            :diff-removed="workspaceDiffStats.removed"
-            :show-close="true"
-            @toggle-sidebar="handleSidebarToggle"
-            @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
-            @export="handleExportLocalHistory"
-            @rename="handleRenameConversation"
-            @pin="handlePinConversation"
-            @archive="handleBoardArchiveConversation(currentConversationKey)"
-            @delete="handleBoardDeleteConversation(currentConversationKey)"
-            @close="closeBoardDrawer"
-          />
-
-          <!-- 消息区 -->
-          <div class="relative min-h-0 flex-1 overflow-hidden">
-            <ChatMessages
-              :show-welcome="
-                showWelcome &&
-                currentConversationMessages.length === 0 &&
-                !currentConversationBusyState
-              "
-              :bubble-items="bubbleItems"
-              :dark="dark"
-              :conversation-key="currentConversationKey"
-              :search-results-by-message-id="searchResultsByMessageId"
-              :working="Boolean(currentConversationBusyState)"
-              :working-started-at-ms="currentConversationBusyState?.startedAt"
-              :auto-scroll-mode="autoScrollMode"
-              :project-path="projectPath"
-              :project-path-options="projectPathOptions"
-              @reload="handleReloadMessage"
-              @prompt-click="handlePromptClick"
-              @project-path-change="handleProjectPathChange"
-              @project-path-remove="handleProjectPathRemove"
-            />
-          </div>
-
-          <ChatInput
-            v-model="content"
-            :loading="inputRunning"
-            :disabled="inputUnavailable"
-            :queued-messages="currentQueuedMessages"
-            :queue-paused="currentQueuePaused"
-            :run-state="acpRunState?.state ?? null"
-            :current-model="inputCurrentModel"
-            :current-model-label="inputCurrentModelLabel"
-            :model-catalog="inputModelCatalog"
-            :thinking-enabled="thinkingEnabled"
-            :mode="workMode"
-            :permission="effectivePermissionMode"
-            :permission-locked="isPiAgent"
-            :pending-permission="pendingPermission"
-            :file-mode-enabled="fileModeEnabled"
+        <ChatHeader
+          :title="currentConversationTitle"
+          :sidebar-open="conversationsOpen"
+          :right-panel-open="rightPanelOpen"
+          :right-panel-available="workspaceAvailable"
+          :syncing="isRequesting"
+          :can-go-back="historyBack.length > 0"
+          :can-go-forward="historyForward.length > 0"
+          :diff-added="workspaceDiffStats.added"
+          :diff-removed="workspaceDiffStats.removed"
+          :show-close="true"
+          @toggle-sidebar="handleSidebarToggle"
+          @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
+          @export="handleExportLocalHistory"
+          @rename="handleRenameConversation"
+          @pin="handlePinConversation"
+          @archive="handleBoardArchiveConversation(currentConversationKey)"
+          @delete="handleBoardDeleteConversation(currentConversationKey)"
+          @close="closeBoardDrawer"
+        />
+        <div class="relative min-h-0 flex-1 overflow-hidden">
+          <ChatMessages
+            :show-welcome="
+              showWelcome &&
+              currentConversationMessages.length === 0 &&
+              !currentConversationBusyState
+            "
+            :bubble-items="bubbleItems"
+            :dark="dark"
+            :conversation-key="currentConversationKey"
+            :search-results-by-message-id="searchResultsByMessageId"
+            :working="Boolean(currentConversationBusyState)"
+            :working-started-at-ms="currentConversationBusyState?.startedAt"
+            :auto-scroll-mode="autoScrollMode"
             :project-path="projectPath"
             :project-path-options="projectPathOptions"
-            :project-path-enabled="projectPathEnabled"
-            :agent-mode="isAcpAgent"
-            :agent-available="activeAgent.available"
-            :agent-configuring="acpSessionLoading"
-            :is-oh-my-pi="isPiAgent"
-            @change="handleChange"
-            @cancel="handleCancel"
-            @submit="handleSubmit"
-            @queued-message-change="handleQueuedMessageChange"
-            @queued-message-remove="handleQueuedMessageRemove"
-            @queued-message-clear="handleQueuedMessageClear"
-            @queued-message-send="handleQueuedMessageSend"
-            @model-change="handleModelChange"
-            @thinking-change="handleThinkingChange"
-            @mode-change="handleModeChange"
-            @permission-change="handlePermissionChange"
-            @permission-response="handlePermissionResponse"
-            @file-mode-change="handleFileModeChange"
+            @reload="handleReloadMessage"
+            @prompt-click="handlePromptClick"
             @project-path-change="handleProjectPathChange"
             @project-path-remove="handleProjectPathRemove"
           />
         </div>
-
-        <!-- 抽屉内右面板：覆盖式，不挤压消息流 -->
-        <div v-if="rightPanelOpen" class="board-drawer-panel">
-          <RightPanel
-            :open="true"
-            :dark="dark"
-            :files="editableWorkspaceFiles"
-            :workspace-pending="
-              isRequesting &&
-              fileModeEnabled &&
-              (currentFileWorkspace.pending || currentFileWorkspace.files.length === 0)
-            "
-            :selected-path="selectedWorkspacePath"
-            @update:open="rightPanelOpen = $event"
-            @update:selected-path="selectedWorkspacePath = $event"
-            @file-change="handleWorkspaceFileChange"
-            @reset-file="clearWorkspaceDraft($event, '已恢复 AI 版本')"
-            @accept-incoming="clearWorkspaceDraft($event, '已采用 AI 新版本')"
-          />
-        </div>
+        <ChatInput
+          v-model="content"
+          :loading="inputRunning"
+          :disabled="inputUnavailable"
+          :queued-messages="currentQueuedMessages"
+          :queue-paused="currentQueuePaused"
+          :run-state="acpRunState?.state ?? null"
+          :current-model="inputCurrentModel"
+          :current-model-label="inputCurrentModelLabel"
+          :model-catalog="inputModelCatalog"
+          :thinking-enabled="thinkingEnabled"
+          :mode="workMode"
+          :permission="effectivePermissionMode"
+          :permission-locked="isPiAgent"
+          :pending-permission="pendingPermission"
+          :file-mode-enabled="fileModeEnabled"
+          :project-path="projectPath"
+          :project-path-options="projectPathOptions"
+          :project-path-enabled="projectPathEnabled"
+          :agent-mode="isAcpAgent"
+          :agent-available="activeAgent.available"
+          :agent-configuring="acpSessionLoading"
+          :is-oh-my-pi="isPiAgent"
+          @change="handleChange"
+          @cancel="handleCancel"
+          @submit="handleSubmit"
+          @queued-message-change="handleQueuedMessageChange"
+          @queued-message-remove="handleQueuedMessageRemove"
+          @queued-message-clear="handleQueuedMessageClear"
+          @queued-message-send="handleQueuedMessageSend"
+          @model-change="handleModelChange"
+          @thinking-change="handleThinkingChange"
+          @mode-change="handleModeChange"
+          @permission-change="handlePermissionChange"
+          @permission-response="handlePermissionResponse"
+          @file-mode-change="handleFileModeChange"
+          @project-path-change="handleProjectPathChange"
+          @project-path-remove="handleProjectPathRemove"
+        />
       </template>
     </Drawer>
-    <!-- 抽屉左缘拖拽调宽 -->
-    <button
-      v-if="boardOpenKey"
-      type="button"
-      class="board-drawer-resize"
-      aria-label="调整抽屉宽度"
-      @mousedown.prevent="
-        (event) => {
-          const move = (e: MouseEvent) => handleDrawerResizeMove(e);
-          const up = () => {
-            window.removeEventListener('mousemove', move);
-            window.removeEventListener('mouseup', up);
-          };
-          window.addEventListener('mousemove', move);
-          window.addEventListener('mouseup', up);
-        }
-      "
-    ></button>
 
     <CommandPalette
       :open="commandPaletteOpen"

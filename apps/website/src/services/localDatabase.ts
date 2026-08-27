@@ -1,6 +1,7 @@
 const DB_NAME = "open-chat";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = "app-state";
+export const TASK_STORE = "tasks";
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -10,6 +11,9 @@ function openDB(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
+      }
+      if (!db.objectStoreNames.contains(TASK_STORE)) {
+        db.createObjectStore(TASK_STORE, { keyPath: "id" });
       }
     };
 
@@ -49,4 +53,40 @@ export async function writeLocalValue<T>(key: string, value: T): Promise<void> {
 
 export async function deleteLocalValue(key: string): Promise<void> {
   await withStore<void>("readwrite", (store) => store.delete(key));
+}
+
+async function withTaskStore<T>(
+  mode: IDBTransactionMode,
+  callback: (store: IDBObjectStore) => IDBRequest<any>,
+): Promise<T> {
+  const db = await openDB();
+  return new Promise<T>((resolve, reject) => {
+    const transaction = db.transaction(TASK_STORE, mode);
+    const store = transaction.objectStore(TASK_STORE);
+    const request = callback(store) as IDBRequest<T>;
+    request.onsuccess = () => resolve(request.result as T);
+    request.onerror = () => reject(request.error ?? new Error("IndexedDB task request failed"));
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => {
+      reject(transaction.error ?? new Error("IndexedDB task transaction failed"));
+      db.close();
+    };
+  });
+}
+
+export async function readAllTasks<T>(): Promise<T[]> {
+  return withTaskStore<T[]>("readonly", (store) => store.getAll());
+}
+
+export async function writeTaskValue<T extends { id: string }>(value: T): Promise<void> {
+  const plain = JSON.parse(JSON.stringify(value)) as T;
+  await withTaskStore<void>("readwrite", (store) => store.put(plain));
+}
+
+export async function deleteTaskValue(id: string): Promise<void> {
+  await withTaskStore<void>("readwrite", (store) => store.delete(id));
+}
+
+export async function clearAllTasks(): Promise<void> {
+  await withTaskStore<void>("readwrite", (store) => store.clear());
 }

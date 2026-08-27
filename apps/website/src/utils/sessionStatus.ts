@@ -6,19 +6,21 @@
  *   2. pendingPermission（等待权限确认）      → permission
  *   3. queuedMessages（消息已入队）           → queued
  *   4. 出错 / 手动停止后未继续                → stopped
- *   5. 其余                                   → done
+ *   5. 未发过消息的空会话                      → idle（待开始）
+ *   6. 其余                                   → done
  *
  * 手动拖拽 / 抽屉改列写入 statusOverride，仅覆盖「无真实活动」时的归列；
  * 任何真实活动信号出现时自动推导重新生效。再次发送消息会清掉覆盖值
  * （见 Chat.vue sendMessageNow），避免旧拖拽永久劫持后续状态。
  */
 
-export type SessionStatus = "running" | "queued" | "permission" | "done" | "stopped";
+export type SessionStatus = "running" | "queued" | "permission" | "idle" | "done" | "stopped";
 
 export const SESSION_STATUS_ORDER: SessionStatus[] = [
   "running",
   "queued",
   "permission",
+  "idle",
   "done",
   "stopped",
 ];
@@ -27,6 +29,7 @@ export const SESSION_STATUS_META: Record<SessionStatus, { name: string; hint: st
   running: { name: "运行中", hint: "Agent 正在执行" },
   queued: { name: "排队中", hint: "消息已入队" },
   permission: { name: "待操作", hint: "需要你确认权限" },
+  idle: { name: "待开始", hint: "会话尚未开始" },
   done: { name: "已完成", hint: "本轮任务结束" },
   stopped: { name: "已终止", hint: "出错或手动停止" },
 };
@@ -54,6 +57,13 @@ const hasQueuedMessages = (conversation: unknown): boolean => {
   if (!("queuedMessages" in conversation)) return false;
   const queue = conversation.queuedMessages;
   return Array.isArray(queue) && queue.length > 0;
+};
+
+/** 全新会话（从未发过消息）：无任何运行信号时归为「待开始」而非「已完成」。 */
+const hasNoMessages = (conversation: unknown): boolean => {
+  if (!conversation || typeof conversation !== "object") return true;
+  const messages = (conversation as Record<string, unknown>).messages;
+  return !Array.isArray(messages) || messages.length === 0;
 };
 
 /**
@@ -118,5 +128,7 @@ export function deriveBoardStatus(
   if (hasPersistedError(conversation)) return "stopped";
   if (conversation.statusOverride) return conversation.statusOverride;
   if (signals.stoppedKeys.has(key)) return "stopped";
+  // 新建会话未发过消息：显示「待开始」，不误标为已完成
+  if (hasNoMessages(conversation)) return "idle";
   return "done";
 }

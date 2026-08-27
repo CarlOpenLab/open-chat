@@ -74,14 +74,11 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
 
   const toPersistedConversations = (list: OpenChatConversation[]): PersistedConversation[] => {
     return list
-      .filter((conversation) => {
-        const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
-        return (
-          messages.length > 0 ||
-          Boolean(conversation.providerSessionId?.trim()) ||
-          Boolean(conversation.queuedMessages?.length)
-        );
-      })
+      .filter((conversation) =>
+        // 侧栏/任务抽屉中的会话都是用户明确创建的（含未发过消息的新会话，
+        // 如任务「新建会话」），全部持久化，刷新后不丢失。
+        Boolean(String(conversation.key ?? "").trim()),
+      )
       .map((conversation, index) => {
         const normalizedLabel =
           typeof conversation.label === "string" && conversation.label.trim()

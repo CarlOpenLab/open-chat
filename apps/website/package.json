@@ -26,6 +26,7 @@
     "@codemirror/view": "catalog:",
     "@lucide/vue": "catalog:",
     "antdv-next": "catalog:",
+    "antdv-style": "catalog:",
     "codemirror": "catalog:",
     "install": "catalog:",
     "shiki": "catalog:",

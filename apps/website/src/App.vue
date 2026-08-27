@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ThemeProvider } from "antdv-style";
 import { XProvider } from "@antdv-next/x";
 import type { XProviderProps } from "@antdv-next/x";
 import {
@@ -13,7 +14,6 @@ import {
 import { ACCESS_REQUIRED_EVENT, setGatewayAccessGranted } from "./services/access";
 import { shadcnDarkTheme, shadcnTheme } from "./theme/shadcnTheme";
 import { Button, Input } from "antdv-next";
-
 const Chat = defineAsyncComponent(() => import("./components/Chat.vue"));
 const CodeHighlightDemoPage = defineAsyncComponent(
   () => import("./pages/CodeHighlightDemoPage.vue"),
@@ -254,68 +254,70 @@ onBeforeUnmount(() => {
 
 <template>
   <XProvider :theme="appTheme" :locale="locale" layer>
-    <main
-      v-if="!accessReady || !accessGranted"
-      class="grid min-h-[100dvh] place-items-center bg-background px-5"
-      aria-live="polite"
-    >
-      <div
-        v-if="accessReady"
-        class="w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-sm"
+    <ThemeProvider :appearance="dark ? 'dark' : 'light'">
+      <main
+        v-if="!accessReady || !accessGranted"
+        class="grid min-h-[100dvh] place-items-center bg-background px-5"
+        aria-live="polite"
       >
-        <h1 class="m-0 text-xl font-semibold text-foreground">Open Chat</h1>
-        <p class="mt-2 text-sm leading-6 text-muted-foreground">
-          请输入启动 Open Chat 的终端中显示的本次访问密码。
-        </p>
-        <label class="mt-5 block text-sm font-medium text-foreground" for="access-password"
-          >访问密码</label
+        <div
+          v-if="accessReady"
+          class="w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-sm"
         >
-        <Input
-          id="access-password"
-          v-model:value="accessPassword"
-          class="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:border-primary"
-          type="password"
-          autocomplete="current-password"
-          autofocus
-          :disabled="accessSubmitting"
-        />
-        <p v-if="accessError" class="mt-2 text-sm text-red-500">{{ accessError }}</p>
-        <Button
-          class="mt-5 w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
-          :disabled="!accessPassword || accessSubmitting"
-          @click="submitAccessPassword"
-        >
-          {{ accessSubmitting ? "验证中…" : "进入 Open Chat" }}
-        </Button>
-      </div>
-      <span
-        v-else
-        class="h-7 w-7 animate-[spin_700ms_linear_infinite] rounded-full border-2 border-solid border-border border-t-foreground"
-        aria-label="正在检查访问权限"
-      ></span>
-    </main>
-    <Suspense v-else>
-      <Transition name="route-fade" mode="out-in">
-        <component
-          :is="currentComponent"
-          :key="currentPage"
-          :dark="dark"
-          v-bind="currentPage === 'chat' ? { themeMode } : {}"
-          @toggle-theme="toggleTheme"
-          @theme-mode-change="setThemeMode"
-        />
-      </Transition>
-      <template #fallback>
-        <main
-          class="route-loading grid min-h-[100dvh] w-full place-items-center bg-background"
-          aria-busy="true"
-          aria-label="页面加载中"
-        >
-          <span
-            class="h-7 w-7 animate-[spin_700ms_linear_infinite] rounded-full border-2 border-solid border-border border-t-foreground"
-          ></span>
-        </main>
-      </template>
-    </Suspense>
+          <h1 class="m-0 text-xl font-semibold text-foreground">Open Chat</h1>
+          <p class="mt-2 text-sm leading-6 text-muted-foreground">
+            请输入启动 Open Chat 的终端中显示的本次访问密码。
+          </p>
+          <label class="mt-5 block text-sm font-medium text-foreground" for="access-password"
+            >访问密码</label
+          >
+          <Input
+            id="access-password"
+            v-model:value="accessPassword"
+            class="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-foreground outline-none focus:border-primary"
+            type="password"
+            autocomplete="current-password"
+            autofocus
+            :disabled="accessSubmitting"
+          />
+          <p v-if="accessError" class="mt-2 text-sm text-red-500">{{ accessError }}</p>
+          <Button
+            class="mt-5 w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
+            :disabled="!accessPassword || accessSubmitting"
+            @click="submitAccessPassword"
+          >
+            {{ accessSubmitting ? "验证中…" : "进入 Open Chat" }}
+          </Button>
+        </div>
+        <span
+          v-else
+          class="h-7 w-7 animate-[spin_700ms_linear_infinite] rounded-full border-2 border-solid border-border border-t-foreground"
+          aria-label="正在检查访问权限"
+        ></span>
+      </main>
+      <Suspense v-else>
+        <Transition name="route-fade" mode="out-in">
+          <component
+            :is="currentComponent"
+            :key="currentPage"
+            :dark="dark"
+            v-bind="currentPage === 'chat' ? { themeMode } : {}"
+            @toggle-theme="toggleTheme"
+            @theme-mode-change="setThemeMode"
+          />
+        </Transition>
+        <template #fallback>
+          <main
+            class="route-loading grid min-h-[100dvh] w-full place-items-center bg-background"
+            aria-busy="true"
+            aria-label="页面加载中"
+          >
+            <span
+              class="h-7 w-7 animate-[spin_700ms_linear_infinite] rounded-full border-2 border-solid border-border border-t-foreground"
+            ></span>
+          </main>
+        </template>
+      </Suspense>
+    </ThemeProvider>
   </XProvider>
 </template>
