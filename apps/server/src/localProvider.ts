@@ -20,7 +20,7 @@ import { createServer as createNetServer } from "node:net";
 import type { ServerResponse } from "node:http";
 import { GatewayError } from "./error";
 import type { LocalConfig } from "./config";
-import { cliProcessEnv, resolveExecutable } from "./commandEnv";
+import { cliSpawnOptions, resolveExecutable } from "./commandEnv";
 import { convertOpenCodeHistory } from "./transcript/adapters/opencode";
 import { writeTranscriptCustomEvent } from "./transcript/stream";
 import { writeNativeEvent } from "./nativeEvents";
@@ -147,13 +147,15 @@ class OpenCodeServer {
 
   private async start(): Promise<number> {
     const port = await reservePort();
+    const spawnOptions = cliSpawnOptions(this.binary);
     const child = spawn(this.binary, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
       cwd: this.cwd || process.cwd(),
       env: {
-        ...cliProcessEnv(this.binary),
+        ...spawnOptions.env,
         OPENCODE_SERVER_PASSWORD: "",
         OPENCODE_SERVER_USERNAME: "opencode",
       },
+      shell: spawnOptions.shell,
       stdio: ["ignore", "ignore", "pipe"],
     });
     this.child = child;

@@ -8,7 +8,7 @@ import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import type { AcpAgentConfig, AcpConfig, AgentTransport } from "./config";
-import { cliProcessEnv, resolveExecutable } from "./commandEnv";
+import { cliSpawnOptions, resolveExecutable } from "./commandEnv";
 import { GatewayError } from "./error";
 import type { LocalChatManager, LocalModelInfo } from "./localProvider";
 import { convertClaudeHistory } from "./transcript/adapters/claude";
@@ -522,7 +522,7 @@ class JsonRpcProcess {
   ) {
     this.child = spawn(executable, args, {
       cwd,
-      env: cliProcessEnv(executable),
+      ...cliSpawnOptions(executable),
       stdio: ["pipe", "pipe", "pipe"],
     });
     const lines = createInterface({ input: this.child.stdout });
@@ -952,7 +952,7 @@ class ClaudeRuntime implements NativeRuntime {
     ];
     this.child = spawn(executable, args, {
       cwd,
-      env: cliProcessEnv(executable),
+      ...cliSpawnOptions(executable),
       stdio: ["pipe", "pipe", "pipe"],
     });
     createInterface({ input: this.child.stdout }).on("line", (line) => this.handleLine(line));
@@ -1197,9 +1197,11 @@ class PiRpcProcess {
     private readonly onEvent: (value: Record<string, unknown>) => void,
     private readonly onExit: (error: Error) => void,
   ) {
+    const spawnOptions = cliSpawnOptions(executable);
     this.child = spawn(executable, args, {
       cwd,
-      env: { ...cliProcessEnv(executable), PI_SKIP_VERSION_CHECK: "1" },
+      ...spawnOptions,
+      env: { ...spawnOptions.env, PI_SKIP_VERSION_CHECK: "1" },
       stdio: ["pipe", "pipe", "pipe"],
     });
     createInterface({ input: this.child.stdout }).on("line", (line) => this.handleLine(line));

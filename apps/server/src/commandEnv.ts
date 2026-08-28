@@ -1,3 +1,4 @@
+import type { SpawnOptions } from "node:child_process";
 import { accessSync, constants, realpathSync } from "node:fs";
 import { delimiter, dirname, extname, isAbsolute, join } from "node:path";
 
@@ -14,8 +15,8 @@ const COMMON_EXECUTABLE_DIRECTORIES = [
 /**
  * cmd.exe 用 PATHEXT 为无扩展名的命令补全可执行扩展名；Node 的 spawn 不会做
  * 这一步。npm 全局安装的 CLI（codex / claude / pi 等）在 Windows 上只提供
- * `codex.cmd`（批处理，可 spawn）和无扩展名的 POSIX 脚本（CreateProcess 无法
- * 直接执行），所以必须按 PATHEXT 顺序探测。
+ * `codex.cmd`（需要经 cmd.exe 启动）和无扩展名的 POSIX 脚本（CreateProcess
+ * 无法直接执行），所以必须按 PATHEXT 顺序探测。
  */
 const PATHEXT_EXTENSIONS = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
   .split(";")
@@ -76,4 +77,16 @@ export function resolveExecutable(command: string): string | null {
 export function cliProcessEnv(executable: string): NodeJS.ProcessEnv {
   const directories = [dirname(executable), ...executableSearchPaths()];
   return { ...process.env, PATH: [...new Set(directories)].join(delimiter) };
+}
+
+/**
+ * Windows 的 npm CLI shim 是 .cmd / .bat，不能被 CreateProcess 直接执行。
+ * 通过 shell 交给 cmd.exe 执行，避免 spawn(EINVAL)。
+ */
+export function cliSpawnOptions(executable: string): Pick<SpawnOptions, "env" | "shell"> {
+  const extension = extname(executable).toLowerCase();
+  return {
+    env: cliProcessEnv(executable),
+    shell: IS_WINDOWS && (extension === ".cmd" || extension === ".bat"),
+  };
 }
