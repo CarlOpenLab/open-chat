@@ -503,14 +503,15 @@ export class LocalChatManager {
       model: { providerID, modelID },
     };
     if (systemPrompt.trim()) body.system = systemPrompt.trim();
-    await entry.server.request("POST", `/session/${entry.opencodeId}/prompt_async`, body);
-
     const cancel = () => {
       void entry.server.request("POST", `/session/${entry.opencodeId}/abort`, {}).catch(() => {});
     };
     signal.addEventListener("abort", cancel, { once: true });
     if (signal.aborted) cancel();
 
+    // Subscribe before triggering the prompt. OpenCode emits the first session
+    // events immediately for fast/local models; connecting afterwards can miss
+    // the entire turn (leaving the browser's SSE request in a permanent state).
     let stream: ReadableStream<Uint8Array> | null;
     try {
       stream = await entry.server.openEventStream(signal);
@@ -521,6 +522,14 @@ export class LocalChatManager {
     if (!stream) {
       signal.removeEventListener("abort", cancel);
       throw new Error("opencode 事件流不可用");
+    }
+
+    try {
+      await entry.server.request("POST", `/session/${entry.opencodeId}/prompt_async`, body);
+    } catch (error) {
+      signal.removeEventListener("abort", cancel);
+      await stream.cancel().catch(() => {});
+      throw error;
     }
 
     const reader = stream.getReader();
@@ -540,6 +549,34 @@ export class LocalChatManager {
     const forwardedPermissions = new Map<string, "permission.asked" | "permission.v2.asked">();
     // 工具调用跟踪：partID -> 已流式拼装的信息（delta 事件只有 name/output 字段）。
     const toolParts = new Map<string, { name: string; output: string }>();
+
+    const readWithTimeout = async (): Promise<Awaited<ReturnType<typeof reader.read>>> => {
+      const waitStartedAt = permissionPendingAt ?? lastSessionEventAt;
+      const maxWait =
+        permissionPendingAt !== null ? PERMISSION_WAIT_TIMEOUT_MS : SESSION_EVENT_STALL_MS;
+      const remaining = Math.max(1, maxWait - (Date.now() - waitStartedAt));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    permissionPendingAt !== null
+                      ? "权限请求等待超时，回合已结束，请重试"
+                      : "opencode 事件流读取超时，未收到模型响应",
+                  ),
+                ),
+              remaining,
+            );
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
 
     /** 把已累积的 reasoning 以 reasoning_content 帧发出去（工具调用前先落盘思考内容）。 */
     const flushReasoning = (): void => {
@@ -658,7 +695,10 @@ export class LocalChatManager {
           });
           break;
         }
-        const { done, value } = await reader.read();
+        // A stalled fetch read does not yield control back to the loop, so the
+        // old elapsed-time check could never fire. Race each read with the
+        // inactivity deadline and terminate the turn deterministically.
+        const { done, value } = await readWithTimeout();
         if (done) {
           if (contentStarted) break;
           throw new Error("opencode 事件流意外关闭");
