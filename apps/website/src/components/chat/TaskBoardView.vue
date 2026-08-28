@@ -3,9 +3,6 @@ import { computed, h, onBeforeUnmount, ref, watch } from "vue";
 import { Button, Dropdown, Input, Modal, Select, Tooltip } from "antdv-next";
 import {
   Archive,
-  CheckCircle2,
-  Clock,
-  Folder,
   FolderOpen,
   Layers,
   Moon,
@@ -13,9 +10,7 @@ import {
   RotateCcw,
   Search,
   Settings,
-  Sparkles,
   Sun,
-  X,
 } from "@lucide/vue";
 import type { AgentView } from "../../services/acp";
 import type { Task } from "../../services/taskStorage";
