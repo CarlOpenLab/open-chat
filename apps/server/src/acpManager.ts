@@ -16,7 +16,7 @@ import type { ServerResponse } from "node:http";
 import { Readable, Writable } from "node:stream";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AcpAgentConfig, AcpConfig } from "./config";
-import { cliProcessEnv, resolveExecutable } from "./commandEnv";
+import { cliSpawnOptions, resolveExecutable } from "./commandEnv";
 import { GatewayError } from "./error";
 import {
   collectAcpHistoryUpdate,
@@ -510,7 +510,7 @@ export class AcpManager {
     }
     const child = spawn(executable, runtime.config.args, {
       cwd,
-      env: cliProcessEnv(executable),
+      ...cliSpawnOptions(executable),
       stdio: ["pipe", "pipe", "pipe"],
     });
     runtime.child = child;
