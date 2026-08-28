@@ -3,9 +3,9 @@ import { Notification as XNotification } from "@antdv-next/x";
 import type { ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
-import { XRequest, useXChat } from "@antdv-next/x-sdk";
+import { XRequest } from "@antdv-next/x-sdk";
 import { Drawer, message } from "antdv-next";
-import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import {
   API_BASE_URL,
   GATEWAY_API_KEY,
@@ -91,17 +91,27 @@ const emit = defineEmits<Emits>();
 // ============ 响应式状态 ============
 
 const content = ref("");
-/**
- * Render the outgoing message before the XChat store has emitted its first
- * snapshot. The store remains the source of truth; this is only a short-lived
- * visual bridge and is de-duplicated by optimisticId once the real item lands.
- */
-const optimisticMessage = ref<{
+interface OptimisticChatMessage {
   conversationKey: string;
   id: string;
   message: XModelMessage;
   extraInfo: Record<string, unknown>;
-} | null>(null);
+}
+
+const optimisticMessages = reactive(new Map<string, OptimisticChatMessage>());
+const optimisticMessage = computed({
+  get: () =>
+    currentConversationKey.value
+      ? (optimisticMessages.get(currentConversationKey.value) ?? null)
+      : null,
+  set: (val: OptimisticChatMessage | null) => {
+    if (!val) {
+      if (currentConversationKey.value) optimisticMessages.delete(currentConversationKey.value);
+    } else {
+      optimisticMessages.set(val.conversationKey, val);
+    }
+  },
+});
 
 /**
  * The SDK normally preserves `optimisticId` on its local user row. Keep a
@@ -110,7 +120,7 @@ const optimisticMessage = ref<{
  */
 const hasAcknowledgedOptimisticMessage = (
   source: DefaultMessageInfo<XModelMessage>[],
-  pending: NonNullable<typeof optimisticMessage.value>,
+  pending: OptimisticChatMessage,
 ): boolean => {
   if (
     source.some(
@@ -138,16 +148,18 @@ const boardOpenKey = ref("");
 const openTaskId = ref("");
 /** 任务列表（全局跨项目），与会话解耦。 */
 const taskList = ref<Task[]>([]);
-/** 任务持久化防抖句柄。 */
-let persistTaskTimer: ReturnType<typeof setTimeout> | null = null;
-const schedulePersistTasks = () => {
-  if (isHydrating.value) return;
-  if (persistTaskTimer) clearTimeout(persistTaskTimer);
-  persistTaskTimer = setTimeout(() => {
-    persistTaskTimer = null;
-    void saveTasks(taskList.value);
-  }, 300);
-};
+const taskFilter = ref<"all" | "active" | "completed">("all");
+const taskSearch = ref("");
+const taskNewModalOpen = ref(false);
+const taskNewForm = reactive({
+  title: "",
+  description: "",
+  priority: "medium" as Task["priority"],
+  projectPath: "",
+});
+/** 看板/任务看板主视图切换：默认 tasks，任务优先；会话看板作为辅助透视 */
+const mainViewMode = ref<"tasks" | "conversations">("tasks");
+const pendingPermissions = reactive(new Map<string, PermissionRequest>());
 /** 看板抽屉宽度：桌面默认 1080，上限视口 92%；移动端由 CSS 全屏接管。 */
 const DRAWER_WIDTH_DEFAULT = 1080;
 const drawerWidth = ref(
@@ -161,11 +173,7 @@ const boardStatusSignals = computed(
   () =>
     ({
       busyStates: conversationBusyStates.value,
-      permissionKeys: new Set(
-        pendingPermission.value
-          ? [activeRequestConversationKey.value || currentConversationKey.value].filter(Boolean)
-          : [],
-      ),
+      permissionKeys: new Set(pendingPermissions.keys()),
       stoppedKeys: stoppedConversationKeys.value,
     }) satisfies import("../utils/sessionStatus").SessionStatusSignals,
 );
@@ -190,8 +198,6 @@ let componentUnmounted = false;
 const activeRequestConversationKey = ref<string>("");
 /** 请求开始时间，供侧栏「工作中」条目计时 */
 const requestStartedAt = ref(0);
-let activeRequestOutcome: "pending" | "error" | "abort" | null = null;
-let pendingChatError: string | null = null;
 /**
  * Provider history often omits a transient turn.failed assistant message.
  * Keep the live message authoritative until the user explicitly acts.
@@ -958,10 +964,6 @@ const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
   if (targetConversation?.agentId && targetConversation.agentId !== activeAgentId.value) {
     const targetAgent = agents.value.find((agent) => agent.id === targetConversation.agentId);
     if (targetAgent) {
-      if (isRequesting.value) {
-        message.warning("请先停止当前任务再切换会话");
-        return;
-      }
       resetPermissionForAgentSwitch();
       draftConversationKey.value = "";
       acpSession.value = null;
@@ -1006,10 +1008,6 @@ const handleSidebarToggle = () => {
 
 const handleAgentChange = (agentId: string) => {
   if (agentId === activeAgentId.value) return;
-  if (isRequesting.value) {
-    message.warning("请先停止当前 Agent 任务再切换供应商");
-    return;
-  }
   const next = agents.value.find((agent) => agent.id === agentId);
   if (!next) return;
   resetPermissionForAgentSwitch();
@@ -1019,7 +1017,6 @@ const handleAgentChange = (agentId: string) => {
   activeAgentId.value = next.id;
   localStorage.setItem("open-chat-agent", next.id);
   currentConversationKey.value = "";
-  setMessages([]);
   showWelcome.value = true;
   historyBack.value = [];
   historyForward.value = [];
@@ -1033,7 +1030,21 @@ const closeSidebar = () => {
   conversationsOpen.value = false;
 };
 
-// ============ XChat 配置 ============
+// ============ 多会话并发运行管理 (Multi-Session Run Manager) ============
+
+interface ActiveSessionRun {
+  conversationKey: string;
+  agentId: string;
+  modelId: string;
+  startedAt: number;
+  provider: OpenChatProvider;
+  abort: () => void;
+  outcome: "pending" | "error" | "abort" | null;
+  errorText: string | null;
+}
+
+const activeSessionRuns = reactive(new Map<string, ActiveSessionRun>());
+const pendingSearchSourcesMap = reactive(new Map<string, WebSearchSourceItem[]>());
 
 const createProvider = () => {
   return new OpenChatProvider({
@@ -1048,83 +1059,111 @@ const createProvider = () => {
 };
 
 const provider = createProvider();
-const pendingPermission = ref<PermissionRequest | null>(null);
-provider.onPermissionRequest = (request) => {
-  pendingPermission.value = request;
+
+const createSessionProvider = (convKey: string, agentId: string) => {
+  const p = new OpenChatProvider({
+    request: XRequest<OpenChatParams, XModelResponse>(`${API_BASE_URL}/api/chat/completions`, {
+      manual: true,
+      params: { stream: true } as OpenChatParams,
+      headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
+      streamTimeout: 10 * 60 * 1000,
+    }),
+  });
+
+  // 本应用不经过 useXChat，provider 由 Chat.vue 手动驱动；
+  // x-sdk 的 DeepSeekChatProvider.transformParams 用 getMessages() 组装请求
+  // messages（未注入 _getMessagesFn 会抛 "not a function"）。这里把会话消息
+  // 注入进去：排除 in-flight 占位（status "loading"，与 x-sdk getFilteredMessages 一致）。
+  p.injectGetMessages(() => {
+    const conversation = conversationList.value.find((item) => String(item.key) === convKey);
+    return (conversation?.messages ?? [])
+      .filter((info) => info.status !== "loading")
+      .map((info) => info.message);
+  });
+
+  p.onPermissionRequest = (request) => {
+    pendingPermissions.set(convKey, request);
+  };
+  p.onChatError = (message: string) => {
+    const run = activeSessionRuns.get(convKey);
+    if (run) {
+      run.errorText = typeof message === "string" && message.trim() ? message.trim() : "请求失败";
+      if (run.outcome === "pending") run.outcome = "error";
+    }
+  };
+  p.onProviderSession = ({ agentId: _sessionAgentId, sessionId }) => {
+    const conversation = conversationList.value.find((item) => String(item.key) === convKey);
+    if (!conversation) return;
+    conversation.providerSessionId = sessionId;
+    schedulePersistState();
+  };
+  p.onWebSearchSources = (sources) => {
+    const prev = pendingSearchSourcesMap.get(convKey) ?? [];
+    pendingSearchSourcesMap.set(convKey, [
+      ...prev,
+      ...sources.map((source, index) => ({
+        ...source,
+        key: String(prev.length + index),
+      })),
+    ]);
+  };
+
+  return p;
 };
-provider.onChatError = (message: string) => {
-  pendingChatError = typeof message === "string" && message.trim() ? message.trim() : "请求失败";
-  if (activeRequestOutcome === "pending") activeRequestOutcome = "error";
-};
-provider.onProviderSession = ({ agentId, sessionId }) => {
-  const conversation = getCurrentConversation();
-  if (!conversation || (agentId && agentId !== activeAgentId.value)) return;
-  conversation.providerSessionId = sessionId;
+
+const setMessages = (
+  updater:
+    | DefaultMessageInfo<XModelMessage>[]
+    | ((current: DefaultMessageInfo<XModelMessage>[]) => DefaultMessageInfo<XModelMessage>[]),
+) => {
+  const conv = getCurrentConversation();
+  if (!conv) return;
+  const current = conv.messages || [];
+  const next = typeof updater === "function" ? updater(current) : updater;
+  conv.messages = persistMessageTimings(String(conv.key), next);
   schedulePersistState();
 };
-provider.onWebSearchSources = (sources) => {
-  // A single request may run several search rounds; accumulate every round's
-  // sources (with re-keyed indices to keep them unique) so the Sources UI
-  // shows all results instead of only the last round.
-  const prev = pendingSearchSources.value ?? [];
-  pendingSearchSources.value = [
-    ...prev,
-    ...sources.map((source, index) => ({
-      ...source,
-      key: String(prev.length + index),
-    })),
-  ];
+
+const isConversationRunning = (key: string): boolean => {
+  if (!key) return false;
+  if (activeSessionRuns.has(key)) return true;
+  const conversation = conversationList.value.find((item) => String(item.key) === key);
+  const hasServerRun = openChatSessions.value.some(
+    (session) =>
+      session.running && (!conversation || sessionMatchesConversation(session, conversation)),
+  );
+  if (hasServerRun) return true;
+  if (
+    key === currentConversationKey.value &&
+    usesAcpProtocol.value &&
+    acpRunState.value?.state === "running"
+  ) {
+    return true;
+  }
+  return false;
 };
 
-const getInitialMessages = (): DefaultMessageInfo<XModelMessage>[] => {
-  const conv = getCurrentConversation();
-  return conv?.messages || [];
-};
+const isCurrentConversationRunning = computed(() =>
+  isConversationRunning(currentConversationKey.value),
+);
 
-const { onRequest, messages, setMessages, isRequesting, abort, onReload } = useXChat<
-  XModelMessage,
-  XModelMessage,
-  OpenChatParams,
-  XModelResponse
->({
-  provider: provider,
-  defaultMessages: getInitialMessages,
-  requestFallback: (_, { error, errorInfo, messageInfo }) => {
-    if (error.name === "AbortError") {
-      activeRequestOutcome = "abort";
-      pendingChatError = "请求已中止";
-      const existing =
-        typeof messageInfo?.message?.content === "string" ? messageInfo.message.content : "";
-      return {
-        content: existing && existing !== WEB_SEARCHING_MARKER ? existing : "请求已中止",
-        role: "assistant",
-      };
-    }
-    activeRequestOutcome = "error";
-    pendingChatError =
-      (typeof errorInfo?.error?.message === "string" && errorInfo.error.message.trim()) ||
-      (error instanceof Error && error.message.trim()) ||
-      "请求失败，请重试！";
-    return {
-      content: errorInfo?.error?.message || "请求失败，请重试！",
-      role: "assistant",
-    };
-  },
-  // Keep a visible assistant row mounted while the gateway is preparing the
-  // first event, so the outgoing message transitions directly into feedback.
-  requestPlaceholder: () => ({ content: "", role: "assistant" }),
+/** 兼容旧代码与 ChatHeader 中的 syncing 标记 */
+const isRequesting = isCurrentConversationRunning;
+
+/** 当前激活会话等待审批的权限请求 */
+const pendingPermission = computed(() =>
+  currentConversationKey.value
+    ? (pendingPermissions.get(currentConversationKey.value) ?? null)
+    : null,
+);
+
+const pendingChatError = computed(() => {
+  if (!currentConversationKey.value) return null;
+  return activeSessionRuns.get(currentConversationKey.value)?.errorText ?? null;
 });
 
-/** 当前会话正在生成；输入仍可提交，但新消息会进入队列。 */
-const inputRunning = computed(
-  () =>
-    isRequesting.value ||
-    (activeRequestOutcome === "pending" &&
-      Boolean(activeRequestConversationKey.value) &&
-      activeRequestConversationKey.value === currentConversationKey.value) ||
-    Boolean(currentOpenChatRun.value) ||
-    (usesAcpProtocol.value && acpRunState.value?.state === "running"),
-);
+/** 当前会话正在生成；输入仍可提交，但新消息会进入该会话专属队列 */
+const inputRunning = computed(() => isConversationRunning(currentConversationKey.value));
 /** 初始化期间无法可靠确定目标会话，此时才真正禁用输入。后台 sessions 轮询不能影响输入焦点。 */
 const inputUnavailable = computed(() => isAcpAgent.value && isHydrating.value);
 const inputBusy = computed(() => inputUnavailable.value || inputRunning.value);
@@ -1162,16 +1201,16 @@ const currentOpenChatRun = computed(() => {
 
 const conversationBusyStates = computed<Record<string, { startedAt: number }>>(() => {
   const states: Record<string, { startedAt: number }> = {};
+  for (const [key, run] of activeSessionRuns.entries()) {
+    states[key] = { startedAt: run.startedAt };
+  }
   for (const conversation of conversationList.value) {
+    const key = String(conversation.key);
+    if (states[key]) continue;
     const run = openChatSessions.value.find(
       (session) => session.running && sessionMatchesConversation(session, conversation),
     );
-    if (run) states[String(conversation.key)] = { startedAt: run.startedAt ?? run.lastUsed };
-  }
-  if (isRequesting.value && activeRequestConversationKey.value) {
-    states[activeRequestConversationKey.value] = {
-      startedAt: requestStartedAt.value || Date.now(),
-    };
+    if (run) states[key] = { startedAt: run.startedAt ?? run.lastUsed };
   }
   return states;
 });
@@ -1552,19 +1591,26 @@ const handleRoutePopState = () => {
 };
 
 /** Attach sources received mid-stream to the assistant message that produced them. */
-const attachPendingSearchSources = () => {
-  const sources = pendingSearchSources.value;
+const attachPendingSearchSources = (conversationKey?: string) => {
+  const targetKey = conversationKey || currentConversationKey.value;
+  if (!targetKey) return;
+  const sources = pendingSearchSourcesMap.get(targetKey) ?? pendingSearchSources.value;
+  pendingSearchSourcesMap.delete(targetKey);
   pendingSearchSources.value = null;
   if (!sources || sources.length === 0) return;
-  setMessages((msgs) => {
-    const lastAssistant = [...msgs].reverse().find((m) => m.message.role === "assistant");
-    if (!lastAssistant) return msgs;
-    return msgs.map((m) =>
-      m.id === lastAssistant.id
-        ? { ...m, extraInfo: { ...m.extraInfo, webSearchResults: sources } }
-        : m,
-    );
-  });
+  const conv = conversationList.value.find((item) => String(item.key) === targetKey);
+  if (!conv || !conv.messages?.length) return;
+  const msgs = [...conv.messages];
+  const lastAssistantIdx = msgs.map((m) => m.message.role).lastIndexOf("assistant");
+  if (lastAssistantIdx !== -1) {
+    const target = msgs[lastAssistantIdx];
+    msgs[lastAssistantIdx] = {
+      ...target,
+      extraInfo: { ...target.extraInfo, webSearchResults: sources },
+    };
+    conv.messages = persistMessageTimings(targetKey, msgs);
+    schedulePersistState();
+  }
 };
 
 const setConversationLastError = (conversationKey: string, errorMessage: string) => {
@@ -1639,8 +1685,8 @@ const clearConversationLastError = (conversationKey: string) => {
 };
 
 const getConversationErrorMessage = (key: string): string => {
-  if (pendingChatError && String(activeRequestConversationKey.value) === key)
-    return pendingChatError;
+  const run = activeSessionRuns.get(key);
+  if (run?.errorText) return run.errorText;
   const conv = conversationList.value.find((item) => String(item.key) === key);
   if (conv?.messages?.length) {
     const lastAssistant = [...conv.messages]
@@ -1659,74 +1705,13 @@ const getConversationErrorMessage = (key: string): string => {
       }
     }
   }
-  return pendingChatError || "请求失败";
+  return run?.errorText || "请求失败";
 };
 
-watch(isRequesting, (requesting) => {
-  if (requesting) {
-    requestStartedAt.value = Date.now();
-    acpRunState.value = isAcpAgent.value ? { state: "running" } : null;
-    if (isAcpAgent.value) restartSessionRefresh();
-    return;
+watch(isCurrentConversationRunning, (running) => {
+  if (running && isAcpAgent.value) {
+    restartSessionRefresh();
   }
-  const completedConversationKey = activeRequestConversationKey.value;
-  const completedRequestStartedAt = requestStartedAt.value;
-  const completedOutcome = activeRequestOutcome;
-  const manuallyStopped = completedConversationKey
-    ? manuallyStoppedConversationKeys.delete(completedConversationKey)
-    : false;
-  if (completedConversationKey) {
-    if (completedOutcome === "error") {
-      failedHistoryRefreshLocks.add(completedConversationKey);
-      const errorText = getConversationErrorMessage(completedConversationKey);
-      setConversationLastError(completedConversationKey, errorText);
-    } else if (completedOutcome === "abort" || manuallyStopped) {
-      failedHistoryRefreshLocks.delete(completedConversationKey);
-      const abortText =
-        pendingChatError && pendingChatError !== "请求已中止" ? pendingChatError : "已手动停止";
-      setConversationLastError(completedConversationKey, abortText);
-    } else if (completedOutcome === "pending") {
-      failedHistoryRefreshLocks.delete(completedConversationKey);
-      clearConversationLastError(completedConversationKey);
-    }
-  }
-  if (completedConversationKey) {
-    // The request SSE closing is authoritative. Clear the cached state result
-    // before the live-stream watcher runs, otherwise it can subscribe to a run
-    // that the server has just removed and produce a transient 404.
-    markConversationRunIdle(completedConversationKey);
-  }
-  attachPendingSearchSources();
-  activeRequestConversationKey.value = "";
-  pendingPermission.value = null;
-  requestStartedAt.value = 0;
-  // 请求结束：会话必然回到空闲，清掉过期的 ACP 运行状态
-  acpRunState.value = null;
-  if (completedOutcome === "pending" && !manuallyStopped && completedConversationKey) {
-    notifyTaskCompletion({
-      key: `task:${activeAgentId.value}:${completedConversationKey}:${completedRequestStartedAt}`,
-      agentId: activeAgentId.value,
-      conversationKey: completedConversationKey,
-    });
-  }
-  activeRequestOutcome = null;
-  pendingChatError = null;
-  if (completedConversationKey) {
-    const conversation = conversationList.value.find(
-      (item) => String(item.key) === completedConversationKey,
-    );
-    if (conversation?.queuedMessages?.length) {
-      conversation.queuePaused = manuallyStopped || completedOutcome !== "pending";
-      schedulePersistState();
-      if (!manuallyStopped && completedOutcome === "pending") {
-        scheduleNextQueuedMessage(completedConversationKey);
-      }
-    } else if (conversation?.queuePaused) {
-      conversation.queuePaused = false;
-      schedulePersistState();
-    }
-  }
-  if (isAcpAgent.value) restartSessionRefresh();
 });
 
 // ============ 会话实时输出（Open Chat 任务事件总线） ============
@@ -1787,14 +1772,16 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
       if (parsed.role === "user" || parsed.role === "assistant") {
         touchNativeStreamActivity();
         showWelcome.value = false;
-        setMessages(appendTranscriptMessageToModelMessages(messages.value, parsed));
+        setMessages(
+          appendTranscriptMessageToModelMessages(currentConversationMessages.value, parsed),
+        );
       }
     } catch (err) {
       console.error("Failed to parse transcript stream message:", err);
     }
     return;
   }
-  const msgs = messages.value;
+  const msgs = currentConversationMessages.value;
   const last = msgs[msgs.length - 1];
   const accumulating = !!last && last.message.role === "assistant";
   const origin: XModelMessage = accumulating ? last.message : { role: "assistant", content: "" };
@@ -1826,7 +1813,7 @@ const startAcpLiveStream = () => {
   if (!conversation) return;
   const selectedRun = currentOpenChatRun.value;
   const isRunning = Boolean(selectedRun) || acpRunState.value?.state === "running";
-  if (!isRunning || isRequesting.value) return;
+  if (!isRunning || activeSessionRuns.has(conversationId)) return;
   // The UI key can be a provider-session-derived key after a page refresh.
   // The live-run registry is indexed by its gateway conversation id, so use
   // the matched run id for the subscription while keeping the UI key for
@@ -1895,7 +1882,7 @@ const startAcpLiveStream = () => {
 watch(
   [acpRunState, currentOpenChatRun, isRequesting, currentConversationKey, activeAgentId],
   () => {
-    if (isRequesting.value) {
+    if (activeSessionRuns.has(currentConversationKey.value)) {
       stopAcpLiveStream();
       return;
     }
@@ -1927,28 +1914,6 @@ watch(currentConversationKey, (key) => {
   projectPath.value = conversationPath;
   if (conversationPath) rememberProjectPath(conversationPath);
 });
-
-// 监听消息变化，同步到对话列表
-watch(
-  messages,
-  (newMessages) => {
-    const conversationWriteKey = activeRequestConversationKey.value || currentConversationKey.value;
-    const pending = optimisticMessage.value;
-    if (
-      pending &&
-      pending.conversationKey === conversationWriteKey &&
-      hasAcknowledgedOptimisticMessage(newMessages, pending)
-    ) {
-      optimisticMessage.value = null;
-    }
-    updateConversationMessages(
-      conversationWriteKey,
-      persistMessageTimings(conversationWriteKey, newMessages),
-    );
-    schedulePersistState();
-  },
-  { deep: true },
-);
 
 watch(
   currentFileWorkspace,
@@ -2138,11 +2103,7 @@ const bubbleItems = computed(() => {
     : [...conversationMessages, pendingInfo];
   // Keep the transition visually continuous even while the request store is
   // waiting to publish its placeholder row.
-  if (
-    isRequesting.value &&
-    activeRequestConversationKey.value === currentConversationKey.value &&
-    !hasStreamingAssistant
-  ) {
+  if (isConversationRunning(currentConversationKey.value) && !hasStreamingAssistant) {
     optimisticItems.push({
       id: `${pending.id}:thinking`,
       // Render through AssistantMessageContent so the waiting phase uses the
@@ -2165,27 +2126,36 @@ const handlePromptClick = (info: { data: { key?: string; description?: string } 
 };
 
 const handleCancel = () => {
-  activeRequestOutcome = "abort";
-  const conversationId = activeRequestConversationKey.value || currentConversationKey.value;
-  if (conversationId) manuallyStoppedConversationKeys.add(conversationId);
+  const conversationId = currentConversationKey.value;
+  if (!conversationId) return;
+
+  manuallyStoppedConversationKeys.add(conversationId);
   const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
   if (conversation?.queuedMessages?.length) {
     conversation.queuePaused = true;
     schedulePersistState();
   }
+
+  const run = activeSessionRuns.get(conversationId);
+  if (run) {
+    run.abort();
+  }
+
   // ACP：断连不再自动取消回合，停止必须先调服务端取消接口
   if (isAcpAgent.value) {
-    if (conversationId) void cancelAcpTurn(activeAgentId.value, conversationId);
+    void cancelAcpTurn(activeAgentId.value, conversationId);
   }
-  abort();
+  if (acpStreamController.value && acpStreamConversationKey.includes(conversationId)) {
+    stopAcpLiveStream();
+  }
 };
 
 /** 回复 opencode 权限询问：允许一次 / 始终允许 / 拒绝。 */
 const handlePermissionResponse = async (response: "once" | "always" | "reject"): Promise<void> => {
-  const permission = pendingPermission.value;
-  if (!permission) return;
-  const conversationId = activeRequestConversationKey.value || currentConversationKey.value;
+  const conversationId = currentConversationKey.value;
   if (!conversationId) return;
+  const permission = pendingPermissions.get(conversationId);
+  if (!permission) return;
 
   const responseText = response === "reject" ? "reject" : response === "always" ? "always" : "once";
   try {
@@ -2208,7 +2178,7 @@ const handlePermissionResponse = async (response: "once" | "always" | "reject"):
       throw new Error(data.error?.message || `权限回复失败（HTTP ${res.status}）`);
     }
     // 回复成功后由 opencode 侧 session.replied 事件结束本轮权限等待。
-    pendingPermission.value = null;
+    pendingPermissions.delete(conversationId);
   } catch (err) {
     message.error(err instanceof Error ? err.message : "权限回复失败，请重试");
   }
@@ -2265,13 +2235,229 @@ const ensureActiveConversation = (systemPrompt = ""): OpenChatConversation | und
   return getCurrentConversation();
 };
 
+const finalizeSessionRun = (convKey: string, outcome: "success" | "error" | "abort") => {
+  const run = activeSessionRuns.get(convKey);
+  const startedAt = run?.startedAt ?? Date.now();
+  const runAgentId = run?.agentId ?? activeAgentId.value;
+  const manuallyStopped = manuallyStoppedConversationKeys.delete(convKey) || outcome === "abort";
+
+  const conversation = conversationList.value.find((item) => String(item.key) === convKey);
+  if (conversation) {
+    if (outcome === "error") {
+      failedHistoryRefreshLocks.add(convKey);
+      const errorText = run?.errorText || getConversationErrorMessage(convKey);
+      setConversationLastError(convKey, errorText);
+    } else if (manuallyStopped) {
+      failedHistoryRefreshLocks.delete(convKey);
+      const abortText =
+        run?.errorText && run.errorText !== "请求已中止" ? run.errorText : "已手动停止";
+      setConversationLastError(convKey, abortText);
+    } else if (outcome === "success") {
+      failedHistoryRefreshLocks.delete(convKey);
+      clearConversationLastError(convKey);
+    }
+  }
+
+  markConversationRunIdle(convKey);
+  attachPendingSearchSources(convKey);
+  pendingPermissions.delete(convKey);
+  optimisticMessages.delete(convKey);
+  activeSessionRuns.delete(convKey);
+
+  if (outcome === "success" && !manuallyStopped) {
+    notifyTaskCompletion({
+      key: `task:${runAgentId}:${convKey}:${startedAt}`,
+      agentId: runAgentId,
+      conversationKey: convKey,
+    });
+  }
+
+  if (conversation) {
+    if (conversation.queuedMessages?.length) {
+      conversation.queuePaused = manuallyStopped || outcome === "error";
+      schedulePersistState();
+      if (!manuallyStopped && outcome === "success") {
+        scheduleNextQueuedMessage(convKey);
+      }
+    } else if (conversation.queuePaused) {
+      conversation.queuePaused = false;
+      schedulePersistState();
+    }
+  }
+
+  schedulePersistState();
+  if (isAcpAgent.value) restartSessionRefresh();
+};
+
+const runSessionRequest = (
+  convKey: string,
+  requestParams: OpenChatParams,
+  extraInfo?: Record<string, unknown>,
+  isReload = false,
+  reloadMessageId?: string | number,
+) => {
+  const conv = conversationList.value.find((item) => String(item.key) === convKey);
+  if (!conv) return;
+
+  const runAgentId = conv.agentId || activeAgentId.value;
+  const sessionProvider = createSessionProvider(convKey, runAgentId);
+  const now = Date.now();
+
+  const assistantMsgId = reloadMessageId
+    ? String(reloadMessageId)
+    : `msg-${now}-${Math.random().toString(36).slice(2, 8)}`;
+
+  if (isReload && reloadMessageId) {
+    conv.messages = (conv.messages || []).map((m) =>
+      String(m.id) === String(reloadMessageId)
+        ? {
+            ...m,
+            status: "loading" as const,
+            message: { ...m.message, content: "", reasoningContent: undefined },
+          }
+        : m,
+    );
+  } else {
+    conv.messages = [
+      ...(conv.messages || []),
+      {
+        id: assistantMsgId,
+        status: "loading" as const,
+        message: { role: "assistant", content: "" },
+      },
+    ];
+  }
+  schedulePersistState();
+
+  const runEntry: ActiveSessionRun = {
+    conversationKey: convKey,
+    agentId: runAgentId,
+    modelId: (requestParams.model as string) || inputCurrentModel.value,
+    startedAt: now,
+    provider: sessionProvider,
+    abort: () => {
+      runEntry.outcome = "abort";
+      sessionProvider.request.abort();
+    },
+    outcome: "pending",
+    errorText: null,
+  };
+  activeSessionRuns.set(convKey, runEntry);
+
+  sessionProvider.request.options.callbacks = {
+    onUpdate: (chunk: XModelResponse, responseHeaders: Headers) => {
+      const currentConv = conversationList.value.find((item) => String(item.key) === convKey);
+      if (!currentConv || !currentConv.messages) return;
+
+      const msgs = [...currentConv.messages];
+      const targetIdx = msgs.findIndex((m) => String(m.id) === String(assistantMsgId));
+      if (targetIdx === -1) return;
+
+      const targetMsg = msgs[targetIdx];
+      const nextMsg = sessionProvider.transformMessage({
+        originMessage: targetMsg.message,
+        chunk,
+        chunks: [],
+        status: "updating",
+        responseHeaders,
+      });
+
+      msgs[targetIdx] = {
+        ...targetMsg,
+        status: "updating",
+        message: nextMsg,
+        ...(extraInfo ? { extraInfo } : {}),
+      };
+      updateConversationMessages(convKey, persistMessageTimings(convKey, msgs));
+
+      const pending = optimisticMessages.get(convKey);
+      if (pending && hasAcknowledgedOptimisticMessage(msgs, pending)) {
+        optimisticMessages.delete(convKey);
+      }
+      schedulePersistState();
+    },
+    onSuccess: (chunks: XModelResponse[], responseHeaders: Headers) => {
+      const currentConv = conversationList.value.find((item) => String(item.key) === convKey);
+      if (currentConv && currentConv.messages) {
+        const msgs = [...currentConv.messages];
+        const targetIdx = msgs.findIndex((m) => String(m.id) === String(assistantMsgId));
+        if (targetIdx !== -1) {
+          const targetMsg = msgs[targetIdx];
+          const finalMsg = sessionProvider.transformMessage({
+            originMessage: targetMsg.message,
+            chunk: undefined as unknown as XModelResponse,
+            chunks,
+            status: "success",
+            responseHeaders,
+          });
+          msgs[targetIdx] = {
+            ...targetMsg,
+            status: "success",
+            message: finalMsg,
+          };
+          updateConversationMessages(convKey, persistMessageTimings(convKey, msgs));
+        }
+      }
+      finalizeSessionRun(convKey, "success");
+    },
+    onError: (error: Error, errorInfo?: unknown) => {
+      const run = activeSessionRuns.get(convKey);
+      const isAbort = error.name === "AbortError" || run?.outcome === "abort";
+      const outcome = isAbort ? "abort" : "error";
+      if (run && !run.errorText) {
+        run.errorText =
+          (typeof (errorInfo as { error?: { message?: string } })?.error?.message === "string" &&
+            (errorInfo as { error?: { message?: string } }).error!.message!.trim()) ||
+          (error instanceof Error && error.message.trim()) ||
+          (isAbort ? "请求已中止" : "请求失败，请重试！");
+      }
+
+      const currentConv = conversationList.value.find((item) => String(item.key) === convKey);
+      if (currentConv && currentConv.messages) {
+        const msgs = [...currentConv.messages];
+        const targetIdx = msgs.findIndex((m) => String(m.id) === String(assistantMsgId));
+        if (targetIdx !== -1) {
+          const targetMsg = msgs[targetIdx];
+          const existing =
+            typeof targetMsg.message.content === "string" ? targetMsg.message.content : "";
+          const content = isAbort
+            ? existing && existing !== WEB_SEARCHING_MARKER
+              ? existing
+              : "请求已中止"
+            : existing || run?.errorText || "请求失败，请重试！";
+          msgs[targetIdx] = {
+            ...targetMsg,
+            status: isAbort ? "abort" : "error",
+            message: { ...targetMsg.message, content, role: "assistant" },
+          };
+          updateConversationMessages(convKey, persistMessageTimings(convKey, msgs));
+        }
+      }
+      finalizeSessionRun(convKey, outcome);
+    },
+  };
+
+  try {
+    const transformed = sessionProvider.transformParams(
+      requestParams,
+      sessionProvider.request.options,
+    );
+    sessionProvider.request.run(transformed);
+    if (isAcpAgent.value) restartSessionRefresh();
+  } catch (err) {
+    finalizeSessionRun(convKey, "error");
+    throw err;
+  }
+};
+
 const sendMessageNow = (
   nextContent: string,
   options: SubmitMessageOptions = {},
   clearComposer = true,
+  targetConversationKey?: string,
 ): boolean => {
   if ((!nextContent || !nextContent.trim()) && !options.attachments?.length) return false;
-  if (inputUnavailable.value || inputRunning.value) return false;
+  if (inputUnavailable.value) return false;
   if (!activeAgent.value.available) {
     message.warning(
       activeAgent.value.adapterHint ||
@@ -2281,15 +2467,22 @@ const sendMessageNow = (
   }
 
   // 草稿态首次发送时，才创建真实会话并写入侧栏
-  const conversation = ensureActiveConversation(options.systemPrompt ?? "");
+  const conversation = targetConversationKey
+    ? conversationList.value.find((item) => String(item.key) === targetConversationKey)
+    : ensureActiveConversation(options.systemPrompt ?? "");
   if (!conversation) return false;
-  failedHistoryRefreshLocks.delete(String(conversation.key));
-  // 再次发送视为对错误/停止的显式恢复：清掉已终止标记与旧拖拽覆盖
+  const conversationKey = String(conversation.key);
+
+  if (isConversationRunning(conversationKey)) {
+    queueMessage(conversation, nextContent, options.attachments);
+    return true;
+  }
+
+  failedHistoryRefreshLocks.delete(conversationKey);
   const hadError = Boolean(conversation.lastError);
   const hadOverride = Boolean(conversation.statusOverride);
   if (conversation.lastError) delete conversation.lastError;
   if (conversation.statusOverride) conversation.statusOverride = "";
-  pendingChatError = null;
   if (hadError || hadOverride) schedulePersistState();
   if (options.systemPrompt !== undefined) {
     conversation.systemPrompt = options.systemPrompt.trim();
@@ -2297,12 +2490,9 @@ const sendMessageNow = (
   // 只有真正提交新消息才改变会话排序；读取、恢复和实时回放保持原顺序。
   conversation.updatedAt = Date.now();
   // 记录会话创建/最后使用的供应商与模型，供聚合侧栏点击时恢复
-  conversation.agentId = activeAgentId.value;
-  conversation.modelId = inputCurrentModel.value;
-  manuallyStoppedConversationKeys.delete(String(conversation.key));
-  activeRequestOutcome = "pending";
-  setMessages(currentConversationMessages.value);
-  activeRequestConversationKey.value = currentConversationKey.value;
+  if (!conversation.agentId) conversation.agentId = activeAgentId.value;
+  if (!conversation.modelId) conversation.modelId = inputCurrentModel.value;
+  manuallyStoppedConversationKeys.delete(conversationKey);
 
   showWelcome.value = false;
   const isHiddenRequest = options.extraInfo?.hidden === true;
@@ -2312,8 +2502,8 @@ const sendMessageNow = (
     ...(isHiddenRequest ? {} : { optimisticId }),
   };
   if (!isHiddenRequest) {
-    optimisticMessage.value = {
-      conversationKey: currentConversationKey.value,
+    optimisticMessages.set(conversationKey, {
+      conversationKey,
       id: optimisticId,
       message: {
         role: "user",
@@ -2321,11 +2511,31 @@ const sendMessageNow = (
         ...(options.attachments?.length ? { attachments: options.attachments } : {}),
       },
       extraInfo: requestExtraInfo,
-    };
+    });
   }
-  const forwardProvider = getForwardProvider(currentModel.value);
+
+  const userMsgId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const userMsg: DefaultMessageInfo<XModelMessage> = {
+    id: userMsgId,
+    status: "local",
+    message: {
+      role: "user",
+      content: nextContent,
+      ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+    },
+    extraInfo: requestExtraInfo,
+  };
+
+  conversation.messages = persistMessageTimings(conversationKey, [
+    ...(conversation.messages || []),
+    userMsg,
+  ]);
+  schedulePersistState();
+
+  const forwardProvider = getForwardProvider(conversation.modelId || currentModel.value);
   try {
-    onRequest(
+    runSessionRequest(
+      conversationKey,
       {
         messages: [
           {
@@ -2334,7 +2544,7 @@ const sendMessageNow = (
             ...(options.attachments?.length ? { attachments: options.attachments } : {}),
           },
         ],
-        model: inputCurrentModel.value,
+        model: conversation.modelId || inputCurrentModel.value,
         mode: workMode.value,
         permission: effectivePermissionMode.value,
         systemPrompt: getRequestSystemPrompt(conversation.systemPrompt ?? ""),
@@ -2342,26 +2552,27 @@ const sendMessageNow = (
         ...(options.instruction ? { instruction: options.instruction } : {}),
         enable_thinking: thinkingEnabled.value,
         thinking: { type: thinkingEnabled.value ? "enabled" : "disabled" },
-        // 本地 opencode（服务端 AI）：按会话复用长会话，无需转发目标。
-        conversationId: String(conversation.key),
-        ...(isAcpAgent.value ? { acpAgentId: activeAgentId.value } : {}),
+        conversationId: conversationKey,
+        ...(isAcpAgent.value ? { acpAgentId: conversation.agentId || activeAgentId.value } : {}),
         ...(isAcpAgent.value && conversation.providerSessionId
           ? { providerSessionId: conversation.providerSessionId }
           : {}),
-        ...(projectPath.value.trim() ? { projectPath: projectPath.value.trim() } : {}),
-        // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
+        ...(conversation.projectPath?.trim() || projectPath.value.trim()
+          ? { projectPath: (conversation.projectPath || projectPath.value).trim() }
+          : {}),
         ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
       },
-      { extraInfo: requestExtraInfo },
+      requestExtraInfo,
     );
   } catch (error) {
-    activeRequestOutcome = null;
-    activeRequestConversationKey.value = "";
-    optimisticMessage.value = null;
+    optimisticMessages.delete(conversationKey);
     message.error(error instanceof Error ? error.message : "请求启动失败");
     return false;
   }
-  if (clearComposer) {
+  if (
+    clearComposer &&
+    (!targetConversationKey || targetConversationKey === currentConversationKey.value)
+  ) {
     setTimeout(() => {
       content.value = "";
     }, 0);
@@ -2373,14 +2584,11 @@ let queuedMessageTimer: ReturnType<typeof setTimeout> | null = null;
 let queuedMessageTimerKey = "";
 
 const dispatchNextQueuedMessage = (conversationKey: string) => {
-  if (
-    conversationKey !== currentConversationKey.value ||
-    inputUnavailable.value ||
-    inputRunning.value
-  ) {
+  if (!conversationKey) return;
+  if (inputUnavailable.value || isConversationRunning(conversationKey)) {
     return;
   }
-  const conversation = getCurrentConversation();
+  const conversation = conversationList.value.find((item) => String(item.key) === conversationKey);
   const queuedMessage = conversation?.queuedMessages?.[0];
   if (!conversation || conversation.queuePaused || !queuedMessage) return;
 
@@ -2391,6 +2599,7 @@ const dispatchNextQueuedMessage = (conversationKey: string) => {
     queuedMessage.content,
     { attachments: queuedMessage.attachments },
     false,
+    conversationKey,
   );
   if (!started) {
     conversation.queuedMessages = [queuedMessage, ...(conversation.queuedMessages ?? [])];
@@ -2400,7 +2609,7 @@ const dispatchNextQueuedMessage = (conversationKey: string) => {
 };
 
 scheduleNextQueuedMessage = (conversationKey: string) => {
-  if (!conversationKey || conversationKey !== currentConversationKey.value) return;
+  if (!conversationKey) return;
   if (queuedMessageTimer && queuedMessageTimerKey === conversationKey) return;
   if (queuedMessageTimer) clearTimeout(queuedMessageTimer);
   queuedMessageTimerKey = conversationKey;
@@ -2487,13 +2696,14 @@ const handleSubmit = (
   // 有请求在跑（或已有排队消息）时，新消息进入队列；草稿态先落地会话再入队，
   // 避免「发不出去」——消息被静默丢弃且无任何提示。
   let conversation = getCurrentConversation();
-  if (inputRunning.value || conversation?.queuedMessages?.length) {
+  const currentKey = conversation ? String(conversation.key) : "";
+  if (isConversationRunning(currentKey) || conversation?.queuedMessages?.length) {
     if (!conversation) {
       conversation = ensureActiveConversation(options.systemPrompt ?? "");
       if (!conversation) return;
     }
     queueMessage(conversation, nextContent, options.attachments);
-    if (!inputRunning.value && !conversation.queuePaused) {
+    if (!isConversationRunning(String(conversation.key)) && !conversation.queuePaused) {
       scheduleNextQueuedMessage(String(conversation.key));
     }
     return;
@@ -2552,8 +2762,8 @@ watch(
 );
 
 const handleProjectPathChange = (value: string) => {
-  if (isRequesting.value) {
-    message.warning("请先停止当前任务再切换项目目录");
+  if (isConversationRunning(currentConversationKey.value)) {
+    message.warning("请先停止当前会话的任务再切换项目目录");
     return;
   }
   const nextPath = normalizeProjectPath(value);
@@ -2570,8 +2780,8 @@ const handleProjectPathChange = (value: string) => {
 };
 
 const handleProjectPathRemove = (value: string) => {
-  if (isRequesting.value) {
-    message.warning("请先停止当前任务再删除项目目录");
+  if (isConversationRunning(currentConversationKey.value)) {
+    message.warning("请先停止当前会话的任务再删除项目目录");
     return;
   }
   const removedPath = normalizeProjectPath(value);
@@ -2581,21 +2791,20 @@ const handleProjectPathRemove = (value: string) => {
 };
 
 const handleModelChange = async (key: string) => {
-  if (isRequesting.value) {
-    message.warning("请先停止当前任务再切换模型");
+  if (isConversationRunning(currentConversationKey.value)) {
+    message.warning("请先停止当前会话的任务再切换模型");
     return;
   }
   if (!isAcpAgent.value) {
     currentModel.value = key;
     currentConversationKey.value = "";
-    setMessages([]);
     showWelcome.value = true;
     historyBack.value = [];
     historyForward.value = [];
     syncConversationRoute("replace");
     return;
   }
-  if (isRequesting.value || acpSessionLoading.value) return;
+  if (isConversationRunning(currentConversationKey.value) || acpSessionLoading.value) return;
   const session = acpSession.value;
   const option = activeAcpModelOption.value;
   if (!session || !option || option.type !== "select") return;
@@ -2611,7 +2820,6 @@ const handleModelChange = async (key: string) => {
       isAcpAgent.value ? getCurrentConversation()?.providerSessionId : "",
     );
     currentConversationKey.value = "";
-    setMessages([]);
     showWelcome.value = true;
     historyBack.value = [];
     historyForward.value = [];
@@ -2678,47 +2886,66 @@ const clearWorkspaceDraft = (path: string, successMessage: string) => {
 };
 
 const handleReloadMessage = (messageId: string | number) => {
+  const currentConversation = getCurrentConversation();
+  if (!currentConversation) return;
+  const conversationKey = String(currentConversation.key);
+  if (isConversationRunning(conversationKey)) {
+    message.warning("该会话仍在运行，请等待完成后再重试");
+    return;
+  }
+
   const lastAssistantMessage = [...currentConversationMessages.value]
     .reverse()
     .find(({ message: modelMessage }) => modelMessage.role === "assistant");
 
   if (
     !lastAssistantMessage ||
-    lastAssistantMessage.status !== "success" ||
+    (lastAssistantMessage.status !== "success" &&
+      lastAssistantMessage.status !== "error" &&
+      lastAssistantMessage.status !== "abort") ||
     String(lastAssistantMessage.id) !== String(messageId)
   ) {
     message.warning("只能重新生成最后一条回答");
     return;
   }
 
-  setMessages(currentConversationMessages.value);
-  const currentConversation = getCurrentConversation();
-  if (currentConversation) {
-    failedHistoryRefreshLocks.delete(String(currentConversation.key));
-    if (currentConversation.lastError) delete currentConversation.lastError;
-    if (currentConversation.statusOverride) currentConversation.statusOverride = "";
-    pendingChatError = null;
-    schedulePersistState();
-  }
-  activeRequestConversationKey.value = currentConversationKey.value;
-  const baseSystemPrompt = currentConversation?.systemPrompt ?? "";
-  const forwardProvider = getForwardProvider(currentModel.value);
-  activeRequestOutcome = "pending";
-  onReload(messageId, {
-    model: inputCurrentModel.value,
-    mode: workMode.value,
-    permission: effectivePermissionMode.value,
-    systemPrompt: getRequestSystemPrompt(baseSystemPrompt),
-    // 本地 opencode：复用同一会话长会话
-    conversationId: String(currentConversation?.key ?? ""),
-    ...(isAcpAgent.value ? { acpAgentId: activeAgentId.value } : {}),
-    ...(isAcpAgent.value && currentConversation?.providerSessionId
-      ? { providerSessionId: currentConversation.providerSessionId }
-      : {}),
-    ...(projectPath.value.trim() ? { projectPath: projectPath.value.trim() } : {}),
-    // 手动配置的服务商：随请求携带转发目标（baseUrl / apiKey / api）
-    ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
-  });
+  failedHistoryRefreshLocks.delete(conversationKey);
+  if (currentConversation.lastError) delete currentConversation.lastError;
+  if (currentConversation.statusOverride) currentConversation.statusOverride = "";
+  schedulePersistState();
+
+  const baseSystemPrompt = currentConversation.systemPrompt ?? "";
+  const forwardProvider = getForwardProvider(currentConversation.modelId || currentModel.value);
+
+  runSessionRequest(
+    conversationKey,
+    {
+      messages: currentConversationMessages.value
+        .filter((m) => String(m.id) !== String(messageId))
+        .map((m) => ({
+          role: m.message.role,
+          content: m.message.content,
+        })),
+      model: currentConversation.modelId || inputCurrentModel.value,
+      mode: workMode.value,
+      permission: effectivePermissionMode.value,
+      systemPrompt: getRequestSystemPrompt(baseSystemPrompt),
+      conversationId: conversationKey,
+      ...(isAcpAgent.value
+        ? { acpAgentId: currentConversation.agentId || activeAgentId.value }
+        : {}),
+      ...(isAcpAgent.value && currentConversation.providerSessionId
+        ? { providerSessionId: currentConversation.providerSessionId }
+        : {}),
+      ...(currentConversation.projectPath?.trim() || projectPath.value.trim()
+        ? { projectPath: (currentConversation.projectPath || projectPath.value).trim() }
+        : {}),
+      ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
+    },
+    undefined,
+    true,
+    messageId,
+  );
 };
 
 const handleRenameConversation = (title: string) => {
@@ -2737,7 +2964,6 @@ const handlePinConversation = (conversationKey: string = currentConversationKey.
 };
 
 const resetAfterRemovingConversation = () => {
-  setMessages([]);
   currentConversationKey.value = "";
   showWelcome.value = true;
   historyBack.value = [];
@@ -2808,10 +3034,6 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
 
 /** 看板卡片点击：切换到对应供应商并打开抽屉（复用 handleActiveChange 的供应商切换逻辑）。 */
 const handleBoardOpenConversation = (key: string) => {
-  if (isRequesting.value && key !== currentConversationKey.value) {
-    message.warning("请先停止当前任务再打开其他会话");
-    return;
-  }
   boardOpenKey.value = key;
   if (key !== currentConversationKey.value) {
     handleActiveChange(key);
@@ -2987,10 +3209,6 @@ const handleCreateSessionForTask = (taskId: string) => {
 };
 
 const handleOpenSessionFromTask = (sessionKey: string) => {
-  if (isRequesting.value && sessionKey !== currentConversationKey.value) {
-    message.warning("请先停止当前任务再打开其他会话");
-    return;
-  }
   boardOpenKey.value = sessionKey;
   if (sessionKey !== currentConversationKey.value) handleActiveChange(sessionKey);
 };
