@@ -1,6 +1,16 @@
 <script setup lang="ts">
-import { Archive, Copy, Ellipsis, Folder, LoaderCircle, Trash2 } from "@lucide/vue";
-import { Button, Dropdown, Tag, Tooltip } from "antdv-next";
+import {
+  Archive,
+  Bot,
+  Calendar,
+  Clock,
+  Copy,
+  Ellipsis,
+  Folder,
+  LoaderCircle,
+  Trash2,
+} from "@lucide/vue";
+import { Button, Dropdown, Tooltip } from "antdv-next";
 import { computed, h, ref } from "vue";
 import type { Task } from "../../services/taskStorage";
 import { createStyles } from "../../theme/antdvStyle";
@@ -41,21 +51,38 @@ const emit = defineEmits<{
 
 const useStyles = createStyles(({ token, css }) => ({
   card: css`
-    background: var(--card);
+    background: var(--card, #ffffff);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    box-shadow: ${token.boxShadowTertiary};
+    border-radius: 12px;
+    box-shadow:
+      0 1px 3px rgba(0, 0, 0, 0.04),
+      0 1px 2px rgba(0, 0, 0, 0.02);
     transition: all ${token.motionDurationMid} ${token.motionEaseInOut};
+    cursor: grab;
+    user-select: none;
+
     &:hover {
       border-color: ${token.colorPrimaryBorder};
-      box-shadow: ${token.boxShadow};
-      transform: translateY(-1px);
+      box-shadow:
+        0 0 0 1px ${token.colorPrimaryBorder},
+        0 4px 12px -2px rgba(0, 0, 0, 0.08),
+        0 2px 6px -1px rgba(0, 0, 0, 0.04);
     }
+
+    &:active {
+      cursor: grabbing;
+    }
+
     &.is-open {
       border-color: ${token.colorPrimary};
       box-shadow:
         0 0 0 2px ${token.colorPrimaryBg},
-        ${token.boxShadow};
+        0 4px 12px rgba(0, 0, 0, 0.06);
+    }
+
+    &.is-dragging {
+      opacity: 0.5;
+      transform: scale(0.98);
     }
   `,
   dueOverdue: css`
@@ -68,17 +95,16 @@ const useStyles = createStyles(({ token, css }) => ({
     color: ${token.colorWarning};
     border-color: ${token.colorWarningBorder};
   `,
-  priorityDot: css`
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    flex: none;
-    box-shadow: 0 0 0 2px var(--card);
+  dueNormal: css`
+    background: ${token.colorFillQuaternary};
+    color: ${token.colorTextSecondary};
+    border-color: ${token.colorBorderSecondary};
   `,
 }));
 
 const { styles } = useStyles();
 
+const isDragging = ref(false);
 const titleDraft = ref("");
 
 const startEdit = () => {
@@ -100,27 +126,27 @@ const relativeTime = (ts: number | null | undefined, now: number): string => {
   const diff = Math.max(0, now - ts);
   const m = Math.floor(diff / 60000);
   if (m < 1) return "刚刚";
-  if (m < 60) return `${m} 分钟前`;
+  if (m < 60) return `${m}m 前`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时前`;
-  return `${Math.floor(h / 24)} 天前`;
+  if (h < 24) return `${h}h 前`;
+  return `${Math.floor(h / 24)}d 前`;
 };
 
 const dueLabel = computed(() => {
   if (!props.task.dueAt) return "";
   const diff = props.task.dueAt - props.nowTick;
   const days = Math.floor(diff / 86400000);
-  if (diff < 0) return `已逾期 ${Math.abs(days) || 1} 天`;
-  if (days === 0) return "今天到期";
-  if (days === 1) return "明天到期";
-  return `${days} 天后到期`;
+  if (diff < 0) return `逾期 ${Math.abs(days) || 1} 天`;
+  if (days === 0) return "今天截止";
+  if (days === 1) return "明天截止";
+  return `${days} 天后`;
 });
 
 const dueClass = computed(() => {
   if (!props.task.dueAt) return "";
   if (props.task.dueAt < props.nowTick) return styles.dueOverdue;
   if (props.task.dueAt - props.nowTick < 86400000) return styles.dueToday;
-  return "";
+  return styles.dueNormal;
 });
 
 const priorityMeta = computed(() => {
@@ -139,12 +165,13 @@ const extraTagCount = computed(() => Math.max(0, props.task.tags.length - 3));
 
 const menu = computed(() => ({
   items: [
+    { key: "todo", label: "移至 待办" },
     { key: "doing", label: "移至 进行中" },
     { key: "review", label: "移至 待验收" },
     { key: "done", label: "移至 已完成" },
-    { key: "archived", label: "归档", icon: h(Archive) },
+    { key: "archived", label: "移至 归档", icon: h(Archive) },
     { type: "divider" as const },
-    { key: "duplicate", label: "基于此再建", icon: h(Copy) },
+    { key: "duplicate", label: "复制此任务", icon: h(Copy) },
     { type: "divider" as const },
     { key: "delete", label: "删除任务", icon: h(Trash2), danger: true },
   ],
@@ -157,11 +184,25 @@ const menu = computed(() => ({
       emit("moveStatus", props.task.id, k as Task["status"]);
   },
 }));
+
+const onDragStart = (e: DragEvent) => {
+  isDragging.value = true;
+  emit("dragStart", props.task, e);
+};
+
+const onDragEnd = () => {
+  isDragging.value = false;
+  emit("dragEnd");
+};
 </script>
 
 <template>
   <article
-    :class="['flex flex-col gap-2.5 p-3.5 cursor-pointer', styles.card, { 'is-open': isOpen }]"
+    :class="[
+      'group relative flex flex-col gap-2.5 p-3.5',
+      styles.card,
+      { 'is-open': isOpen, 'is-dragging': isDragging },
+    ]"
     role="button"
     tabindex="0"
     draggable="true"
@@ -170,21 +211,57 @@ const menu = computed(() => ({
     @click="!editingTitle && emit('open', task.id)"
     @keydown.enter.prevent="!editingTitle && emit('open', task.id)"
     @keydown.space.prevent="!editingTitle && emit('open', task.id)"
-    @dragstart="emit('dragStart', task, $event)"
-    @dragend="emit('dragEnd')"
+    @dragstart="onDragStart"
+    @dragend="onDragEnd"
   >
-    <!-- 标题行：unocss 布局 + token 样式 -->
-    <div class="flex items-center gap-2 min-w-0">
-      <span
-        v-if="priorityMeta"
-        :class="styles.priorityDot"
-        :style="{ background: priorityMeta.color }"
-        :title="priorityMeta.label"
-      ></span>
+    <!-- 第一行：元信息（优先级勋章 + 关联项目 + 操作菜单） -->
+    <div class="flex items-center justify-between gap-2 min-w-0">
+      <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
+        <!-- 优先级勋章（Linear 风格） -->
+        <span
+          v-if="priorityMeta"
+          class="inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded-md border"
+          :style="{
+            color: priorityMeta.color,
+            borderColor: `${priorityMeta.color}33`,
+            backgroundColor: `${priorityMeta.color}12`,
+          }"
+          :title="`优先级：${priorityMeta.label}`"
+        >
+          <span class="w-1.5 h-1.5 rounded-full" :style="{ backgroundColor: priorityMeta.color }" />
+          {{ task.priority }}
+        </span>
+
+        <!-- 关联项目标签 -->
+        <span
+          v-if="projectName"
+          class="inline-flex items-center gap-1 text-[11px] text-muted-foreground bg-muted/60 border border-border/40 px-1.5 py-0.5 rounded-md max-w-35 truncate"
+          :title="task.projectPath ?? ''"
+        >
+          <Folder class="h-3 w-3 flex-none opacity-70" />
+          <span class="truncate">{{ projectName }}</span>
+        </span>
+      </div>
+
+      <!-- 右侧操作菜单（悬浮展示或低调常驻） -->
+      <Dropdown :menu="menu" :trigger="['click']">
+        <Button
+          type="text"
+          size="small"
+          :icon="h(Ellipsis)"
+          class="!w-6 !h-6 !p-0 opacity-0 group-hover:opacity-100 transition-opacity !text-muted-foreground hover:!text-foreground hover:!bg-muted"
+          :aria-label="`任务操作：${task.title}`"
+          @click.stop
+        />
+      </Dropdown>
+    </div>
+
+    <!-- 第二行：任务标题 -->
+    <div class="min-w-0">
       <template v-if="editingTitle">
         <input
           v-model="titleDraft"
-          class="flex-1 min-w-0 text-[13px] font-semibold border border-primary rounded-6 px-1.5 py-0.5 outline-none bg-background"
+          class="w-full text-[13px] font-medium border border-primary rounded-md px-2 py-1 outline-none bg-background shadow-sm"
           autofocus
           @click.stop
           @keydown.enter.prevent="confirm"
@@ -193,80 +270,126 @@ const menu = computed(() => ({
         />
       </template>
       <template v-else>
-        <Tooltip :title="task.title" placement="top">
-          <span
-            class="flex-1 min-w-0 text-[14px] font-medium leading-5 truncate"
+        <Tooltip :title="task.title" placement="top" :mouse-enter-delay="0.6">
+          <h3
+            class="text-[13.5px] font-medium leading-snug text-foreground tracking-tight line-clamp-2 hover:text-primary transition-colors m-0"
             @dblclick.stop="startEdit"
-            >{{ task.title }}</span
           >
+            {{ task.title }}
+          </h3>
         </Tooltip>
       </template>
-      <Dropdown :menu="menu" :trigger="['click']">
-        <Button
-          type="text"
-          size="small"
-          :icon="h(Ellipsis)"
-          class="!w-5.5 !h-5.5 !p-0"
-          :aria-label="`任务操作：${task.title}`"
-          @click.stop
-        />
-      </Dropdown>
     </div>
 
-    <!-- 标签/项目：复用 Tag 组件 -->
-    <div v-if="task.tags.length || projectName" class="flex flex-wrap items-center gap-1.5">
-      <Tag
+    <!-- 第三行：描述摘要预览 -->
+    <div
+      v-if="task.description"
+      class="text-[12px] leading-relaxed text-muted-foreground/80 line-clamp-2"
+    >
+      {{ task.description }}
+    </div>
+
+    <!-- 第四行：标签组 -->
+    <div v-if="task.tags.length" class="flex flex-wrap items-center gap-1.5">
+      <span
         v-for="tag in visibleTags"
         :key="tag"
-        size="small"
-        class="!m-0 !text-12px !rounded-4 !border-0 !bg-fill-quaternary !text-text-secondary"
-        >{{ tag }}</Tag
+        class="text-[11px] px-1.5 py-0.5 rounded-md bg-muted/60 text-muted-foreground border border-border/40 font-normal"
       >
-      <span v-if="extraTagCount > 0" class="text-12px text-muted-foreground"
-        >+{{ extraTagCount }}</span
-      >
+        #{{ tag }}
+      </span>
       <span
-        v-if="projectName"
-        class="inline-flex items-center gap-1 text-12px text-muted-foreground"
+        v-if="extraTagCount > 0"
+        class="text-[11px] px-1 py-0.5 text-muted-foreground font-medium"
       >
-        <Folder class="!h-3 !w-3 flex-none" />
-        {{ projectName }}
+        +{{ extraTagCount }}
       </span>
     </div>
 
-    <div v-if="task.description" class="text-[13px] leading-5.5 text-text-secondary line-clamp-2">
-      {{ task.description.slice(0, 90) }}
-    </div>
+    <!-- 第五行：底部栏（日期/更新时间 + AI 会话状态） -->
+    <div
+      class="pt-2 border-t border-border/40 flex items-center justify-between gap-2 text-[11px] mt-auto"
+    >
+      <!-- 左侧：截止状态与更新时间 -->
+      <div class="flex items-center gap-2 min-w-0">
+        <span
+          v-if="dueLabel"
+          :class="[
+            dueClass,
+            'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10.5px] font-medium',
+          ]"
+        >
+          <Calendar class="h-3 w-3 opacity-80" />
+          {{ dueLabel }}
+        </span>
+        <span
+          class="text-muted-foreground/70 text-[11px] flex items-center gap-1"
+          :title="task.updatedAt ? `更新于 ${new Date(task.updatedAt).toLocaleString()}` : ''"
+        >
+          <Clock class="h-3 w-3 opacity-60" />
+          {{ relativeTime(task.updatedAt, nowTick) }}
+        </span>
+      </div>
 
-    <div class="flex flex-wrap items-center gap-1.5 text-12px">
-      <Tag
-        v-if="dueLabel"
-        :class="dueClass"
-        class="!text-11px !px-1.5 !py-0 !leading-4 !rounded-full !border"
-        >{{ dueLabel }}</Tag
-      >
-      <span class="text-muted-foreground">{{ relativeTime(task.updatedAt, nowTick) }}</span>
-      <span v-if="task.sessionKeys.length" class="text-muted-foreground"
-        >{{ task.sessionKeys.length }} 个会话</span
-      >
-      <Tag
-        v-if="sessionStatus === 'running'"
-        color="blue"
-        class="!inline-flex !items-center !gap-1 !m-0"
-        ><LoaderCircle class="animate-spin !h-2.5 !w-2.5" />{{ sessionBadgeText }}</Tag
-      >
-      <Tag v-else-if="sessionStatus === 'queued'" color="purple" class="!m-0"
-        >排队 · {{ sessionQueuedCount }}</Tag
-      >
-      <Tag v-else-if="sessionStatus === 'permission'" color="warning" class="!m-0">待确认</Tag>
-      <Tooltip
-        v-else-if="sessionStatus === 'stopped'"
-        :title="sessionError || '已终止'"
-        placement="top"
-        ><Tag color="error" class="!m-0">已终止</Tag></Tooltip
-      >
-      <Tag v-else-if="sessionStatus === 'done'" color="success" class="!m-0">已完成</Tag>
-      <Tag v-else class="!m-0">未开始</Tag>
+      <!-- 右侧：AI 伴生会话状态（核心能力展示） -->
+      <div class="flex items-center gap-1.5 flex-none">
+        <!-- 运行中：呼吸发光动效 + 实时执行时长 -->
+        <span
+          v-if="sessionStatus === 'running'"
+          class="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 shadow-xs animate-pulse"
+        >
+          <LoaderCircle class="animate-spin h-3 w-3 text-blue-500" />
+          {{ sessionBadgeText }}
+        </span>
+
+        <!-- 等待确认权限 -->
+        <span
+          v-else-if="sessionStatus === 'permission'"
+          class="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
+          待确认
+        </span>
+
+        <!-- 排队中 -->
+        <span
+          v-else-if="sessionStatus === 'queued'"
+          class="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20"
+        >
+          排队 · {{ sessionQueuedCount }}
+        </span>
+
+        <!-- 异常终止 -->
+        <Tooltip
+          v-else-if="sessionStatus === 'stopped'"
+          :title="sessionError || '会话已终止'"
+          placement="top"
+        >
+          <span
+            class="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 cursor-help"
+          >
+            异常终止
+          </span>
+        </Tooltip>
+
+        <!-- 已完成 -->
+        <span
+          v-else-if="sessionStatus === 'done'"
+          class="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+        >
+          已完成
+        </span>
+
+        <!-- 空闲状态下，若有关联会话，仅展示会话数徽章；若无，不展示多余的'未开始'标签 -->
+        <span
+          v-else-if="task.sessionKeys.length"
+          class="inline-flex items-center gap-1 text-[11px] text-muted-foreground/80 bg-muted/60 px-1.5 py-0.5 rounded-md border border-border/40"
+          :title="`${task.sessionKeys.length} 个关联 AI 会话`"
+        >
+          <Bot class="h-3 w-3 opacity-70" />
+          {{ task.sessionKeys.length }}
+        </span>
+      </div>
     </div>
   </article>
 </template>

@@ -6,6 +6,8 @@
   color-scheme: light;
   --background: #ffffff;
   --foreground: #09090b;
+  --card: #ffffff;
+  --card-foreground: #09090b;
   --subtle: #fafafa;
   --muted: #f4f4f5;
   --muted-foreground: #71717a;
@@ -62,6 +64,8 @@ html[data-theme="dark"] {
   color-scheme: dark;
   --background: #09090b;
   --foreground: #fafafa;
+  --card: #141416;
+  --card-foreground: #fafafa;
   --subtle: #0f0f11;
   --muted: #27272a;
   --muted-foreground: #a1a1aa;

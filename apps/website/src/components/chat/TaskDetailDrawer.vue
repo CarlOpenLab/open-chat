@@ -1,14 +1,26 @@
 <script setup lang="ts">
 import { computed, h, ref, watch } from "vue";
-import { Button, Drawer, Input, Select, Tag, Tooltip } from "antdv-next";
+import { Button, Drawer, Dropdown, Input, Select, Tag, Tooltip } from "antdv-next";
 import { TextArea } from "antdv-next";
 import type { Task } from "../../services/taskStorage";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
+import type { AgentView } from "../../services/acp";
 import { createStyles } from "../../theme/antdvStyle";
 import { TASK_STATUS_META } from "../../utils/taskStatus";
 import type { TaskStatus } from "../../utils/taskStatus";
 import { deriveBoardStatus, type SessionStatusSignals } from "../../utils/sessionStatus";
-import { Copy, ExternalLink, Folder, LoaderCircle, Plus, Trash2 } from "@lucide/vue";
+import {
+  Bot,
+  ChevronDown,
+  Circle,
+  Copy,
+  ExternalLink,
+  Folder,
+  LoaderCircle,
+  Pencil,
+  Plus,
+  Trash2,
+} from "@lucide/vue";
 
 interface Props {
   open: boolean;
@@ -19,12 +31,16 @@ interface Props {
   split?: boolean;
   activeSessionKey?: string;
   projectPathOptions?: string[];
+  agents?: AgentView[];
+  activeAgentId?: string;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   split: false,
   activeSessionKey: "",
   projectPathOptions: () => [],
+  agents: () => [],
+  activeAgentId: "api",
 });
 const emit = defineEmits<{
   (e: "close"): void;
@@ -33,6 +49,9 @@ const emit = defineEmits<{
   (e: "openSession", sessionKey: string): void;
   (e: "retrySession", taskId: string, sessionKey: string): void;
   (e: "removeSessionLink", taskId: string, sessionKey: string): void;
+  (e: "deleteSession", sessionKey: string): void;
+  (e: "agentChange", agentId: string): void;
+  (e: "renameSession", sessionKey: string, title: string): void;
 }>();
 
 const useStyles = createStyles(({ token, css }) => ({
@@ -143,6 +162,74 @@ const handlePickDirectory = async () => {
     // ignore
   }
 };
+
+const activeAgent = computed(
+  () => props.agents.find((a) => a.id === props.activeAgentId) ?? props.agents[0],
+);
+
+const activeAgentLabel = computed(() => {
+  if (activeAgent.value?.id === "api") return "模型 (API)";
+  return activeAgent.value?.name || "选择供应商";
+});
+
+const agentMenu = computed(() => ({
+  items: props.agents.map((agent) => ({
+    key: agent.id,
+    label: agent.name || (agent.id === "api" ? "模型 (API)" : agent.id),
+    icon: h(Circle, {
+      class: [
+        "!w-2 !h-2",
+        agent.available ? "text-emerald-500 fill-emerald-500" : "text-zinc-400 fill-zinc-400",
+      ],
+    }),
+  })),
+  onClick: ({ key }: { key: string | number }) => {
+    emit("agentChange", String(key));
+  },
+}));
+
+const getAgentName = (agentId?: string): string => {
+  if (!agentId) return "API";
+  const a = props.agents.find((x) => x.id === agentId);
+  return a?.name || (agentId === "api" ? "API" : agentId);
+};
+
+const hasChatted = (conv: OpenChatConversation): boolean => {
+  return Boolean(conv.messages && conv.messages.length > 0);
+};
+
+const handleDeleteSession = (sessionKey: string) => {
+  emit("deleteSession", sessionKey);
+};
+
+const formatTime = (ts?: number): string => {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
+const editingSessionKey = ref("");
+const editingSessionDraft = ref("");
+
+const startEditSession = (conv: OpenChatConversation) => {
+  editingSessionKey.value = String(conv.key);
+  editingSessionDraft.value = conv.label || "";
+};
+
+const confirmEditSession = (conv: OpenChatConversation) => {
+  if (!editingSessionKey.value) return;
+  const newTitle = editingSessionDraft.value.trim();
+  if (newTitle && newTitle !== conv.label) {
+    emit("renameSession", String(conv.key), newTitle);
+  }
+  editingSessionKey.value = "";
+  editingSessionDraft.value = "";
+};
+
+const cancelEditSession = () => {
+  editingSessionKey.value = "";
+  editingSessionDraft.value = "";
+};
 </script>
 
 <template>
@@ -250,7 +337,7 @@ const handlePickDirectory = async () => {
                   :options="projectPathSelectOptions"
                   @change="(v: string) => emit('updateTask', task!.id, { projectPath: v || null })"
                 />
-                <Button size="small" @click="handlePickDirectory">浏览</Button>
+                <Button size="small" class="h-full" @click="handlePickDirectory">浏览</Button>
               </div>
             </div>
 
@@ -265,59 +352,144 @@ const handlePickDirectory = async () => {
             </div>
 
             <div class="flex flex-col gap-2.5 border-t border-border pt-3">
-              <div class="flex items-center justify-between">
+              <div class="flex items-center justify-between gap-2">
                 <span class="text-12px font-semibold">AI 会话 · {{ sessionList.length }}</span>
-                <span class="text-11px text-muted-foreground">点击在右侧打开</span>
+                <!-- 供应商切换器 -->
+                <Dropdown :menu="agentMenu" :trigger="['click']">
+                  <Button
+                    size="small"
+                    class="!inline-flex !items-center !gap-1.5 !text-xs !h-[24px] !px-2"
+                    :title="activeAgent?.description || '切换 AI 供应商'"
+                  >
+                    <span
+                      class="w-1.5 h-1.5 rounded-full flex-none"
+                      :class="activeAgent?.available ? 'bg-emerald-500 shadow-xs' : 'bg-zinc-400'"
+                    />
+                    <span class="truncate max-w-24">{{ activeAgentLabel }}</span>
+                    <ChevronDown class="h-3 w-3 opacity-60 flex-none" />
+                  </Button>
+                </Dropdown>
               </div>
+
               <div
                 v-if="sessionList.length === 0"
                 class="text-12px text-muted-foreground p-3 border border-dashed border-border rounded-8 text-center bg-muted/50"
               >
-                还没有会话，在右侧新建
+                还没有会话，点击下方新建
               </div>
+
               <div
                 v-for="conv in sessionList"
                 :key="String(conv.key)"
                 :class="[
-                  'flex items-center justify-between gap-2 p-2.5 cursor-pointer',
+                  'group relative flex flex-col gap-1.5 p-2.5 cursor-pointer',
                   styles.sessionRow,
                   { 'is-active': String(conv.key) === activeSessionKey },
                 ]"
                 @click="emit('openSession', String(conv.key))"
               >
-                <div class="flex-1 min-w-0 flex flex-col gap-0.5">
-                  <span class="text-12px font-medium truncate">{{ conv.label }}</span>
-                  <span class="text-11px text-muted-foreground">{{
-                    new Date(conv.updatedAt ?? Date.now()).toLocaleString()
-                  }}</span>
+                <!-- 顶部：标题 (支持双击 / 悬浮铅笔图标修改) + 状态/删除按钮 -->
+                <div class="flex items-center justify-between gap-2 min-w-0">
+                  <div
+                    v-if="editingSessionKey === String(conv.key)"
+                    class="flex items-center gap-1.5 flex-1 min-w-0"
+                    @click.stop
+                  >
+                    <Input
+                      v-model:value="editingSessionDraft"
+                      size="small"
+                      class="!text-xs !py-0.5"
+                      autofocus
+                      placeholder="输入新标题，按 Enter 保存..."
+                      @keydown.enter.prevent="confirmEditSession(conv)"
+                      @keydown.esc.prevent="cancelEditSession"
+                      @blur="confirmEditSession(conv)"
+                    />
+                  </div>
+                  <div v-else class="flex items-center gap-1.5 flex-1 min-w-0">
+                    <span
+                      class="text-12px font-medium text-foreground truncate cursor-pointer hover:text-primary transition-colors"
+                      :title="`点击打开会话，双击修改标题：${conv.label}`"
+                      @dblclick.stop="startEditSession(conv)"
+                    >
+                      {{ conv.label }}
+                    </span>
+                    <Tooltip title="修改标题">
+                      <Button
+                        type="text"
+                        size="small"
+                        :icon="h(Pencil)"
+                        class="!w-4.5 !h-4.5 !p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:!text-foreground transition-opacity flex-none"
+                        @click.stop="startEditSession(conv)"
+                      />
+                    </Tooltip>
+                  </div>
+                  <div class="flex items-center gap-1 flex-none" @click.stop>
+                    <!-- 没聊天过的支持删除；发过消息的不支持删除 -->
+                    <Tooltip v-if="!hasChatted(conv)" title="删除未使用的会话">
+                      <Button
+                        type="text"
+                        size="small"
+                        danger
+                        :icon="h(Trash2)"
+                        class="!w-5.5 !h-5.5 !p-0 opacity-0 group-hover:opacity-100 hover:!bg-red-500/10 text-muted-foreground hover:!text-red-500 transition-opacity"
+                        @click="handleDeleteSession(String(conv.key))"
+                      />
+                    </Tooltip>
+
+                    <Tag
+                      v-if="statusOf(conv) === 'running'"
+                      color="blue"
+                      class="!m-0 !inline-flex !items-center !gap-1"
+                    >
+                      <LoaderCircle class="animate-spin !h-2.5 !w-2.5" />
+                      {{ elapsed(String(conv.key)) }}
+                    </Tag>
+                    <Tag v-else-if="statusOf(conv) === 'permission'" color="warning" class="!m-0"
+                      >待确认</Tag
+                    >
+                    <Tag v-else-if="statusOf(conv) === 'queued'" color="purple" class="!m-0"
+                      >排队</Tag
+                    >
+                    <Tag v-else-if="statusOf(conv) === 'stopped'" color="error" class="!m-0"
+                      >已终止</Tag
+                    >
+                  </div>
                 </div>
-                <div class="flex items-center gap-1 flex-none">
-                  <Tag
-                    v-if="statusOf(conv) === 'running'"
-                    color="blue"
-                    class="!m-0 !inline-flex !items-center !gap-1"
-                    ><LoaderCircle class="animate-spin !h-2.5 !w-2.5" />{{
-                      elapsed(String(conv.key))
-                    }}</Tag
-                  >
-                  <Tag v-else-if="statusOf(conv) === 'permission'" color="warning" class="!m-0"
-                    >待确认</Tag
-                  >
-                  <Tag v-else-if="statusOf(conv) === 'queued'" color="purple" class="!m-0"
-                    >排队</Tag
-                  >
-                  <Tag v-else-if="statusOf(conv) === 'stopped'" color="error" class="!m-0"
-                    >已终止</Tag
-                  >
-                  <Tag v-else-if="statusOf(conv) === 'idle'" class="!m-0">未开始</Tag>
-                  <Tag v-else color="success" class="!m-0">已完成</Tag>
+
+                <!-- 底部：所用模型展示 + 时间戳 + 消息量 -->
+                <div
+                  class="flex items-center justify-between gap-2 text-[11px] text-muted-foreground pt-1 border-t border-border/30"
+                >
+                  <div class="flex items-center gap-1.5 min-w-0">
+                    <!-- 显示使用的模型 -->
+                    <span
+                      class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-muted/80 border border-border/50 text-[10px] font-medium text-foreground max-w-36 truncate"
+                      :title="`使用的模型：${conv.modelId || getAgentName(conv.agentId)}`"
+                    >
+                      <Bot class="h-2.5 w-2.5 opacity-70 flex-none" />
+                      <span class="truncate">{{ conv.modelId || getAgentName(conv.agentId) }}</span>
+                    </span>
+
+                    <span
+                      v-if="hasChatted(conv)"
+                      class="text-[10px] text-muted-foreground/70"
+                      title="已产生对话记录（不支持删除）"
+                    >
+                      {{ conv.messages?.length }} 条消息
+                    </span>
+                  </div>
+
+                  <span class="text-[10px] text-muted-foreground/60 flex-none">
+                    {{ formatTime(conv.updatedAt) }}
+                  </span>
                 </div>
               </div>
 
               <div class="pt-2 border-t border-border/50">
-                <Button type="primary" :icon="h(Plus)" block @click="handleCreateSession"
-                  >新建会话</Button
-                >
+                <Button type="primary" :icon="h(Plus)" block @click="handleCreateSession">
+                  新建会话（{{ activeAgentLabel }}）
+                </Button>
               </div>
             </div>
           </div>

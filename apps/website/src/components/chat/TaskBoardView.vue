@@ -1,7 +1,22 @@
 <script setup lang="ts">
 import { computed, h, onBeforeUnmount, ref, watch } from "vue";
-import { Button, Divider, Dropdown, Input, Modal, Select } from "antdv-next";
-import { FolderOpen, Plus, Search } from "@lucide/vue";
+import { Button, Dropdown, Input, Modal, Select, Tooltip } from "antdv-next";
+import {
+  Archive,
+  CheckCircle2,
+  Clock,
+  Folder,
+  FolderOpen,
+  Layers,
+  Moon,
+  Plus,
+  RotateCcw,
+  Search,
+  Settings,
+  Sparkles,
+  Sun,
+  X,
+} from "@lucide/vue";
 import type { AgentView } from "../../services/acp";
 import type { Task } from "../../services/taskStorage";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
@@ -28,6 +43,7 @@ interface Props {
   agents?: AgentView[];
   projectPathOptions?: string[];
   currentProjectPath?: string;
+  dark?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -39,6 +55,7 @@ const props = withDefaults(defineProps<Props>(), {
   agents: () => [],
   projectPathOptions: () => [],
   currentProjectPath: "",
+  dark: true,
 });
 const emit = defineEmits<{
   (e: "openTask", id: string): void;
@@ -57,59 +74,51 @@ const emit = defineEmits<{
   (e: "duplicateTask", id: string): void;
   (e: "deleteTask", id: string): void;
   (e: "createTaskForColumn", status: TaskStatus): void;
+  (e: "openSettings"): void;
+  (e: "toggleTheme"): void;
 }>();
 
 const useStyles = createStyles(({ token, css }) => ({
   boardWrap: css`
-    background: var(--brand-workspace);
+    background: var(--subtle, #f8f9fa);
   `,
   column: css`
-    border-radius: 12px;
+    background: ${token.colorFillQuaternary};
+    border: 1px solid ${token.colorBorderSecondary};
+    border-radius: 14px;
+    width: 300px;
     transition: all ${token.motionDurationMid} ${token.motionEaseInOut};
+
     &.is-drag-over {
       background: ${token.colorPrimaryBgHover};
-      border-color: ${token.colorPrimaryBorder};
-      outline: 2px dashed ${token.colorPrimary};
-      outline-offset: -2px;
+      border-color: ${token.colorPrimary};
+      box-shadow: 0 0 0 2px ${token.colorPrimaryBg};
     }
   `,
   colDot: {
     todo: css`
-      background: ${token.colorTextQuaternary};
+      background: #94a3b8;
     `,
     doing: css`
-      background: ${token.colorInfo};
+      background: #3b82f6;
+      box-shadow: 0 0 8px rgba(59, 130, 246, 0.6);
     `,
     review: css`
-      background: ${token.colorWarning};
+      background: #f59e0b;
+      box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
     `,
     done: css`
-      background: ${token.colorSuccess};
+      background: #10b981;
     `,
     archived: css`
-      background: ${token.colorTextDisabled};
+      background: #94a3b8;
     `,
   },
-  emptyIdle: css`
-    border: 1px dashed ${token.colorBorder};
-    background: transparent;
-    color: ${token.colorTextSecondary};
-    border-radius: 8px;
-    transition:
-      background ${token.motionDurationMid} ${token.motionEaseInOut},
-      border-color ${token.motionDurationMid} ${token.motionEaseInOut},
-      color ${token.motionDurationMid} ${token.motionEaseInOut};
-    &:hover {
-      border-color: ${token.colorBorder};
-      background: ${token.colorFillQuaternary};
-      color: ${token.colorText};
-    }
-  `,
-  emptyDragOver: css`
-    background: ${token.colorPrimaryBg};
-    border: 1px dashed ${token.colorPrimary};
-    color: ${token.colorPrimary};
-    border-radius: 8px;
+  inlineCard: css`
+    background: var(--card, #ffffff);
+    border: 1px solid ${token.colorPrimaryBorder};
+    border-radius: 12px;
+    box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.08);
   `,
 }));
 
@@ -210,19 +219,72 @@ const filteredTasks = computed(() => {
   return list;
 });
 
+const showArchived = ref(false);
+const archivedCount = computed(
+  () => (props.tasks ?? []).filter((t) => t.status === "archived").length,
+);
+
+const visibleStatusList = computed(() => {
+  if (showArchived.value) return TASK_STATUS_ORDER;
+  return TASK_STATUS_ORDER.filter((s) => s !== "archived");
+});
+
 const columns = computed(() =>
-  TASK_STATUS_ORDER.map((status) => ({
+  visibleStatusList.value.map((status) => ({
     status,
     meta: TASK_STATUS_META[status],
     items: filteredTasks.value.filter((t) => t.status === status),
   })),
 );
 
-const countsSummary = computed(() => {
+const countsMap = computed(() => {
   const map: Record<string, number> = {};
-  for (const col of columns.value) map[col.status] = col.items.length;
-  return `进行中 ${map.doing ?? 0} · 待验收 ${map.review ?? 0} · 已完成 ${map.done ?? 0}`;
+  for (const t of props.tasks ?? []) {
+    map[t.status] = (map[t.status] ?? 0) + 1;
+  }
+  return map;
 });
+
+const countsSummary = computed(() => {
+  return `进行中 ${countsMap.value.doing ?? 0} · 待验收 ${countsMap.value.review ?? 0} · 已完成 ${countsMap.value.done ?? 0}`;
+});
+
+const inlineCreatingStatus = ref<TaskStatus | "">("");
+const inlineTitle = ref("");
+
+const startInlineCreate = (status: TaskStatus) => {
+  inlineCreatingStatus.value = status;
+  inlineTitle.value = "";
+};
+
+const cancelInlineCreate = () => {
+  inlineCreatingStatus.value = "";
+  inlineTitle.value = "";
+};
+
+const submitInlineCreate = (status: TaskStatus) => {
+  const title = inlineTitle.value.trim();
+  if (!title) {
+    cancelInlineCreate();
+    return;
+  }
+  emit("createTask", {
+    title,
+    projectPath: selectedProject.value || props.currentProjectPath || null,
+    status,
+  });
+  cancelInlineCreate();
+};
+
+const hasActiveFilter = computed(() =>
+  Boolean(search.value.trim() || selectedPriority.value || selectedProject.value),
+);
+
+const resetFilters = () => {
+  search.value = "";
+  selectedPriority.value = "";
+  selectedProject.value = "";
+};
 
 const dragId = ref("");
 const dragOverColumn = ref<TaskStatus | "">("");
@@ -323,149 +385,314 @@ const templateMenu = computed(() => ({
 
 <template>
   <div :class="['flex min-h-0 flex-1 flex-col overflow-hidden', styles.boardWrap]">
+    <!-- 现代两段式工具栏 -->
     <header
-      class="sticky top-0 z-10 flex min-h-13 flex-wrap items-center justify-between gap-3 px-4 py-2.5 border-b border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+      class="sticky top-0 z-10 flex flex-col border-b border-border/80 bg-background/85 backdrop-blur-md shrink-0"
     >
-      <div class="flex items-center gap-2.5">
-        <h1 class="text-15px font-bold tracking-tight">任务看板</h1>
-        <span class="text-12px text-muted-foreground"
-          >{{ (tasks ?? []).length }} 个任务 · {{ countsSummary }}</span
-        >
+      <!-- 首行：标题 + 核心指标胶囊 + 主操作 -->
+      <div class="flex items-center justify-between gap-3 px-5 py-3">
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2">
+            <h1 class="text-[16px] font-bold tracking-tight text-foreground m-0">任务看板</h1>
+            <span
+              class="text-[12px] font-medium text-muted-foreground bg-muted/70 px-2 py-0.5 rounded-full border border-border/40"
+            >
+              {{ (tasks ?? []).length }}
+            </span>
+          </div>
+
+          <!-- 核心状态指标胶囊 -->
+          <div
+            class="hidden md:flex items-center gap-1.5 pl-3 border-l border-border/60 text-[12px]"
+          >
+            <span
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium"
+            >
+              <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+              进行中 {{ countsMap.doing ?? 0 }}
+            </span>
+            <span
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium"
+            >
+              <span class="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              待验收 {{ countsMap.review ?? 0 }}
+            </span>
+            <span
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium"
+            >
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              已完成 {{ countsMap.done ?? 0 }}
+            </span>
+          </div>
+        </div>
+
+        <!-- 右侧主按钮组 -->
+        <div class="flex items-center gap-2">
+          <!-- 显示/隐藏已归档开关 -->
+          <Button
+            size="middle"
+            :type="showArchived ? 'primary' : 'default'"
+            :ghost="showArchived"
+            :icon="h(Archive)"
+            class="!text-xs"
+            @click="showArchived = !showArchived"
+          >
+            {{ showArchived ? "隐藏归档" : `显示归档 (${archivedCount})` }}
+          </Button>
+
+          <!-- 模板下拉 -->
+          <Dropdown :menu="templateMenu" :trigger="['click']">
+            <Button :icon="h(Layers)" class="!text-xs">模板 ▾</Button>
+          </Dropdown>
+
+          <!-- 主操作：新建任务 -->
+          <Button
+            type="primary"
+            :icon="h(Plus)"
+            class="!font-medium !shadow-xs"
+            @click="openCreateModal()"
+          >
+            新建任务
+          </Button>
+
+          <!-- 浅色/深色主题切换 -->
+          <Tooltip :title="dark ? '切换为浅色模式' : '切换为深色模式'">
+            <Button
+              type="text"
+              :icon="dark ? h(Sun) : h(Moon)"
+              class="!w-8 !h-8 !p-0 !text-muted-foreground hover:!text-foreground hover:!bg-muted"
+              @click="emit('toggleTheme')"
+            />
+          </Tooltip>
+
+          <!-- 设置 -->
+          <Tooltip title="设置">
+            <Button
+              type="text"
+              :icon="h(Settings)"
+              class="!w-8 !h-8 !p-0 !text-muted-foreground hover:!text-foreground hover:!bg-muted"
+              @click="emit('openSettings')"
+            />
+          </Tooltip>
+        </div>
       </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <Input
-          v-model:value="search"
-          placeholder="搜索标题、备注、标签"
-          allow-clear
-          class="!w-45 !rounded-full"
-        >
-          <template #prefix><Search class="!h-3.5 !w-3.5 text-muted-foreground" /></template>
-        </Input>
-        <Select
-          v-model:value="selectedProject"
-          placeholder="全部项目"
-          allow-clear
-          class="!min-w-32"
-          :options="[{ value: '', label: '全部项目' }, ...projectOptions]"
-        />
-        <Select
-          v-model:value="selectedPriority"
-          placeholder="全部优先级"
-          allow-clear
-          class="!min-w-30"
-          :options="[
-            { value: '', label: '全部优先级' },
-            { value: 'P0', label: 'P0 紧急' },
-            { value: 'P1', label: 'P1 高' },
-            { value: 'P2', label: 'P2 中' },
-            { value: 'P3', label: 'P3 低' },
-          ]"
-        />
-        <Select
-          v-model:value="sortBy"
-          class="!min-w-30"
-          :options="[
-            { value: 'updatedAt', label: '按更新时间' },
-            { value: 'dueAt', label: '按截止时间' },
-            { value: 'priority', label: '按优先级' },
-            { value: 'createdAt', label: '按创建时间' },
-          ]"
-        />
-        <Dropdown :menu="templateMenu" :trigger="['click']">
-          <Button>模板 ▾</Button>
-        </Dropdown>
-        <Button type="primary" :icon="h(Plus)" @click="openCreateModal()">新建任务</Button>
+
+      <!-- 次行：检索与筛选条 -->
+      <div
+        class="flex items-center justify-between gap-3 px-5 py-2 bg-muted/20 border-t border-border/40 text-xs"
+      >
+        <div class="flex flex-wrap items-center gap-2.5">
+          <Input
+            v-model:value="search"
+            placeholder="搜索标题、备注、标签..."
+            allow-clear
+            class="!w-56 !rounded-md !text-xs"
+          >
+            <template #prefix><Search class="!h-3.5 !w-3.5 text-muted-foreground mr-1" /></template>
+          </Input>
+
+          <Select
+            v-model:value="selectedProject"
+            placeholder="全部项目"
+            allow-clear
+            class="!min-w-32 !text-xs"
+            :options="[{ value: '', label: '全部项目' }, ...projectOptions]"
+          />
+
+          <Select
+            v-model:value="selectedPriority"
+            placeholder="全部优先级"
+            allow-clear
+            class="!min-w-28 !text-xs"
+            :options="[
+              { value: '', label: '全部优先级' },
+              { value: 'P0', label: 'P0 紧急' },
+              { value: 'P1', label: 'P1 高' },
+              { value: 'P2', label: 'P2 中' },
+              { value: 'P3', label: 'P3 低' },
+            ]"
+          />
+
+          <Select
+            v-model:value="sortBy"
+            class="!min-w-28 !text-xs"
+            :options="[
+              { value: 'updatedAt', label: '按更新时间' },
+              { value: 'dueAt', label: '按截止时间' },
+              { value: 'priority', label: '按优先级' },
+              { value: 'createdAt', label: '按创建时间' },
+            ]"
+          />
+
+          <Button
+            v-if="hasActiveFilter"
+            size="small"
+            type="link"
+            :icon="h(RotateCcw)"
+            class="!text-xs !p-0 !text-muted-foreground hover:!text-foreground"
+            @click="resetFilters"
+          >
+            重置筛选
+          </Button>
+        </div>
+
+        <div v-if="hasActiveFilter" class="text-xs text-muted-foreground flex-none">
+          找到 {{ filteredTasks.length }} 个任务
+        </div>
       </div>
     </header>
 
-    <div class="flex-1 overflow-auto p-4">
-      <div class="flex gap-4 min-w-max h-full">
-        <template v-for="column in columns" :key="column.status">
-          <section
-            :class="[
-              'w-75 flex-none flex flex-col gap-3 p-3 rounded-12 min-h-130 ',
-              styles.column,
-              { 'is-drag-over': dragOverColumn === column.status },
-            ]"
-            :aria-label="`${column.meta.name}列，${column.items.length}个任务`"
-            @dragover="handleDragOver(column.status, $event)"
-            @dragleave="handleDragLeave"
-            @drop="handleDrop(column.status, $event)"
-          >
-            <header class="flex items-center gap-1.5 text-12px pb-2 border-b border-border/40">
+    <!-- 泳道看板主体区域 -->
+    <div class="flex-1 overflow-x-auto overflow-y-hidden p-5">
+      <div class="flex gap-4.5 h-full min-w-max items-start">
+        <section
+          v-for="column in columns"
+          :key="column.status"
+          :class="[
+            'flex flex-col max-h-full p-3 rounded-2xl flex-none shadow-xs',
+            styles.column,
+            { 'is-drag-over': dragOverColumn === column.status },
+          ]"
+          :style="{ width: '310px' }"
+          :aria-label="`${column.meta.name}列，${column.items.length}个任务`"
+          @dragover="handleDragOver(column.status, $event)"
+          @dragleave="handleDragLeave"
+          @drop="handleDrop(column.status, $event)"
+        >
+          <!-- 列头部 -->
+          <header class="flex items-center justify-between pb-2.5 mb-2.5 border-b border-border/50">
+            <div class="flex items-center gap-2 min-w-0">
               <span
                 :class="[
                   'w-2 h-2 rounded-full flex-none',
                   (styles.colDot as Record<string, string>)[column.status],
                 ]"
               />
-              <span class="font-semibold tracking-tight">{{ column.meta.name }}</span>
+              <span class="font-semibold text-[13px] tracking-tight text-foreground">{{
+                column.meta.name
+              }}</span>
               <span
-                class="bg-background border border-border rounded-full px-1.5 text-11px font-medium"
-                >{{ column.items.length }}</span
+                class="bg-background/90 border border-border/80 rounded-full px-2 py-0.2 text-[11px] font-semibold text-muted-foreground"
               >
-              <span class="text-muted-foreground text-11px ml-auto">{{ column.meta.hint }}</span>
-            </header>
-            <div class="flex flex-col gap-2.5 min-h-100">
-              <div v-if="column.items.length === 0" class="min-h-24 flex flex-col">
-                <div
-                  v-if="dragId"
-                  :class="[
-                    'flex-1 grid place-items-center text-sm rounded-lg',
-                    styles.emptyDragOver,
-                  ]"
-                >
-                  松开移动到这里
-                </div>
-                <button
-                  v-else
-                  :class="[
-                    'group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed bg-transparent px-3 py-6 text-sm',
-                    styles.emptyIdle,
-                  ]"
-                  @click="openCreateModal(column.status)"
-                >
-                  <span
-                    class="grid h-7 w-7 place-items-center rounded-full bg-muted text-muted-foreground group-hover:bg-background group-hover:text-foreground border border-border/50 transition-colors"
-                    ><Plus class="h-4 w-4"
-                  /></span>
-                  <span class="font-medium">新建</span>
-                </button>
-              </div>
-              <TaskCard
-                v-for="task in column.items"
-                :key="task.id"
-                :task="task"
-                :now-tick="nowTick"
-                :session-status="sessionStatusOfTask(task).status"
-                :session-busy-duration="sessionStatusOfTask(task).busyDuration"
-                :session-queued-count="sessionStatusOfTask(task).queued"
-                :session-error="sessionStatusOfTask(task).error"
-                :is-open="task.id === openTaskId"
-                :editing-title="editingTaskId === task.id"
-                @open="emit('openTask', $event)"
-                @drag-start="handleDragStart"
-                @drag-end="handleDragEnd"
-                @start-title-edit="editingTaskId = $event"
-                @confirm-title-edit="
-                  (id: string, title: string) => {
-                    editingTaskId = '';
-                    emit('updateTaskTitle', id, title);
-                  }
-                "
-                @cancel-title-edit="editingTaskId = ''"
-                @move-status="(id: string, status: TaskStatus) => emit('moveTask', id, status)"
-                @archive="emit('archiveTask', $event)"
-                @duplicate="emit('duplicateTask', $event)"
-                @delete="emit('deleteTask', $event)"
-              />
+                {{ column.items.length }}
+              </span>
             </div>
-          </section>
-          <Divider :vertical="true" class="h-full" dashed />
-        </template>
+
+            <div class="flex items-center gap-1">
+              <span class="text-muted-foreground/70 text-[11px] mr-1 hidden sm:inline">{{
+                column.meta.hint
+              }}</span>
+              <Tooltip :title="`在【${column.meta.name}】添加任务`">
+                <Button
+                  type="text"
+                  size="small"
+                  :icon="h(Plus)"
+                  class="!w-6 !h-6 !p-0 !text-muted-foreground hover:!text-foreground hover:!bg-background"
+                  @click="startInlineCreate(column.status)"
+                />
+              </Tooltip>
+            </div>
+          </header>
+
+          <!-- 任务卡片列表（独立纵向滚动区） -->
+          <div class="flex-1 overflow-y-auto p-1 pr-1.5 flex flex-col gap-2.5 min-h-32">
+            <!-- 空状态 -->
+            <div
+              v-if="column.items.length === 0 && inlineCreatingStatus !== column.status"
+              class="flex flex-col items-center justify-center p-6 border border-dashed border-border/70 rounded-xl text-center bg-background/30 transition-colors"
+            >
+              <span v-if="dragId" class="text-[12px] text-primary font-medium">松开移动到这里</span>
+              <template v-else>
+                <p class="text-[12px] text-muted-foreground/80 mb-2">
+                  暂无{{ column.meta.name }}任务
+                </p>
+                <Button size="small" :icon="h(Plus)" @click="startInlineCreate(column.status)"
+                  >添加任务</Button
+                >
+              </template>
+            </div>
+
+            <!-- 卡片项 -->
+            <TaskCard
+              v-for="task in column.items"
+              :key="task.id"
+              :task="task"
+              :now-tick="nowTick"
+              :session-status="sessionStatusOfTask(task).status"
+              :session-busy-duration="sessionStatusOfTask(task).busyDuration"
+              :session-queued-count="sessionStatusOfTask(task).queued"
+              :session-error="sessionStatusOfTask(task).error"
+              :is-open="task.id === openTaskId"
+              :editing-title="editingTaskId === task.id"
+              @open="emit('openTask', $event)"
+              @drag-start="handleDragStart"
+              @drag-end="handleDragEnd"
+              @start-title-edit="editingTaskId = $event"
+              @confirm-title-edit="
+                (id: string, title: string) => {
+                  editingTaskId = '';
+                  emit('updateTaskTitle', id, title);
+                }
+              "
+              @cancel-title-edit="editingTaskId = ''"
+              @move-status="(id: string, status: TaskStatus) => emit('moveTask', id, status)"
+              @archive="emit('archiveTask', $event)"
+              @duplicate="emit('duplicateTask', $event)"
+              @delete="emit('deleteTask', $event)"
+            />
+
+            <!-- 内联快捷创建卡片 -->
+            <div
+              v-if="inlineCreatingStatus === column.status"
+              :class="['flex flex-col gap-2 p-3 mt-1', styles.inlineCard]"
+            >
+              <Input
+                v-model:value="inlineTitle"
+                placeholder="输入任务标题，按 Enter 保存..."
+                autofocus
+                size="small"
+                class="!rounded-md"
+                @press-enter="submitInlineCreate(column.status)"
+                @keydown.esc="cancelInlineCreate"
+              />
+              <div class="flex items-center justify-between">
+                <span class="text-[11px] text-muted-foreground">Esc 取消 · Enter 保存</span>
+                <div class="flex items-center gap-1.5">
+                  <Button size="small" type="text" @click="cancelInlineCreate">取消</Button>
+                  <Button
+                    size="small"
+                    type="primary"
+                    :disabled="!inlineTitle.trim()"
+                    @click="submitInlineCreate(column.status)"
+                  >
+                    添加
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 列底部快捷添加按钮（非内联编辑且非空时展示） -->
+          <div
+            v-if="inlineCreatingStatus !== column.status && column.items.length > 0"
+            class="pt-2 mt-auto"
+          >
+            <Button
+              type="dashed"
+              block
+              size="small"
+              :icon="h(Plus)"
+              class="!text-xs !text-muted-foreground hover:!text-foreground !rounded-lg"
+              @click="startInlineCreate(column.status)"
+            >
+              添加任务
+            </Button>
+          </div>
+        </section>
       </div>
     </div>
 
+    <!-- 弹窗式完整创建 -->
     <Modal
       v-model:open="showCreateModal"
       title="新建任务"

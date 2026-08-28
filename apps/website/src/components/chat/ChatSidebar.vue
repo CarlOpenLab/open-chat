@@ -9,8 +9,8 @@ import {
   SquarePen,
   Sun,
 } from "@lucide/vue";
-import { Modal, Tooltip } from "antdv-next";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { Button, Modal, Tooltip } from "antdv-next";
+import { computed, h, onBeforeUnmount, onMounted, ref } from "vue";
 import type { AgentView } from "../../services/acp";
 
 interface Props {
@@ -85,14 +85,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
   >
     <!-- 侧栏标题栏：品牌标志与历史导航 -->
     <div class="flex h-[48px] flex-none items-center gap-[2px] px-[10px]">
-      <button
-        type="button"
-        class="grid h-[26px] w-[26px] place-items-center rounded-[6px] border-0 bg-transparent p-0 text-brand-muted-strong hover:bg-brand-surface-subtle hover:text-brand-foreground"
+      <Button
+        type="text"
+        size="small"
+        :icon="h(PanelLeftClose, { class: open ? '' : 'rotate-180' })"
+        class="!w-[26px] !h-[26px] !p-0 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
         :aria-label="open ? '收起侧边栏' : '展开侧边栏'"
         @click="emit('toggleSidebar')"
-      >
-        <PanelLeftClose :class="open ? '' : 'rotate-180'" />
-      </button>
+      />
     </div>
 
     <!-- CLI / API 供应商切换 -->
@@ -139,26 +139,25 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
     <!-- 底栏：设置在左，主题切换在右，两端平衡 -->
     <div class="flex h-[40px] flex-none items-center px-[10px]">
       <Tooltip title="设置">
-        <button
-          type="button"
-          :class="iconButtonClass"
+        <Button
+          type="text"
+          size="small"
+          :icon="h(Settings)"
+          class="!w-[26px] !h-[26px] !p-0 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
           aria-label="打开设置"
           @click="emit('openSettings')"
-        >
-          <Settings class="!h-[14px] !w-[14px]" />
-        </button>
+        />
       </Tooltip>
       <div class="flex-1" />
       <Tooltip :title="dark ? '切换到浅色' : '切换到深色'">
-        <button
-          type="button"
-          :class="iconButtonClass"
+        <Button
+          type="text"
+          size="small"
+          :icon="dark ? h(Sun) : h(Moon)"
+          class="!w-[26px] !h-[26px] !p-0 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
           aria-label="切换主题"
           @click="emit('toggleTheme')"
-        >
-          <Sun v-if="dark" class="!h-[14px] !w-[14px]" />
-          <Moon v-else class="!h-[14px] !w-[14px]" />
-        </button>
+        />
       </Tooltip>
     </div>
 

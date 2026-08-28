@@ -56,8 +56,6 @@ import {
   useChatPersistence,
   type OpenChatConversation,
 } from "../composables/useChatPersistence";
-import ChatSidebar from "./chat/ChatSidebar.vue";
-import BoardView from "./chat/BoardView.vue";
 import TaskBoardView from "./chat/TaskBoardView.vue";
 import TaskDetailDrawer from "./chat/TaskDetailDrawer.vue";
 import ChatHeader from "./chat/ChatHeader.vue";
@@ -749,6 +747,14 @@ const refreshAcpSession = async (force = false) => {
         (usesAcpProtocol.value || session.sessionId !== session.conversationId)
       ) {
         conversation.providerSessionId = session.sessionId;
+      }
+      // 新会话（任务「新建会话」等）创建时 ACP 会话尚未加载，modelId 只能先落
+      // 当前值；这里以服务端会话的真实模型为准补齐，避免残留 API 模型串到会话上。
+      if (isFreshConversation && isAcpAgent.value) {
+        const actualModel = inputCurrentModel.value;
+        if (actualModel && actualModel !== conversation.modelId) {
+          conversation.modelId = actualModel;
+        }
       }
       if (Array.isArray(session.messages) && session.messages.length > 0) {
         const hasLocalError = hasPersistedError(conversation);
@@ -2779,6 +2785,9 @@ const handleDeleteConversation = (conversationKey: string = currentConversationK
   }
   if (tasksPruned) schedulePersistTasks();
   deleteOpen.value = false;
+  if (conversationKey === boardOpenKey.value) {
+    boardOpenKey.value = "";
+  }
   if (conversationKey === currentConversationKey.value) {
     resetAfterRemovingConversation();
   } else {
@@ -2955,7 +2964,9 @@ const handleCreateSessionForTask = (taskId: string) => {
     label: task.title.slice(0, 40) || "新对话",
     group: "今天",
     agentId: activeAgentId.value,
-    modelId: currentModel.value,
+    // 与草稿落地（ensureActiveConversation / sendMessageNow）一致：ACP 代理下
+    // currentModel 是残留的 API 模型，必须用 inputCurrentModel 记录真实模型。
+    modelId: inputCurrentModel.value,
     messages: [],
     projectPath: targetProject,
   } as OpenChatConversation;
@@ -2971,6 +2982,8 @@ const handleCreateSessionForTask = (taskId: string) => {
   schedulePersistState();
   boardOpenKey.value = String(newKey);
   currentConversationKey.value = String(newKey);
+  // 同步 URL，避免停留在上一个会话的路径（刷新后会恢复到错误会话）。
+  syncConversationRoute("push");
 };
 
 const handleOpenSessionFromTask = (sessionKey: string) => {
@@ -3014,51 +3027,6 @@ const handleCommandPaletteSelectConversation = (key: string) => {
   >
     <a class="skip-link" href="#chat-content">跳到消息内容</a>
 
-    <!-- 移动端侧栏遮罩 -->
-    <button
-      v-if="conversationsOpen"
-      class="sidebar-backdrop absolute inset-0 z-backdrop border-0 bg-[rgba(9,9,11,0.4)]"
-      type="button"
-      aria-label="关闭对话侧栏"
-      @click="closeSidebar"
-    ></button>
-
-    <!-- 左侧栏：可拖拽宽度，收起 / 展开有滑动动画 -->
-    <div
-      class="sidebar-shell relative flex h-full flex-none"
-      :class="{
-        'sidebar-shell-open': conversationsOpen,
-        'sidebar-shell-resizing': resizing === 'sidebar',
-      }"
-      :style="{ width: (conversationsOpen ? sidebarWidth : 0) + 'px' }"
-    >
-      <!-- 收起动画期间内容保持固定宽度，从右侧被裁掉而不是被压扁换行 -->
-      <div class="sidebar-clip h-full w-full overflow-hidden">
-        <div class="h-full" :style="{ width: sidebarWidth + 'px' }">
-          <ChatSidebar
-            :open="conversationsOpen"
-            :dark="dark"
-            :agents="agents"
-            :active-agent-id="activeAgentId"
-            @toggle-sidebar="handleSidebarToggle"
-            @toggle-theme="emit('toggleTheme')"
-            @new-conversation="handleNewConversation"
-            @open-search="commandPaletteOpen = true"
-            @open-settings="settingsOpen = true"
-            @agent-change="handleAgentChange"
-          />
-        </div>
-      </div>
-      <button
-        v-if="conversationsOpen"
-        type="button"
-        class="absolute top-0 right-[-3px] z-10 h-full w-[6px] cursor-col-resize border-0 bg-transparent p-0 hover:bg-brand-resize"
-        :class="{ 'bg-brand-resize': resizing === 'sidebar' }"
-        aria-label="调整侧边栏宽度"
-        @mousedown="handleResizeStart('sidebar')"
-      ></button>
-    </div>
-
     <div class="chat-main flex min-w-0 flex-1 flex-col overflow-hidden bg-brand-workspace">
       <TaskBoardView
         :tasks="taskList"
@@ -3068,6 +3036,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         :agents="agents"
         :project-path-options="projectPathOptions"
         :current-project-path="projectPath"
+        :dark="dark"
         @open-task="handleTaskOpen"
         @move-task="handleTaskMove"
         @create-task="handleTaskCreate"
@@ -3075,6 +3044,8 @@ const handleCommandPaletteSelectConversation = (key: string) => {
         @archive-task="handleTaskArchive"
         @duplicate-task="handleTaskDuplicate"
         @delete-task="handleTaskDelete"
+        @toggle-theme="emit('toggleTheme')"
+        @open-settings="settingsOpen = true"
       />
     </div>
     <!-- 任务抽屉：split 模式 左任务｜右对话（新建/打开会话同屉） -->
@@ -3087,18 +3058,24 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       :split="true"
       :active-session-key="boardOpenKey"
       :project-path-options="projectPathOptions"
+      :agents="agents"
+      :active-agent-id="activeAgentId"
       @close="closeTaskDrawer"
       @update-task="handleTaskUpdate"
       @create-session="handleCreateSessionForTask"
       @open-session="handleOpenSessionFromTask"
       @retry-session="handleRetrySessionForTask"
       @remove-session-link="handleRemoveSessionLink"
+      @delete-session="handleDeleteConversation"
+      @agent-change="handleAgentChange"
+      @rename-session="handleSidebarRename"
     >
       <template #chat>
         <template v-if="boardOpenKey">
           <div class="flex h-full min-h-0 flex-col overflow-hidden">
             <ChatHeader
-              :sidebar-open="conversationsOpen"
+              :title="currentConversationTitle"
+              :sidebar-open="true"
               :right-panel-open="rightPanelOpen"
               :right-panel-available="workspaceAvailable"
               :syncing="isRequesting"
@@ -3198,7 +3175,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
       <template v-if="boardOpenKey">
         <ChatHeader
           :title="currentConversationTitle"
-          :sidebar-open="conversationsOpen"
+          :sidebar-open="true"
           :right-panel-open="rightPanelOpen"
           :right-panel-available="workspaceAvailable"
           :syncing="isRequesting"

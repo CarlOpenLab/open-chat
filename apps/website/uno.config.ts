@@ -21,6 +21,10 @@ export default defineConfig({
     colors: {
       background: "var(--background)",
       foreground: "var(--foreground)",
+      card: {
+        DEFAULT: "var(--card)",
+        foreground: "var(--card-foreground)",
+      },
       subtle: "var(--subtle)",
       muted: {
         DEFAULT: "var(--muted)",

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Archive, Bot, Cpu, Ellipsis, Folder, LoaderCircle, Pin, Trash2 } from "@lucide/vue";
-import { Dropdown, Tooltip } from "antdv-next";
+import { Button, Dropdown, Tooltip } from "antdv-next";
 import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
 import type { AgentView } from "../../services/acp";
@@ -225,14 +225,14 @@ const cardMenu = (conversation: OpenChatConversation) => ({
                 </span>
 
                 <Dropdown :menu="cardMenu(conversation)" :trigger="['click']">
-                  <button
-                    type="button"
-                    class="card-menu-trigger"
+                  <Button
+                    type="text"
+                    size="small"
+                    :icon="h(Ellipsis)"
+                    class="!w-5 !h-5 !p-0 !border-none text-muted-foreground hover:!text-foreground"
                     :aria-label="`会话操作：${conversation.label}`"
                     @click.stop
-                  >
-                    <Ellipsis class="!h-[13px] !w-[13px]" />
-                  </button>
+                  />
                 </Dropdown>
 
                 <template v-if="statusOf(conversation) === 'running'">
@@ -403,7 +403,7 @@ html[data-theme="dark"] .column {
   min-height: 0;
   flex-direction: column;
   gap: 8px;
-  padding: 2px 8px 10px;
+  padding: 4px 8px 10px;
   overflow-y: auto;
 }
 
@@ -426,7 +426,6 @@ html[data-theme="dark"] .column {
   background: var(--background);
   box-shadow: var(--shadow-sm);
   transition:
-    transform 140ms ease,
     box-shadow 140ms ease,
     border-color 140ms ease;
 }
@@ -436,8 +435,10 @@ html[data-theme="dark"] .card {
 }
 
 .card:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-lg);
+  border-color: var(--border-strong);
+  box-shadow:
+    0 0 0 1px var(--border-strong),
+    var(--shadow-lg);
 }
 
 .card:focus-visible {

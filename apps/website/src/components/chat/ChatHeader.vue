@@ -13,7 +13,7 @@ import {
   Trash2,
   X,
 } from "@lucide/vue";
-import { Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
+import { Button, Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, h, nextTick, ref, watch } from "vue";
 
 interface Props {
@@ -125,33 +125,35 @@ const titleMenu = computed<MenuProps>(() => ({
     <!-- 侧栏收起时：折叠按钮 + 历史导航 -->
     <template v-if="!sidebarOpen">
       <Tooltip title="展开侧边栏">
-        <button
-          type="button"
-          :class="iconButtonClass"
+        <Button
+          type="text"
+          size="small"
+          :icon="h(PanelLeftOpen)"
+          class="!w-[26px] !h-[26px] !p-0 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
           aria-label="展开侧边栏"
           @click="emit('toggleSidebar')"
-        >
-          <PanelLeftOpen class="!h-[14px] !w-[14px]" />
-        </button>
+        />
       </Tooltip>
-      <button
-        type="button"
-        :class="[iconButtonClass, canGoBack ? '' : 'opacity-35']"
+      <Button
+        type="text"
+        size="small"
+        :icon="h(ArrowLeft)"
+        :class="canGoBack ? '' : 'opacity-35'"
         :disabled="!canGoBack"
+        class="!w-[26px] !h-[26px] !p-0 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
         aria-label="返回上一个会话"
         @click="emit('navigateBack')"
-      >
-        <ArrowLeft class="!h-[14px] !w-[14px]" />
-      </button>
-      <button
-        type="button"
-        :class="[iconButtonClass, canGoForward ? '' : 'opacity-35']"
+      />
+      <Button
+        type="text"
+        size="small"
+        :icon="h(ArrowRight)"
+        :class="canGoForward ? '' : 'opacity-35'"
         :disabled="!canGoForward"
+        class="!w-[26px] !h-[26px] !p-0 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
         aria-label="前进到下一个会话"
         @click="emit('navigateForward')"
-      >
-        <ArrowRight class="!h-[14px] !w-[14px]" />
-      </button>
+      />
     </template>
 
     <!-- 会话标题 -->
@@ -166,16 +168,17 @@ const titleMenu = computed<MenuProps>(() => ({
       @keydown.esc.prevent="cancelRename"
     />
     <Dropdown v-else :menu="titleMenu" :trigger="['click']">
-      <button
-        type="button"
-        class="flex min-h-[26px] min-w-0 items-center gap-[2px] border-0 rounded bg-transparent py-0 pl-1 pr-1 text-brand-foreground cursor-pointer hover:bg-brand-surface-subtle"
+      <Button
+        type="text"
+        size="small"
+        class="!flex !min-h-[26px] !min-w-0 !items-center !gap-[2px] !border-0 !rounded !py-0 !pl-1 !pr-1 !text-brand-foreground hover:!bg-brand-surface-subtle"
         aria-label="对话选项"
       >
         <span class="max-w-[min(38vw,460px)] truncate pl-[2px] text-[13px] font-medium">{{
           title
-        }}</span
-        ><ChevronDown class="!h-3.5 !w-3.5 text-brand-muted-strong" />
-      </button>
+        }}</span>
+        <ChevronDown class="!h-3.5 !w-3.5 text-brand-muted-strong" />
+      </Button>
     </Dropdown>
     <div class="min-w-0 flex-1" />
 
@@ -195,38 +198,36 @@ const titleMenu = computed<MenuProps>(() => ({
       ><span class="sync-dot" /><span>处理中</span></span
     >
     <Tooltip title="复制当前会话链接">
-      <button
-        type="button"
-        :class="iconButtonClass"
+      <Button
+        type="text"
+        size="small"
+        :icon="h(Link2)"
+        class="!w-[26px] !h-[26px] !p-0 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
         aria-label="复制当前会话链接"
         @click="handleCopyLink"
-      >
-        <Link2 class="!h-[14px] !w-[14px]" />
-      </button>
+      />
     </Tooltip>
     <Tooltip v-if="rightPanelAvailable" :title="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'">
-      <button
-        type="button"
-        :class="iconButtonClass"
+      <Button
+        type="text"
+        size="small"
+        :icon="h(PanelRight, { class: rightPanelOpen ? 'text-brand-foreground' : '' })"
+        :class="rightPanelOpen ? '!bg-brand-surface-subtle' : ''"
+        class="!w-[26px] !h-[26px] !p-0 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
         :aria-label="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'"
         :aria-pressed="rightPanelOpen"
         @click="emit('toggleRightPanel')"
-      >
-        <PanelRight
-          class="!h-[14px] !w-[14px]"
-          :class="rightPanelOpen ? 'text-brand-foreground' : ''"
-        />
-      </button>
+      />
     </Tooltip>
     <Tooltip v-if="showClose" title="关闭抽屉">
-      <button
-        type="button"
-        :class="[iconButtonClass, 'ml-1']"
+      <Button
+        type="text"
+        size="small"
+        :icon="h(X)"
+        class="!w-[26px] !h-[26px] !p-0 !ml-1 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
         aria-label="关闭抽屉"
         @click="emit('close')"
-      >
-        <X class="!h-[14px] !w-[14px]" />
-      </button>
+      />
     </Tooltip>
   </header>
 </template>
