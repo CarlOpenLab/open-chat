@@ -57,7 +57,7 @@ See [docs/architecture.md](docs/architecture.md) for the canonical transcript co
 | Custom ACP agent      | your executable  | Agent Client Protocol             |
 | OpenAI-compatible API | provider URL     | HTTP streaming                    |
 
-No separate `codex-acp`, `claude-code-acp`, or `pi-acp` installation is required. Open Chat discovers commands on the inherited `PATH` and common Homebrew, `~/.local/bin`, Bun, Cargo, mise, and Volta locations. Override a command or working directory with `[[acp.agents]]` in the server configuration.
+No separate `codex-acp`, `claude-code-acp`, or `pi-acp` installation is required. Open Chat discovers commands on the inherited `PATH` and common Homebrew, `~/.local/bin`, Bun, Cargo, mise, and Volta locations; on Windows it also looks in `%APPDATA%\npm` and `%USERPROFILE%\.codex\bin`, and resolves fnm multishell junctions to their real paths (those temp dirs are deleted when the owning shell exits). Override a command or working directory with `[[acp.agents]]` in the server configuration.
 
 ## Quick start
 
