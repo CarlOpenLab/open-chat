@@ -68,7 +68,6 @@ const emit = defineEmits<{
   (e: "archiveTask", id: string): void;
   (e: "duplicateTask", id: string): void;
   (e: "deleteTask", id: string): void;
-  (e: "createTaskForColumn", status: TaskStatus): void;
   (e: "openSettings"): void;
   (e: "toggleTheme"): void;
 }>();
@@ -78,16 +77,16 @@ const useStyles = createStyles(({ token, css }) => ({
     background: var(--subtle, #f8f9fa);
   `,
   column: css`
-    background: ${token.colorFillQuaternary};
-    border: 1px solid ${token.colorBorderSecondary};
+    background: var(--fill-faint);
+    border: 1px solid var(--border);
     border-radius: 14px;
     width: 300px;
     transition: all ${token.motionDurationMid} ${token.motionEaseInOut};
 
     &.is-drag-over {
-      background: ${token.colorPrimaryBgHover};
-      border-color: ${token.colorPrimary};
-      box-shadow: 0 0 0 2px ${token.colorPrimaryBg};
+      background: var(--primary-subtle-hover);
+      border-color: var(--brand-primary);
+      box-shadow: 0 0 0 2px var(--primary-subtle);
     }
   `,
   colDot: {
@@ -111,7 +110,7 @@ const useStyles = createStyles(({ token, css }) => ({
   },
   inlineCard: css`
     background: var(--card, #ffffff);
-    border: 1px solid ${token.colorPrimaryBorder};
+    border: 1px solid var(--border-strong);
     border-radius: 12px;
     box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.08);
   `,
@@ -243,33 +242,6 @@ const countsMap = computed(() => {
 const countsSummary = computed(() => {
   return `进行中 ${countsMap.value.doing ?? 0} · 待验收 ${countsMap.value.review ?? 0} · 已完成 ${countsMap.value.done ?? 0}`;
 });
-
-const inlineCreatingStatus = ref<TaskStatus | "">("");
-const inlineTitle = ref("");
-
-const startInlineCreate = (status: TaskStatus) => {
-  inlineCreatingStatus.value = status;
-  inlineTitle.value = "";
-};
-
-const cancelInlineCreate = () => {
-  inlineCreatingStatus.value = "";
-  inlineTitle.value = "";
-};
-
-const submitInlineCreate = (status: TaskStatus) => {
-  const title = inlineTitle.value.trim();
-  if (!title) {
-    cancelInlineCreate();
-    return;
-  }
-  emit("createTask", {
-    title,
-    projectPath: selectedProject.value || props.currentProjectPath || null,
-    status,
-  });
-  cancelInlineCreate();
-};
 
 const hasActiveFilter = computed(() =>
   Boolean(search.value.trim() || selectedPriority.value || selectedProject.value),
@@ -577,15 +549,6 @@ const templateMenu = computed(() => ({
               <span class="text-muted-foreground/70 text-[11px] mr-1 hidden sm:inline">{{
                 column.meta.hint
               }}</span>
-              <Tooltip :title="`在【${column.meta.name}】添加任务`">
-                <Button
-                  type="text"
-                  size="small"
-                  :icon="h(Plus)"
-                  class="!w-6 !h-6 !p-0 !text-muted-foreground hover:!text-foreground hover:!bg-background"
-                  @click="startInlineCreate(column.status)"
-                />
-              </Tooltip>
             </div>
           </header>
 
@@ -593,17 +556,14 @@ const templateMenu = computed(() => ({
           <div class="flex-1 overflow-y-auto p-1 pr-1.5 flex flex-col gap-2.5 min-h-32">
             <!-- 空状态 -->
             <div
-              v-if="column.items.length === 0 && inlineCreatingStatus !== column.status"
+              v-if="column.items.length === 0"
               class="flex flex-col items-center justify-center p-6 border border-dashed border-border/70 rounded-xl text-center bg-background/30 transition-colors"
             >
-              <span v-if="dragId" class="text-[12px] text-primary font-medium">松开移动到这里</span>
+              <span v-if="dragId" class="text-[12px] text-brand-accent font-medium"
+                >松开移动到这里</span
+              >
               <template v-else>
-                <p class="text-[12px] text-muted-foreground/80 mb-2">
-                  暂无{{ column.meta.name }}任务
-                </p>
-                <Button size="small" :icon="h(Plus)" @click="startInlineCreate(column.status)"
-                  >添加任务</Button
-                >
+                <p class="text-[12px] text-muted-foreground/80">暂无{{ column.meta.name }}任务</p>
               </template>
             </div>
 
@@ -635,53 +595,6 @@ const templateMenu = computed(() => ({
               @duplicate="emit('duplicateTask', $event)"
               @delete="emit('deleteTask', $event)"
             />
-
-            <!-- 内联快捷创建卡片 -->
-            <div
-              v-if="inlineCreatingStatus === column.status"
-              :class="['flex flex-col gap-2 p-3 mt-1', styles.inlineCard]"
-            >
-              <Input
-                v-model:value="inlineTitle"
-                placeholder="输入任务标题，按 Enter 保存..."
-                autofocus
-                size="small"
-                class="!rounded-md"
-                @press-enter="submitInlineCreate(column.status)"
-                @keydown.esc="cancelInlineCreate"
-              />
-              <div class="flex items-center justify-between">
-                <span class="text-[11px] text-muted-foreground">Esc 取消 · Enter 保存</span>
-                <div class="flex items-center gap-1.5">
-                  <Button size="small" type="text" @click="cancelInlineCreate">取消</Button>
-                  <Button
-                    size="small"
-                    type="primary"
-                    :disabled="!inlineTitle.trim()"
-                    @click="submitInlineCreate(column.status)"
-                  >
-                    添加
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 列底部快捷添加按钮（非内联编辑且非空时展示） -->
-          <div
-            v-if="inlineCreatingStatus !== column.status && column.items.length > 0"
-            class="pt-2 mt-auto"
-          >
-            <Button
-              type="dashed"
-              block
-              size="small"
-              :icon="h(Plus)"
-              class="!text-xs !text-muted-foreground hover:!text-foreground !rounded-lg"
-              @click="startInlineCreate(column.status)"
-            >
-              添加任务
-            </Button>
           </div>
         </section>
       </div>

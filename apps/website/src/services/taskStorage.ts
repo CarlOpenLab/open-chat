@@ -246,15 +246,11 @@ export async function removeTask(id: string): Promise<void> {
 export function updateTaskInList(
   tasks: Task[],
   id: string,
-  patch: Partial<Omit<Task, "id" | "createdAt">> & { projectPathImmutableCheck?: boolean },
+  patch: Partial<Omit<Task, "id" | "createdAt">>,
 ): Task[] {
   const idx = tasks.findIndex((t) => t.id === id);
   if (idx < 0) return tasks;
   const current = tasks[idx];
-  if (patch.projectPath !== undefined && patch.projectPath !== current.projectPath) {
-    // projectPath immutable after creation
-    throw new Error("projectPath immutable after creation");
-  }
   const next: Task = {
     ...current,
     ...(patch.title !== undefined
@@ -267,6 +263,10 @@ export function updateTaskInList(
       ? { dueAt: patch.dueAt && patch.dueAt > 0 ? patch.dueAt : null }
       : {}),
     ...(patch.description !== undefined ? { description: patch.description.slice(0, 8000) } : {}),
+    // 项目目录创建后允许修改（任务抽屉的工作目录 / 浏览都会走这里）
+    ...(patch.projectPath !== undefined
+      ? { projectPath: normalizeProjectPath(patch.projectPath) }
+      : {}),
     ...(patch.sessionKeys !== undefined ? { sessionKeys: [...patch.sessionKeys] } : {}),
     updatedAt: Date.now(),
   };

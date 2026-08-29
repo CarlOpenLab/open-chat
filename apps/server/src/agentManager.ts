@@ -5,7 +5,6 @@ import { AcpManager, type AcpAgentView, type AcpSessionStateView } from "./acpMa
 import {
   NativeCliManager,
   type NativeAgentView,
-  type NativeProviderSessionsView,
   type NativeSessionStateView,
 } from "./nativeCliManager";
 import { GatewayError } from "./error";
@@ -37,36 +36,6 @@ export class AgentManager {
       const view = byId.get(agent.id);
       return view ? [view] : [];
     });
-  }
-
-  listSessions(agentId?: string) {
-    const activeRuns = this.runs.list(agentId);
-    const activeByConversation = new Map(
-      activeRuns.map((run) => [`${run.agentId}:${run.conversationId}`, run]),
-    );
-    const sessions = [...this.native.listSessions(agentId), ...this.acp.listSessions(agentId)].map(
-      (session) => {
-        const active = activeByConversation.get(`${session.agentId}:${session.conversationId}`);
-        if (!active) return { ...session, running: false };
-        activeByConversation.delete(`${session.agentId}:${session.conversationId}`);
-        return {
-          ...session,
-          sessionId: active.sessionId,
-          lastUsed: active.lastUsed,
-          running: true,
-          startedAt: active.startedAt,
-          ...(active.projectPath ? { projectPath: active.projectPath } : {}),
-        };
-      },
-    );
-    sessions.push(...activeByConversation.values());
-    return sessions.sort((left, right) => right.lastUsed - left.lastUsed);
-  }
-
-  listProviderSessions(agentId: string) {
-    if (this.acp.hasAgent(agentId)) return this.acp.listProviderSessions(agentId);
-    if (this.native.hasAgent(agentId)) return this.native.listProviderSessions(agentId);
-    return Promise.resolve({ supported: false, sessions: [] } satisfies NativeProviderSessionsView);
   }
 
   getSessionState(

@@ -4,7 +4,9 @@ import { defineConfig, presetIcons, presetTypography, presetUno } from "unocss";
 // 亮/暗主题通过 html[data-theme] 切换变量值即可生效。
 export default defineConfig({
   presets: [
-    presetUno(),
+    // dark:/light: 变体跟随 html[data-theme]（App.vue 以 data-theme 属性切换主题，
+    // 不存在 .dark 类；默认的 class 策略会让所有 dark: 工具类永远不生效）
+    presetUno({ dark: { dark: '[data-theme="dark"]', light: '[data-theme="light"]' } }),
     presetIcons({
       scale: 1.2,
       warn: true,
@@ -21,6 +23,10 @@ export default defineConfig({
     colors: {
       background: "var(--background)",
       foreground: "var(--foreground)",
+      primary: {
+        DEFAULT: "var(--brand-primary)",
+        foreground: "var(--brand-primary-foreground)",
+      },
       card: {
         DEFAULT: "var(--card)",
         foreground: "var(--card-foreground)",

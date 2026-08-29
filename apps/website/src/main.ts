@@ -7,4 +7,9 @@ import "@antdv-next/x-markdown/themes/light.css";
 import "@antdv-next/x-markdown/themes/dark.css";
 import "@antdv-next/x-markdown/themes/index.css";
 
-createApp(App).mount("#app");
+const app = createApp(App);
+app.config.errorHandler = (err, _i, info) => {
+  document.title = "ERR:" + info + ":" + String((err as Error)?.stack || err).slice(0, 300);
+  console.error(err, info);
+};
+app.mount("#app");

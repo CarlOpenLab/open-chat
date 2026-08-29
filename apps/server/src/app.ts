@@ -271,20 +271,6 @@ export function createGatewayApp(
     res.json({ agents: agentManager.listAgents() });
   });
 
-  app.get("/api/acp/sessions", (req: Request, res: Response) => {
-    const agentId = typeof req.query.agentId === "string" ? req.query.agentId : undefined;
-    res.json({ sessions: agentManager.listSessions(agentId) });
-  });
-
-  app.get("/api/acp/provider-sessions", async (req: Request, res: Response) => {
-    try {
-      const agentId = requiredQuery(req, "agentId");
-      res.json(await agentManager.listProviderSessions(agentId));
-    } catch (err) {
-      return sendRouteError(res, err, "供应商会话列表加载失败");
-    }
-  });
-
   app.get("/api/acp/session", async (req: Request, res: Response) => {
     try {
       const agentId = requiredQuery(req, "agentId");

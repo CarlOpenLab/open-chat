@@ -14,7 +14,7 @@ import {
 import { ACCESS_REQUIRED_EVENT, setGatewayAccessGranted } from "./services/access";
 import { shadcnDarkTheme, shadcnTheme } from "./theme/shadcnTheme";
 import { Button, Input } from "antdv-next";
-const Chat = defineAsyncComponent(() => import("./components/Chat.vue"));
+const Chat = defineAsyncComponent(() => import("./pages/WorkspacePage.vue"));
 const CodeHighlightDemoPage = defineAsyncComponent(
   () => import("./pages/CodeHighlightDemoPage.vue"),
 );

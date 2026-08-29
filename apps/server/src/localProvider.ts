@@ -228,39 +228,6 @@ class OpenCodeServer {
     return res.body;
   }
 
-  async listSessions(): Promise<LocalProviderSession[]> {
-    const response = await this.request<unknown>("GET", "/session");
-    const values = Array.isArray(response)
-      ? response
-      : Array.isArray((response as { data?: unknown[] } | undefined)?.data)
-        ? ((response as { data: unknown[] }).data ?? [])
-        : [];
-    return values.flatMap((value) => {
-      if (!value || typeof value !== "object") return [];
-      const item = value as Record<string, unknown>;
-      const id = typeof item.id === "string" ? item.id : "";
-      if (!id) return [];
-      const updated = item.updatedAt ?? item.updated_at ?? item.time;
-      const updatedAt =
-        typeof updated === "number"
-          ? new Date(updated < 10_000_000_000 ? updated * 1000 : updated).toISOString()
-          : typeof updated === "string"
-            ? updated
-            : undefined;
-      return [
-        {
-          sessionId: id,
-          cwd: typeof item.directory === "string" ? item.directory : this.cwd,
-          title:
-            (typeof item.title === "string" && item.title) ||
-            (typeof item.name === "string" && item.name) ||
-            undefined,
-          ...(updatedAt ? { updatedAt } : {}),
-        },
-      ];
-    });
-  }
-
   async loadSession(id: string): Promise<LocalProviderSession | null> {
     const response = await this.request<unknown>("GET", `/session/${encodeURIComponent(id)}`).catch(
       () => undefined,
@@ -401,29 +368,6 @@ export class LocalChatManager {
 
     this.modelsCache = { models, at: Date.now() };
     return models;
-  }
-
-  async listProviderSessions(projectPath?: string): Promise<LocalProviderSession[]> {
-    const servers = projectPath ? [this.serverFor(projectPath)] : [...this.servers.values()];
-    const results = await Promise.all(
-      servers.map((server) =>
-        server.listSessions().then(
-          (sessions) => ({ sessions, failed: false }),
-          (error) => {
-            console.error("[opencode] session discovery failed:", error);
-            return { sessions: [] as LocalProviderSession[], failed: true };
-          },
-        ),
-      ),
-    );
-    if (results.length > 0 && results.every((result) => result.failed)) {
-      throw new Error("opencode session list unavailable");
-    }
-    const seen = new Set<string>();
-    return results
-      .flatMap((result) => result.sessions)
-      .filter((session) => !seen.has(session.sessionId) && seen.add(session.sessionId))
-      .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""));
   }
 
   async loadProviderSession(

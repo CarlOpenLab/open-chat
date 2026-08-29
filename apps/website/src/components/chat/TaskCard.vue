@@ -62,9 +62,9 @@ const useStyles = createStyles(({ token, css }) => ({
     user-select: none;
 
     &:hover {
-      border-color: ${token.colorPrimaryBorder};
+      border-color: var(--border-strong);
       box-shadow:
-        0 0 0 1px ${token.colorPrimaryBorder},
+        0 0 0 1px var(--border-strong),
         0 4px 12px -2px rgba(0, 0, 0, 0.08),
         0 2px 6px -1px rgba(0, 0, 0, 0.04);
     }
@@ -74,9 +74,9 @@ const useStyles = createStyles(({ token, css }) => ({
     }
 
     &.is-open {
-      border-color: ${token.colorPrimary};
+      border-color: var(--brand-primary);
       box-shadow:
-        0 0 0 2px ${token.colorPrimaryBg},
+        0 0 0 2px var(--primary-subtle),
         0 4px 12px rgba(0, 0, 0, 0.06);
     }
 
@@ -86,19 +86,19 @@ const useStyles = createStyles(({ token, css }) => ({
     }
   `,
   dueOverdue: css`
-    background: ${token.colorErrorBg};
-    color: ${token.colorError};
-    border-color: ${token.colorErrorBorder};
+    background: var(--danger-subtle);
+    color: var(--danger);
+    border-color: var(--danger-border);
   `,
   dueToday: css`
-    background: ${token.colorWarningBg};
-    color: ${token.colorWarning};
-    border-color: ${token.colorWarningBorder};
+    background: var(--warning-subtle);
+    color: var(--warning);
+    border-color: var(--warning-border);
   `,
   dueNormal: css`
-    background: ${token.colorFillQuaternary};
-    color: ${token.colorTextSecondary};
-    border-color: ${token.colorBorderSecondary};
+    background: var(--fill-faint);
+    color: var(--muted-foreground);
+    border-color: var(--border);
   `,
 }));
 
@@ -272,7 +272,7 @@ const onDragEnd = () => {
       <template v-else>
         <Tooltip :title="task.title" placement="top" :mouse-enter-delay="0.6">
           <h3
-            class="text-[13.5px] font-medium leading-snug text-foreground tracking-tight line-clamp-2 hover:text-primary transition-colors m-0"
+            class="text-[13.5px] font-medium leading-snug text-foreground tracking-tight line-clamp-2 hover:text-brand-accent transition-colors m-0"
             @dblclick.stop="startEdit"
           >
             {{ task.title }}

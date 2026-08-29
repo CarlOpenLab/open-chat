@@ -1,10 +1,16 @@
 <script setup lang="ts">
+/**
+ * 工作区容器（状态层）：
+ * - 持有全部会话 / 任务 / 供应商状态与业务逻辑；
+ * - 通过 provideWorkspace 把状态下发到 BoardPage / ChatPage 展示层；
+ * - 顶部 TopTabBar 负责两种布局的切换。
+ */
 import { Notification as XNotification } from "@antdv-next/x";
 import type { ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest } from "@antdv-next/x-sdk";
-import { Drawer, message } from "antdv-next";
+import { message } from "antdv-next";
 import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import {
   API_BASE_URL,
@@ -34,14 +40,11 @@ import {
   cancelAcpTurn,
   flattenAcpSelectOptions,
   loadAcpAgents,
-  loadAcpProviderSessions,
   loadAcpSession,
-  loadOpenChatSessions,
   setAcpSessionConfig,
   subscribeAcpSessionStream,
   type AcpSessionState,
   type AgentView,
-  type OpenChatSessionView,
 } from "../services/acp";
 import {
   appendTranscriptMessageToModelMessages,
@@ -56,15 +59,12 @@ import {
   useChatPersistence,
   type OpenChatConversation,
 } from "../composables/useChatPersistence";
-import TaskBoardView from "./chat/TaskBoardView.vue";
-import TaskDetailDrawer from "./chat/TaskDetailDrawer.vue";
-import ChatHeader from "./chat/ChatHeader.vue";
-import ChatMessages from "./chat/ChatMessages.vue";
-import ChatInput from "./chat/ChatInput.vue";
-import RightPanel from "./chat/RightPanel.vue";
-import CommandPalette from "./chat/CommandPalette.vue";
-import SettingsDialog from "./chat/SettingsDialog.vue";
-import DeleteConversationModal from "./chat/DeleteConversationModal.vue";
+import CommandPalette from "../components/chat/CommandPalette.vue";
+import SettingsDialog from "../components/chat/SettingsDialog.vue";
+import TopTabBar from "../components/layout/TopTabBar.vue";
+import BoardPage from "./BoardPage.vue";
+import ChatPage from "./ChatPage.vue";
+import { provideWorkspace, type SubmitMessageOptions, type Workspace } from "./workspace";
 import {
   loadTasks,
   saveTasks,
@@ -85,7 +85,7 @@ interface Emits {
   (e: "themeModeChange", mode: "system" | "light" | "dark"): void;
 }
 
-withDefaults(defineProps<Props>(), { themeMode: "system" });
+const props = withDefaults(defineProps<Props>(), { themeMode: "system" });
 const emit = defineEmits<Emits>();
 
 // ============ 响应式状态 ============
@@ -148,6 +148,15 @@ const boardOpenKey = ref("");
 const openTaskId = ref("");
 /** 任务列表（全局跨项目），与会话解耦。 */
 const taskList = ref<Task[]>([]);
+/** 任务列表防抖持久化：批量变更（创建/拖拽/删除）只落一次 IndexedDB。 */
+let persistTasksTimer: ReturnType<typeof setTimeout> | null = null;
+const schedulePersistTasks = () => {
+  if (persistTasksTimer) clearTimeout(persistTasksTimer);
+  persistTasksTimer = setTimeout(() => {
+    persistTasksTimer = null;
+    void saveTasks(taskList.value);
+  }, 200);
+};
 const taskFilter = ref<"all" | "active" | "completed">("all");
 const taskSearch = ref("");
 const taskNewModalOpen = ref(false);
@@ -409,7 +418,6 @@ const acpRunState = ref<AcpRunStateNotice | null>(null);
 /** 会话实时输出订阅（多标签 / 刷新恢复后观看运行中的回合）。 */
 const acpStreamController = ref<AbortController | null>(null);
 let acpStreamMessageSeq = 0;
-const openChatSessions = ref<OpenChatSessionView[]>([]);
 const draftConversationKey = ref("");
 
 // 面板尺寸（sidebar 180–420，right panel 280–1000）
@@ -933,15 +941,15 @@ const updateConversationMessages = (
   }
 };
 
-const handleNewConversation = () => {
-  // 看板主页：新任务直接以抽屉形态打开草稿会话
-  boardOpenKey.value = DRAFT_BOARD_KEY;
-  // 草稿态下重复点击只提示，不重复创建
-  if (isInDraftMode.value) {
-    showWelcome.value = true;
-    return;
-  }
+/** 布局视图：看板页 / 对话页（TopTabBar 切换，持久化到 localStorage）。 */
+const viewMode = ref<"board" | "chat">(
+  localStorage.getItem("open-chat-view") === "chat" ? "chat" : "board",
+);
+watch(viewMode, (mode) => {
+  localStorage.setItem("open-chat-view", mode);
+});
 
+const resetToDraftConversation = () => {
   draftProjectPath.value = lastProjectPath();
   currentConversationKey.value = "";
   projectPath.value = draftProjectPath.value;
@@ -949,6 +957,18 @@ const handleNewConversation = () => {
   showWelcome.value = true;
   historyBack.value = [];
   historyForward.value = [];
+};
+
+const handleNewConversation = () => {
+  if (isInDraftMode.value) {
+    showWelcome.value = true;
+    return;
+  }
+  if (viewMode.value === "board") {
+    // 看板主页：新任务直接以抽屉形态打开草稿会话
+    boardOpenKey.value = DRAFT_BOARD_KEY;
+  }
+  resetToDraftConversation();
 };
 
 const pushHistory = (key: string) => {
@@ -1127,12 +1147,6 @@ const setMessages = (
 const isConversationRunning = (key: string): boolean => {
   if (!key) return false;
   if (activeSessionRuns.has(key)) return true;
-  const conversation = conversationList.value.find((item) => String(item.key) === key);
-  const hasServerRun = openChatSessions.value.some(
-    (session) =>
-      session.running && (!conversation || sessionMatchesConversation(session, conversation)),
-  );
-  if (hasServerRun) return true;
   if (
     key === currentConversationKey.value &&
     usesAcpProtocol.value &&
@@ -1164,58 +1178,19 @@ const pendingChatError = computed(() => {
 
 /** 当前会话正在生成；输入仍可提交，但新消息会进入该会话专属队列 */
 const inputRunning = computed(() => isConversationRunning(currentConversationKey.value));
-/** 初始化期间无法可靠确定目标会话，此时才真正禁用输入。后台 sessions 轮询不能影响输入焦点。 */
+/** 初始化期间无法可靠确定目标会话，此时才真正禁用输入。 */
 const inputUnavailable = computed(() => isAcpAgent.value && isHydrating.value);
 const inputBusy = computed(() => inputUnavailable.value || inputRunning.value);
-
-const sessionMatchesConversation = (
-  session: OpenChatSessionView,
-  conversation: OpenChatConversation,
-): boolean =>
-  session.agentId === (conversation.agentId || "api") &&
-  (session.conversationId === String(conversation.key) ||
-    Boolean(
-      conversation.providerSessionId &&
-      session.sessionId &&
-      conversation.providerSessionId === session.sessionId,
-    ));
-
-const markConversationRunIdle = (conversationKey: string) => {
-  const conversation = conversationList.value.find((item) => String(item.key) === conversationKey);
-  openChatSessions.value = openChatSessions.value.map((session) =>
-    session.running &&
-    (session.conversationId === conversationKey ||
-      (conversation != null && sessionMatchesConversation(session, conversation)))
-      ? { ...session, running: false }
-      : session,
-  );
-};
-
-const currentOpenChatRun = computed(() => {
-  const conversation = getCurrentConversation();
-  if (!conversation) return undefined;
-  return openChatSessions.value.find(
-    (session) => session.running && sessionMatchesConversation(session, conversation),
-  );
-});
 
 const conversationBusyStates = computed<Record<string, { startedAt: number }>>(() => {
   const states: Record<string, { startedAt: number }> = {};
   for (const [key, run] of activeSessionRuns.entries()) {
     states[key] = { startedAt: run.startedAt };
   }
-  for (const conversation of conversationList.value) {
-    const key = String(conversation.key);
-    if (states[key]) continue;
-    const run = openChatSessions.value.find(
-      (session) => session.running && sessionMatchesConversation(session, conversation),
-    );
-    if (run) states[key] = { startedAt: run.startedAt ?? run.lastUsed };
-  }
   return states;
 });
 
-/** 当前会话的运行起点；聊天区与侧栏共用这一份服务端时间。 */
+/** 当前会话的运行起点；聊天区与侧栏共用这一份时间。 */
 const currentConversationBusyState = computed(() =>
   currentConversationKey.value
     ? conversationBusyStates.value[currentConversationKey.value]
@@ -1256,268 +1231,14 @@ const {
   onResetToDraft: () => syncConversationRoute("replace"),
 });
 
-/**
-/**
- * 仅用于已存在于本地 IndexedDB 的会话做标题/路径等元数据补齐。
- * 不再为仅存在于供应商侧的外部会话创建新的侧栏条目——侧栏只展示 open chat 本地发起的 sessions。
- */
-const syncProviderConversations = async (agentId: string): Promise<void> => {
-  const agent = agents.value.find((item) => item.id === agentId);
-  if (!agent || agent.kind !== "acp" || !agent.available) return;
-  try {
-    const result = await loadAcpProviderSessions(agentId);
-    if (agentId !== activeAgentId.value) return;
-    if (!result.supported) return;
-    let changed = false;
-    for (const providerSession of result.sessions) {
-      const existing = conversationList.value.find(
-        (item) => item.agentId === agentId && item.providerSessionId === providerSession.sessionId,
-      );
-      if (!existing) continue;
-      const updatedAt = providerSession.updatedAt
-        ? Date.parse(providerSession.updatedAt)
-        : Number.NaN;
-      if (
-        providerSession.title?.trim() &&
-        (!String(existing.label ?? "").trim() || existing.label === "新对话")
-      ) {
-        existing.label = providerSession.title.trim();
-        changed = true;
-      }
-      const providerProjectPath = normalizeProjectPath(providerSession.cwd);
-      if (existing.projectPath !== providerProjectPath) {
-        existing.projectPath = providerProjectPath;
-        changed = true;
-      }
-      if (Number.isFinite(updatedAt) && existing.updatedAt !== updatedAt) {
-        existing.updatedAt = updatedAt;
-        changed = true;
-        if (
-          existing.agentId === activeAgentId.value &&
-          String(existing.key) === currentConversationKey.value &&
-          !isRequesting.value &&
-          !isHydrating.value &&
-          !acpStreamController.value
-        ) {
-          void refreshAcpSession();
-        }
-      }
-    }
-    if (changed) schedulePersistState();
-  } catch (error) {
-    console.error(`Failed to load ${agentId} provider sessions:`, error);
-  }
-};
-
-let sessionRefreshController: AbortController | null = null;
-let sessionRefreshSequence = 0;
-let sessionRefreshFrame: number | null = null;
-let sessionRefreshInFlight = false;
-let sessionRefreshGeneration = 0;
-
-const SESSION_REFRESH_RUNNING_MS = 2_000;
-const SESSION_REFRESH_IDLE_MS = 5_000;
-
-const stopSessionRefresh = () => {
-  sessionRefreshGeneration += 1;
-  if (sessionRefreshFrame !== null) {
-    window.cancelAnimationFrame(sessionRefreshFrame);
-    sessionRefreshFrame = null;
-  }
-  sessionRefreshController?.abort();
-  sessionRefreshController = null;
-};
-
-const reconcileRunningConversations = (sessions: OpenChatSessionView[]) => {
-  let changed = false;
-  for (const session of sessions) {
-    if (!session.running) continue;
-    const exact = conversationList.value.find(
-      (conversation) =>
-        conversation.agentId === session.agentId &&
-        String(conversation.key) === session.conversationId,
-    );
-    const existing =
-      exact ??
-      conversationList.value.find(
-        (conversation) =>
-          sessionMatchesConversation(session, conversation) ||
-          (conversation.agentId === session.agentId &&
-            conversation.providerSessionId === session.sessionId),
-      );
-    if (!existing) {
-      // 只维护本地已存在的会话，不为外部运行中的会话自动创建侧栏条目
-      continue;
-    }
-    if (exact && session.sessionId) {
-      for (let index = conversationList.value.length - 1; index >= 0; index -= 1) {
-        const candidate = conversationList.value[index];
-        if (
-          candidate !== exact &&
-          candidate.agentId === session.agentId &&
-          candidate.providerSessionId === session.sessionId
-        ) {
-          conversationList.value.splice(index, 1);
-          changed = true;
-        }
-      }
-    }
-    if (session.sessionId && existing.providerSessionId !== session.sessionId) {
-      existing.providerSessionId = session.sessionId;
-      changed = true;
-    }
-    const sessionProjectPath = normalizeProjectPath(session.projectPath);
-    if (sessionProjectPath && existing.projectPath !== sessionProjectPath) {
-      existing.projectPath = sessionProjectPath;
-      changed = true;
-    }
-  }
-  if (changed) schedulePersistState();
-};
-
-const refreshSessionState = async () => {
-  if (componentUnmounted || isHydrating.value || document.visibilityState === "hidden") return;
-  if (sessionRefreshInFlight) return;
-  sessionRefreshInFlight = true;
-  const agent = activeAgent.value;
-  if (agent.kind !== "acp" || !agent.available) {
-    openChatSessions.value = [];
-    sessionRefreshInFlight = false;
-    return;
-  }
-
-  const sequence = ++sessionRefreshSequence;
-  const agentId = agent.id;
-  const controller = new AbortController();
-  sessionRefreshController = controller;
-  try {
-    // 本地聚合模式：不再周期性全量拉取供应商会话，仅刷新运行状态（openChatSessions）。
-    // 供应商元数据同步（syncProviderConversations）仅在需要时手动触发，避免侧栏全量拉取。
-    const previouslyRunning = openChatSessions.value.filter(
-      (session) => session.agentId === agentId && session.running,
-    );
-    const openChatResult = await loadOpenChatSessions(agentId, controller.signal)
-      .then((sessions) => ({ status: "fulfilled" as const, value: sessions }))
-      .catch((reason: unknown) => ({ status: "rejected" as const, reason }));
-    if (sequence !== sessionRefreshSequence || agentId !== activeAgentId.value) return;
-
-    if (openChatResult.status === "fulfilled") {
-      const sessions = openChatResult.value;
-      openChatSessions.value = sessions;
-      reconcileRunningConversations(sessions);
-      const completedRuns = previouslyRunning.filter(
-        (previous) =>
-          !sessions.some(
-            (session) =>
-              session.running &&
-              session.agentId === previous.agentId &&
-              session.conversationId === previous.conversationId,
-          ),
-      );
-      for (const previous of completedRuns) {
-        notifyTaskCompletion({
-          key: `task:${previous.agentId}:${previous.conversationId}:${previous.startedAt ?? previous.createdAt}`,
-          agentId: previous.agentId,
-          conversationKey: previous.conversationId,
-        });
-      }
-      const selectedConversation = getCurrentConversation();
-      if (
-        selectedConversation &&
-        completedRuns.some((session) => sessionMatchesConversation(session, selectedConversation))
-      ) {
-        void refreshAcpSession();
-      }
-      const selectedRun = selectedConversation
-        ? sessions.find(
-            (session) =>
-              session.running && sessionMatchesConversation(session, selectedConversation),
-          )
-        : undefined;
-      if (!isRequesting.value) {
-        acpRunState.value = selectedRun ? { state: "running" } : null;
-        // The SSE replay is the fast path. If it is unavailable (for example
-        // after a transient disconnect), pull the collector-backed history on
-        // the next refresh so the visible conversation still advances.
-        if (selectedRun && !acpStreamController.value) {
-          void refreshAcpSession();
-        }
-      }
-    } else if ((openChatResult.reason as Error)?.name !== "AbortError") {
-      console.error("Failed to refresh Open Chat session state:", openChatResult.reason);
-    }
-  } catch (error) {
-    console.error("Failed to refresh session state:", error);
-  } finally {
-    if (sequence === sessionRefreshSequence) {
-      sessionRefreshController = null;
-    }
-    sessionRefreshInFlight = false;
-    if (
-      !componentUnmounted &&
-      sequence === sessionRefreshSequence &&
-      document.visibilityState !== "hidden"
-    ) {
-      const hasRunningSession = openChatSessions.value.some((session) => session.running);
-      scheduleSessionRefresh(
-        hasRunningSession || isRequesting.value
-          ? SESSION_REFRESH_RUNNING_MS
-          : SESSION_REFRESH_IDLE_MS,
-      );
-    }
-  }
-};
-
-const scheduleSessionRefresh = (delayMs = 0) => {
-  if (
-    componentUnmounted ||
-    sessionRefreshFrame !== null ||
-    isHydrating.value ||
-    document.visibilityState === "hidden"
-  ) {
-    return;
-  }
-  const generation = sessionRefreshGeneration;
-  const dueAt = performance.now() + Math.max(0, delayMs);
-  const tick = (now: number) => {
-    if (
-      generation !== sessionRefreshGeneration ||
-      componentUnmounted ||
-      isHydrating.value ||
-      document.visibilityState === "hidden"
-    ) {
-      sessionRefreshFrame = null;
-      return;
-    }
-    if (now < dueAt) {
-      sessionRefreshFrame = window.requestAnimationFrame(tick);
-      return;
-    }
-    sessionRefreshFrame = null;
-    if (sessionRefreshInFlight) {
-      scheduleSessionRefresh(100);
-      return;
-    }
-    void refreshSessionState();
-  };
-  sessionRefreshFrame = window.requestAnimationFrame(tick);
-};
-
-const restartSessionRefresh = () => {
-  stopSessionRefresh();
-  sessionRefreshSequence += 1;
-  if (!componentUnmounted && !isHydrating.value && document.visibilityState !== "hidden") {
-    scheduleSessionRefresh();
-  }
-};
-
 const handleVisibilityChange = () => {
   if (document.visibilityState === "hidden") {
-    stopSessionRefresh();
     stopAcpLiveStream();
     return;
   }
-  restartSessionRefresh();
+  // 页面重新可见时重拉当前会话：refreshAcpSession 以服务端 activeRuns 纠正
+  // acpRunState，并经 watcher 重新挂接运行中回合的实时流。
+  void refreshAcpSession();
 };
 
 /**
@@ -1708,12 +1429,6 @@ const getConversationErrorMessage = (key: string): string => {
   return run?.errorText || "请求失败";
 };
 
-watch(isCurrentConversationRunning, (running) => {
-  if (running && isAcpAgent.value) {
-    restartSessionRefresh();
-  }
-});
-
 // ============ 会话实时输出（Open Chat 任务事件总线） ============
 
 /** Native turns expose protocol-level completion; ACP keeps this activity timer as a fallback. */
@@ -1811,14 +1526,11 @@ const startAcpLiveStream = () => {
   const conversationId = currentConversationKey.value || ensureDraftConversationKey();
   const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
   if (!conversation) return;
-  const selectedRun = currentOpenChatRun.value;
-  const isRunning = Boolean(selectedRun) || acpRunState.value?.state === "running";
-  if (!isRunning || activeSessionRuns.has(conversationId)) return;
-  // The UI key can be a provider-session-derived key after a page refresh.
-  // The live-run registry is indexed by its gateway conversation id, so use
-  // the matched run id for the subscription while keeping the UI key for
-  // message updates and queue state.
-  const streamConversationId = selectedRun?.conversationId || conversationId;
+  if (acpRunState.value?.state !== "running") return;
+  if (activeSessionRuns.has(conversationId)) return;
+  // 实时流注册表按网关会话 id 索引；UI key 与其一致（refreshAcpSession 返回的
+  // conversationId），仅消息更新与队列状态继续使用 UI key。
+  const streamConversationId = acpSession.value?.conversationId || conversationId;
   const streamKey = `${activeAgentId.value}:${streamConversationId}`;
   if (acpStreamController.value && acpStreamConversationKey === streamKey) return;
   stopAcpLiveStream();
@@ -1834,10 +1546,8 @@ const startAcpLiveStream = () => {
       acpStreamConversationKey = "";
       if (outcome === "disconnected") return;
       finalizeAcpStreamMessages();
-      // End the cached run before refreshing. Otherwise a 204 caused by the
-      // run finishing between refresh and subscribe immediately reopens the same
-      // stream and creates a tight request loop.
-      markConversationRunIdle(conversationId);
+      // 先清运行态再刷新，避免「刷新与订阅之间回合恰好结束」的 204 立即
+      // 重开同一条流形成紧绷请求循环。
       acpRunState.value = null;
       const manuallyStopped = manuallyStoppedConversationKeys.delete(conversationId);
       if (outcome === "failed") {
@@ -1865,7 +1575,9 @@ const startAcpLiveStream = () => {
           scheduleNextQueuedMessage(conversationId);
         }
         notifyTaskCompletion({
-          key: `task:${activeAgentId.value}:${conversationId}:${selectedRun?.startedAt ?? Date.now()}`,
+          key: `task:${activeAgentId.value}:${conversationId}:${
+            conversationBusyStates.value[conversationId]?.startedAt ?? Date.now()
+          }`,
           agentId: activeAgentId.value,
           conversationKey: conversationId,
         });
@@ -1873,36 +1585,28 @@ const startAcpLiveStream = () => {
         conversation.queuePaused = true;
         schedulePersistState();
       }
-      restartSessionRefresh();
     },
   );
   acpStreamController.value = controller;
 };
 
-watch(
-  [acpRunState, currentOpenChatRun, isRequesting, currentConversationKey, activeAgentId],
-  () => {
-    if (activeSessionRuns.has(currentConversationKey.value)) {
-      stopAcpLiveStream();
-      return;
-    }
-    if (currentOpenChatRun.value || acpRunState.value?.state === "running") {
-      startAcpLiveStream();
-    } else {
-      stopAcpLiveStream();
-    }
-  },
-);
+watch([acpRunState, isRequesting, currentConversationKey, activeAgentId], () => {
+  if (activeSessionRuns.has(currentConversationKey.value)) {
+    stopAcpLiveStream();
+    return;
+  }
+  if (acpRunState.value?.state === "running") {
+    startAcpLiveStream();
+  } else {
+    stopAcpLiveStream();
+  }
+});
 
 watch([activeAgentId, currentConversationKey, isHydrating], ([, key], [, previousKey]) => {
   // Selecting another conversation is an explicit user/navigation action, so
   // its provider history may become authoritative again.
   if (key && key !== previousKey) failedHistoryRefreshLocks.delete(key);
   void refreshAcpSession();
-});
-
-watch(activeAgentId, () => {
-  restartSessionRefresh();
 });
 
 watch(currentConversationKey, (key) => {
@@ -2009,7 +1713,6 @@ onMounted(async () => {
   // Release session/config watchers only after the final route conversation
   // is known. Releasing earlier creates a throwaway draft session request.
   isHydrating.value = false;
-  restartSessionRefresh();
 });
 
 onBeforeUnmount(() => {
@@ -2019,9 +1722,14 @@ onBeforeUnmount(() => {
   document.removeEventListener("visibilitychange", handleVisibilityChange);
   window.removeEventListener("mousemove", handleResizeMove);
   window.removeEventListener("mouseup", handleResizeEnd);
-  stopSessionRefresh();
   stopAcpLiveStream();
   if (queuedMessageTimer) clearTimeout(queuedMessageTimer);
+  // 卸载前把尚未落盘的任务变更刷进 IndexedDB
+  if (persistTasksTimer) {
+    clearTimeout(persistTasksTimer);
+    persistTasksTimer = null;
+    void saveTasks(taskList.value);
+  }
 });
 
 // ============ 面板拖拽调整宽度 ============
@@ -2199,15 +1907,6 @@ const getRequestSystemPrompt = (baseSystemPrompt: string) => {
   return composedPrompt;
 };
 
-interface SubmitMessageOptions {
-  extraInfo?: Record<string, unknown>;
-  systemPrompt?: string;
-  /** 随消息发送的附件（已上传到网关，携带持久引用）。 */
-  attachments?: UploadedAttachment[];
-  goal?: string;
-  instruction?: string;
-}
-
 /**
  * 草稿态落地当前会话：需要发送或入队时若还没有会话则新建并写入侧栏，
  * 返回当前会话（草稿态创建失败时为 undefined）。
@@ -2258,7 +1957,6 @@ const finalizeSessionRun = (convKey: string, outcome: "success" | "error" | "abo
     }
   }
 
-  markConversationRunIdle(convKey);
   attachPendingSearchSources(convKey);
   pendingPermissions.delete(convKey);
   optimisticMessages.delete(convKey);
@@ -2286,7 +1984,6 @@ const finalizeSessionRun = (convKey: string, outcome: "success" | "error" | "abo
   }
 
   schedulePersistState();
-  if (isAcpAgent.value) restartSessionRefresh();
 };
 
 const runSessionRequest = (
@@ -2443,7 +2140,6 @@ const runSessionRequest = (
       sessionProvider.request.options,
     );
     sessionProvider.request.run(transformed);
-    if (isAcpAgent.value) restartSessionRefresh();
   } catch (err) {
     finalizeSessionRun(convKey, "error");
     throw err;
@@ -2795,13 +2491,16 @@ const handleModelChange = async (key: string) => {
     message.warning("请先停止当前会话的任务再切换模型");
     return;
   }
+  // 切换模型只影响后续请求，保持在当前会话内，不清空聊天记录。
   if (!isAcpAgent.value) {
     currentModel.value = key;
-    currentConversationKey.value = "";
-    showWelcome.value = true;
-    historyBack.value = [];
-    historyForward.value = [];
-    syncConversationRoute("replace");
+    if (currentConversationKey.value) {
+      const conversation = getCurrentConversation();
+      if (conversation) {
+        conversation.modelId = key;
+        schedulePersistState();
+      }
+    }
     return;
   }
   if (isConversationRunning(currentConversationKey.value) || acpSessionLoading.value) return;
@@ -2819,11 +2518,12 @@ const handleModelChange = async (key: string) => {
       projectPath.value,
       isAcpAgent.value ? getCurrentConversation()?.providerSessionId : "",
     );
-    currentConversationKey.value = "";
-    showWelcome.value = true;
-    historyBack.value = [];
-    historyForward.value = [];
-    syncConversationRoute("replace");
+    // ACP 配置写的是当前服务端会话；本地同样把模型记到当前会话上
+    const conversation = getCurrentConversation();
+    if (conversation) {
+      conversation.modelId = key;
+      schedulePersistState();
+    }
     rememberAgentDefaultModel(activeAgentId.value, key);
     message.success(`已切换到 ${inputCurrentModelLabel.value}`);
   } catch (error) {
@@ -3204,6 +2904,8 @@ const handleCreateSessionForTask = (taskId: string) => {
   schedulePersistState();
   boardOpenKey.value = String(newKey);
   currentConversationKey.value = String(newKey);
+  // 新会话无消息：立即显示欢迎态，避免聊天区短暂空白看起来像没有切换
+  showWelcome.value = true;
   // 同步 URL，避免停留在上一个会话的路径（刷新后会恢复到错误会话）。
   syncConversationRoute("push");
 };
@@ -3237,244 +2939,158 @@ const handleRemoveSessionLink = (taskId: string, sessionKey: string) => {
 const handleCommandPaletteSelectConversation = (key: string) => {
   handleActiveChange(key);
 };
-</script>
 
+const openCommandPalette = () => {
+  commandPaletteOpen.value = true;
+};
+
+// ============ 工作区上下文（下发到展示层） ============
+// reactive 组装：ref / computed 在代理上访问即解包，模板里 `ws.x` 直接可读写。
+
+const workspace = reactive({
+  // 全局外观（dark / themeMode 是 props，脚本中须经由 getter 保持响应式）
+  get dark() {
+    return props.dark;
+  },
+  get themeMode() {
+    return props.themeMode;
+  },
+  toggleTheme: () => emit("toggleTheme"),
+  setThemeMode: (mode: "system" | "light" | "dark") => emit("themeModeChange", mode),
+
+  // 当前会话
+  content,
+  currentConversationKey,
+  currentConversationTitle,
+  currentConversationMessages,
+  bubbleItems,
+  searchResultsByMessageId,
+  showWelcome,
+  currentConversationBusyState,
+  isRequesting,
+  inputRunning,
+  inputUnavailable,
+  currentQueuedMessages,
+  currentQueuePaused,
+  acpRunState,
+  inputCurrentModel,
+  inputCurrentModelLabel,
+  inputModelCatalog,
+  thinkingEnabled,
+  workMode,
+  effectivePermissionMode,
+  isPiAgent,
+  pendingPermission,
+  fileModeEnabled,
+  rightPanelOpen,
+  workspaceAvailable,
+  workspaceDiffStats,
+  historyBack,
+  historyForward,
+  autoScrollMode,
+
+  // 供应商 / 项目
+  agents,
+  activeAgentId,
+  activeAgent,
+  isAcpAgent,
+  acpSessionLoading,
+  projectPath,
+  projectPathOptions,
+  projectPathEnabled,
+
+  // 会话与任务集合
+  conversationList,
+  visibleConversationList,
+  taskList,
+  openTaskId,
+  currentTask,
+  boardOpenKey,
+  drawerWidth,
+  taskNowTick,
+  boardStatusSignals,
+
+  // 浮层
+  conversationsOpen,
+  sidebarWidth,
+  commandPaletteOpen,
+  settingsOpen,
+  taskCompletionNotificationsEnabled,
+  browserNotificationsSupported,
+
+  // 会话操作
+  handleSidebarToggle,
+  handleExportLocalHistory,
+  handleClearLocalHistory,
+  handleRenameConversation,
+  handlePinConversation,
+  handleArchiveConversation,
+  handleDeleteConversation,
+  handleSidebarRename,
+  handleNewConversation,
+  handleActiveChange,
+  handleAgentChange,
+  handleCommandPaletteSelectConversation,
+  openCommandPalette,
+  closeBoardDrawer,
+
+  // 消息输入 / 请求
+  handleChange,
+  handleCancel,
+  handleSubmit,
+  handleReloadMessage,
+  handlePromptClick,
+  handleQueuedMessageChange,
+  handleQueuedMessageRemove,
+  handleQueuedMessageClear,
+  handleQueuedMessageSend,
+  handleModelChange,
+  handleThinkingChange,
+  handleModeChange,
+  handlePermissionChange,
+  handlePermissionResponse,
+  handleFileModeChange,
+  handleProjectPathChange,
+  handleProjectPathRemove,
+  handleAutoScrollModeChange,
+
+  // 设置 / 通知
+  handleTaskCompletionNotificationsChange,
+  handleTestTaskCompletionNotification,
+
+  // 任务看板
+  handleTaskOpen,
+  handleTaskMove,
+  handleTaskCreate,
+  handleTaskUpdateTitle,
+  handleTaskUpdate,
+  handleTaskArchive,
+  handleTaskDuplicate,
+  handleTaskDelete,
+  handleCreateSessionForTask,
+  handleOpenSessionFromTask,
+  handleRetrySessionForTask,
+  handleRemoveSessionLink,
+  closeTaskDrawer,
+}) satisfies Workspace;
+
+provideWorkspace(workspace);
+</script>
 <template>
   <div
-    class="chat-app chat-layout relative flex h-screen min-h-[100dvh] overflow-hidden bg-brand-background text-brand-foreground selection:bg-brand-surface-subtle selection:text-brand-foreground"
+    class="workspace-root relative flex h-screen min-h-[100dvh] flex-col overflow-hidden bg-brand-background text-brand-foreground selection:bg-brand-surface-subtle selection:text-brand-foreground"
   >
+    <!-- 顶部布局切换：横线 hover 唤起居中 Segmented -->
+    <TopTabBar v-model="viewMode" />
+
     <a class="skip-link" href="#chat-content">跳到消息内容</a>
 
-    <div class="chat-main flex min-w-0 flex-1 flex-col overflow-hidden bg-brand-workspace">
-      <TaskBoardView
-        :tasks="taskList"
-        :conversation-list="conversationList"
-        :open-task-id="openTaskId"
-        :status-signals="boardStatusSignals"
-        :agents="agents"
-        :project-path-options="projectPathOptions"
-        :current-project-path="projectPath"
-        :dark="dark"
-        @open-task="handleTaskOpen"
-        @move-task="handleTaskMove"
-        @create-task="handleTaskCreate"
-        @update-task-title="handleTaskUpdateTitle"
-        @archive-task="handleTaskArchive"
-        @duplicate-task="handleTaskDuplicate"
-        @delete-task="handleTaskDelete"
-        @toggle-theme="emit('toggleTheme')"
-        @open-settings="settingsOpen = true"
-      />
+    <div class="relative min-h-0 flex-1 overflow-hidden">
+      <BoardPage v-if="viewMode === 'board'" />
+      <ChatPage v-else id="chat-content" />
     </div>
-    <!-- 任务抽屉：split 模式 左任务｜右对话（新建/打开会话同屉） -->
-    <TaskDetailDrawer
-      :open="Boolean(openTaskId)"
-      :task="currentTask"
-      :conversation-list="conversationList"
-      :status-signals="boardStatusSignals"
-      :now-tick="taskNowTick"
-      :split="true"
-      :active-session-key="boardOpenKey"
-      :project-path-options="projectPathOptions"
-      :agents="agents"
-      :active-agent-id="activeAgentId"
-      @close="closeTaskDrawer"
-      @update-task="handleTaskUpdate"
-      @create-session="handleCreateSessionForTask"
-      @open-session="handleOpenSessionFromTask"
-      @retry-session="handleRetrySessionForTask"
-      @remove-session-link="handleRemoveSessionLink"
-      @delete-session="handleDeleteConversation"
-      @agent-change="handleAgentChange"
-      @rename-session="handleSidebarRename"
-    >
-      <template #chat>
-        <template v-if="boardOpenKey">
-          <div class="flex h-full min-h-0 flex-col overflow-hidden">
-            <ChatHeader
-              :title="currentConversationTitle"
-              :sidebar-open="true"
-              :right-panel-open="rightPanelOpen"
-              :right-panel-available="workspaceAvailable"
-              :syncing="isRequesting"
-              :can-go-back="historyBack.length > 0"
-              :can-go-forward="historyForward.length > 0"
-              :diff-added="workspaceDiffStats.added"
-              :diff-removed="workspaceDiffStats.removed"
-              :show-close="true"
-              @toggle-sidebar="handleSidebarToggle"
-              @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
-              @export="handleExportLocalHistory"
-              @rename="handleRenameConversation"
-              @pin="handlePinConversation"
-              @archive="handleBoardArchiveConversation(currentConversationKey)"
-              @delete="handleBoardDeleteConversation(currentConversationKey)"
-              @close="closeBoardDrawer"
-            />
-            <div class="relative min-h-0 flex-1 overflow-hidden">
-              <ChatMessages
-                :show-welcome="
-                  showWelcome &&
-                  currentConversationMessages.length === 0 &&
-                  !currentConversationBusyState
-                "
-                :bubble-items="bubbleItems"
-                :dark="dark"
-                :conversation-key="currentConversationKey"
-                :search-results-by-message-id="searchResultsByMessageId"
-                :working="Boolean(currentConversationBusyState)"
-                :working-started-at-ms="currentConversationBusyState?.startedAt"
-                :auto-scroll-mode="autoScrollMode"
-                :project-path="projectPath"
-                :project-path-options="projectPathOptions"
-                @reload="handleReloadMessage"
-                @prompt-click="handlePromptClick"
-                @project-path-change="handleProjectPathChange"
-                @project-path-remove="handleProjectPathRemove"
-              />
-            </div>
-            <ChatInput
-              v-model="content"
-              :loading="inputRunning"
-              :disabled="inputUnavailable"
-              :queued-messages="currentQueuedMessages"
-              :queue-paused="currentQueuePaused"
-              :run-state="acpRunState?.state ?? null"
-              :current-model="inputCurrentModel"
-              :current-model-label="inputCurrentModelLabel"
-              :model-catalog="inputModelCatalog"
-              :thinking-enabled="thinkingEnabled"
-              :mode="workMode"
-              :permission="effectivePermissionMode"
-              :permission-locked="isPiAgent"
-              :pending-permission="pendingPermission"
-              :file-mode-enabled="fileModeEnabled"
-              :project-path="projectPath"
-              :project-path-options="projectPathOptions"
-              :project-path-enabled="projectPathEnabled"
-              :agent-mode="isAcpAgent"
-              :agent-available="activeAgent.available"
-              :agent-configuring="acpSessionLoading"
-              :is-oh-my-pi="isPiAgent"
-              @change="handleChange"
-              @cancel="handleCancel"
-              @submit="handleSubmit"
-              @queued-message-change="handleQueuedMessageChange"
-              @queued-message-remove="handleQueuedMessageRemove"
-              @queued-message-clear="handleQueuedMessageClear"
-              @queued-message-send="handleQueuedMessageSend"
-              @model-change="handleModelChange"
-              @thinking-change="handleThinkingChange"
-              @mode-change="handleModeChange"
-              @permission-change="handlePermissionChange"
-              @permission-response="handlePermissionResponse"
-              @file-mode-change="handleFileModeChange"
-              @project-path-change="handleProjectPathChange"
-              @project-path-remove="handleProjectPathRemove"
-            />
-          </div>
-        </template>
-      </template>
-    </TaskDetailDrawer>
 
-    <!-- 会话抽屉：仅当未打开任务时（侧栏直接打开会话） -->
-    <Drawer
-      v-if="!openTaskId"
-      class="board-drawer"
-      :open="Boolean(boardOpenKey)"
-      placement="right"
-      :width="drawerWidth"
-      :keyboard="false"
-      :body-style="{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }"
-      :header-style="{ display: 'none' }"
-      destroy-on-close
-      @close="closeBoardDrawer"
-    >
-      <template v-if="boardOpenKey">
-        <ChatHeader
-          :title="currentConversationTitle"
-          :sidebar-open="true"
-          :right-panel-open="rightPanelOpen"
-          :right-panel-available="workspaceAvailable"
-          :syncing="isRequesting"
-          :can-go-back="historyBack.length > 0"
-          :can-go-forward="historyForward.length > 0"
-          :diff-added="workspaceDiffStats.added"
-          :diff-removed="workspaceDiffStats.removed"
-          :show-close="true"
-          @toggle-sidebar="handleSidebarToggle"
-          @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
-          @export="handleExportLocalHistory"
-          @rename="handleRenameConversation"
-          @pin="handlePinConversation"
-          @archive="handleBoardArchiveConversation(currentConversationKey)"
-          @delete="handleBoardDeleteConversation(currentConversationKey)"
-          @close="closeBoardDrawer"
-        />
-        <div class="relative min-h-0 flex-1 overflow-hidden">
-          <ChatMessages
-            :show-welcome="
-              showWelcome &&
-              currentConversationMessages.length === 0 &&
-              !currentConversationBusyState
-            "
-            :bubble-items="bubbleItems"
-            :dark="dark"
-            :conversation-key="currentConversationKey"
-            :search-results-by-message-id="searchResultsByMessageId"
-            :working="Boolean(currentConversationBusyState)"
-            :working-started-at-ms="currentConversationBusyState?.startedAt"
-            :auto-scroll-mode="autoScrollMode"
-            :project-path="projectPath"
-            :project-path-options="projectPathOptions"
-            @reload="handleReloadMessage"
-            @prompt-click="handlePromptClick"
-            @project-path-change="handleProjectPathChange"
-            @project-path-remove="handleProjectPathRemove"
-          />
-        </div>
-        <ChatInput
-          v-model="content"
-          :loading="inputRunning"
-          :disabled="inputUnavailable"
-          :queued-messages="currentQueuedMessages"
-          :queue-paused="currentQueuePaused"
-          :run-state="acpRunState?.state ?? null"
-          :current-model="inputCurrentModel"
-          :current-model-label="inputCurrentModelLabel"
-          :model-catalog="inputModelCatalog"
-          :thinking-enabled="thinkingEnabled"
-          :mode="workMode"
-          :permission="effectivePermissionMode"
-          :permission-locked="isPiAgent"
-          :pending-permission="pendingPermission"
-          :file-mode-enabled="fileModeEnabled"
-          :project-path="projectPath"
-          :project-path-options="projectPathOptions"
-          :project-path-enabled="projectPathEnabled"
-          :agent-mode="isAcpAgent"
-          :agent-available="activeAgent.available"
-          :agent-configuring="acpSessionLoading"
-          :is-oh-my-pi="isPiAgent"
-          @change="handleChange"
-          @cancel="handleCancel"
-          @submit="handleSubmit"
-          @queued-message-change="handleQueuedMessageChange"
-          @queued-message-remove="handleQueuedMessageRemove"
-          @queued-message-clear="handleQueuedMessageClear"
-          @queued-message-send="handleQueuedMessageSend"
-          @model-change="handleModelChange"
-          @thinking-change="handleThinkingChange"
-          @mode-change="handleModeChange"
-          @permission-change="handlePermissionChange"
-          @permission-response="handlePermissionResponse"
-          @file-mode-change="handleFileModeChange"
-          @project-path-change="handleProjectPathChange"
-          @project-path-remove="handleProjectPathRemove"
-        />
-      </template>
-    </Drawer>
-
+    <!-- 全局浮层：两个页面共用 -->
     <CommandPalette
       :open="commandPaletteOpen"
       :conversation-list="visibleConversationList"
@@ -3509,96 +3125,7 @@ const handleCommandPaletteSelectConversation = (key: string) => {
 </template>
 
 <style scoped>
-/* 767px 为非常规断点（与脚本中 matchMedia 保持一致），display 切换整体保留在 CSS 中 */
-.sidebar-backdrop {
-  display: none;
-}
-
-/* 桌面端收起 / 展开：宽度过渡；拖拽调宽时禁掉过渡，否则手柄跟不上鼠标 */
-.chat-layout > .sidebar-shell {
-  transition: width 240ms cubic-bezier(0.2, 0, 0, 1);
-}
-.chat-layout > .sidebar-shell.sidebar-shell-resizing {
-  transition: none;
-}
-
 :deep(.chat-markdown a) {
   color: var(--brand-accent);
-}
-
-/* 抽屉内右面板：覆盖在消息流之上 */
-:deep(.board-drawer .ant-drawer-body) {
-  position: relative;
-}
-
-.board-drawer-panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: var(--z-sidebar);
-  width: min(420px, 60%);
-  box-shadow: -18px 0 46px rgba(9, 9, 11, 0.18);
-  background: var(--brand-workspace);
-}
-
-/* 抽屉左缘拖拽手柄 */
-.board-drawer-resize {
-  position: fixed;
-  top: 0;
-  bottom: 0;
-  z-index: calc(var(--z-modal) + 1);
-  width: 6px;
-  border: 0;
-  padding: 0;
-  cursor: col-resize;
-  background: transparent;
-}
-
-.board-drawer-resize:hover {
-  background: var(--brand-resize, rgba(24, 24, 27, 0.12));
-}
-
-@media (max-width: 767px) {
-  .chat-main {
-    width: 100%;
-  }
-
-  /* 移动端侧栏变为覆盖式抽屉；宽度压住行内样式，收起时才有完整的滑出动画 */
-  .chat-layout > .sidebar-shell {
-    position: fixed;
-    z-index: var(--z-sidebar);
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: min(300px, 86vw) !important;
-    height: 100dvh;
-    box-shadow: 18px 0 46px rgba(9, 9, 11, 0.18);
-    transition: transform 220ms ease;
-    transform: translateX(-104%);
-  }
-  .chat-layout > .sidebar-shell.sidebar-shell-open {
-    transform: translateX(0);
-  }
-  /* 抽屉宽度由 shell 决定，内层固定宽度只服务于桌面端裁切动画 */
-  .chat-layout > .sidebar-shell .sidebar-clip > div {
-    width: 100% !important;
-  }
-
-  /* 移动端右侧面板同样覆盖 */
-  .chat-layout > .right-panel-shell {
-    position: fixed;
-    z-index: var(--z-sidebar);
-    top: 0;
-    right: 0;
-    bottom: 0;
-    height: 100dvh;
-    box-shadow: -18px 0 46px rgba(9, 9, 11, 0.18);
-    transition: transform 220ms ease;
-    transform: translateX(104%);
-  }
-  .chat-layout > .right-panel-shell.right-panel-shell-open {
-    transform: translateX(0);
-  }
 }
 </style>

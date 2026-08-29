@@ -54,18 +54,6 @@ export interface AcpSessionStateView {
   running: boolean;
 }
 
-interface AcpProviderSessionView {
-  sessionId: string;
-  cwd: string;
-  title?: string;
-  updatedAt?: string;
-}
-
-interface AcpProviderSessionsView {
-  supported: boolean;
-  sessions: AcpProviderSessionView[];
-}
-
 interface AcpRuntime {
   config: AcpAgentConfig;
   child: ChildProcessWithoutNullStreams | null;
@@ -159,52 +147,6 @@ export class AcpManager {
         ...(!adapterAvailable && config.adapterHint ? { adapterHint: config.adapterHint } : {}),
       };
     });
-  }
-
-  listSessions(agentId?: string): Array<{
-    agentId: string;
-    conversationId: string;
-    sessionId: string;
-    createdAt: number;
-    lastUsed: number;
-    running: boolean;
-  }> {
-    return [...this.sessions.values()]
-      .filter((entry) => !agentId || entry.agentId === agentId)
-      .map((entry) => ({
-        agentId: entry.agentId,
-        conversationId: entry.conversationId,
-        sessionId: entry.sessionId,
-        createdAt: entry.createdAt,
-        lastUsed: entry.lastUsed,
-        running: this.activeRuns.has(entry.sessionId),
-      }))
-      .sort((left, right) => right.lastUsed - left.lastUsed);
-  }
-
-  async listProviderSessions(agentId: string): Promise<AcpProviderSessionsView> {
-    const runtime = this.getAvailableRuntime(agentId);
-    const connection = await this.connectionFor(runtime);
-    if (runtime.initialized?.agentCapabilities?.sessionCapabilities?.list == null) {
-      return { supported: false, sessions: [] };
-    }
-
-    const sessions: AcpProviderSessionView[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < 100; page += 1) {
-      const response = await connection.listSessions(cursor ? { cursor } : {});
-      sessions.push(
-        ...response.sessions.map((session) => ({
-          sessionId: session.sessionId,
-          cwd: session.cwd,
-          ...(session.title ? { title: session.title } : {}),
-          ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
-        })),
-      );
-      cursor = response.nextCursor || undefined;
-      if (!cursor) break;
-    }
-    return { supported: true, sessions };
   }
 
   async getSessionState(

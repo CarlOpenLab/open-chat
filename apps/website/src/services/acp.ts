@@ -61,29 +61,6 @@ export interface AcpSessionState {
   running?: boolean;
 }
 
-interface AcpProviderSession {
-  sessionId: string;
-  cwd: string;
-  title?: string;
-  updatedAt?: string;
-}
-
-interface AcpProviderSessions {
-  supported: boolean;
-  sessions: AcpProviderSession[];
-}
-
-export interface OpenChatSessionView {
-  agentId: string;
-  conversationId: string;
-  sessionId: string;
-  createdAt: number;
-  lastUsed: number;
-  running: boolean;
-  startedAt?: number;
-  projectPath?: string;
-}
-
 export type AcpSessionStreamOutcome = "completed" | "failed" | "disconnected";
 
 export const API_AGENT: AgentView = {
@@ -121,23 +98,6 @@ export async function loadAcpSession(
   if (projectPath.trim()) query.set("projectPath", projectPath.trim());
   if (providerSessionId.trim()) query.set("providerSessionId", providerSessionId.trim());
   return requestAcpSession(`${API_BASE_URL}/api/acp/session?${query}`);
-}
-
-export async function loadAcpProviderSessions(agentId: string): Promise<AcpProviderSessions> {
-  const query = new URLSearchParams({ agentId });
-  return requestJson<AcpProviderSessions>(`${API_BASE_URL}/api/acp/provider-sessions?${query}`);
-}
-
-export async function loadOpenChatSessions(
-  agentId: string,
-  signal?: AbortSignal,
-): Promise<OpenChatSessionView[]> {
-  const query = new URLSearchParams({ agentId });
-  const data = await requestJson<{ sessions?: OpenChatSessionView[] }>(
-    `${API_BASE_URL}/api/acp/sessions?${query}`,
-    { signal },
-  );
-  return Array.isArray(data.sessions) ? data.sessions : [];
 }
 
 export async function setAcpSessionConfig(

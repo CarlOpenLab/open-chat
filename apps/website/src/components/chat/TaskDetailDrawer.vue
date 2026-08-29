@@ -55,23 +55,18 @@ const emit = defineEmits<{
 }>();
 
 const useStyles = createStyles(({ token, css }) => ({
-  immutableHint: css`
-    border: 1px solid ${token.colorBorder};
-    color: ${token.colorTextSecondary};
-    background: ${token.colorFillQuaternary};
-  `,
   sessionRow: css`
-    background: ${token.colorBgContainer};
-    border: 1px solid ${token.colorBorderSecondary};
+    background: var(--card, #ffffff);
+    border: 1px solid var(--border);
     border-radius: ${token.borderRadiusLG}px;
     transition: all ${token.motionDurationMid} ${token.motionEaseInOut};
     &:hover {
-      border-color: ${token.colorBorder};
-      background: ${token.colorFillQuaternary};
+      border-color: var(--border-strong);
+      background: var(--fill-faint);
     }
     &.is-active {
-      border-color: ${token.colorPrimary};
-      background: ${token.colorPrimaryBg};
+      border-color: var(--brand-primary);
+      background: var(--primary-subtle);
     }
   `,
 }));
@@ -408,7 +403,7 @@ const cancelEditSession = () => {
                   </div>
                   <div v-else class="flex items-center gap-1.5 flex-1 min-w-0">
                     <span
-                      class="text-12px font-medium text-foreground truncate cursor-pointer hover:text-primary transition-colors"
+                      class="text-12px font-medium text-foreground truncate cursor-pointer hover:text-brand-accent transition-colors"
                       :title="`点击打开会话，双击修改标题：${conv.label}`"
                       @dblclick.stop="startEditSession(conv)"
                     >
@@ -518,9 +513,6 @@ const cancelEditSession = () => {
         <header class="flex items-center justify-between px-4 py-3 border-b border-border">
           <span class="inline-flex items-center gap-1.5 text-12px text-muted-foreground">
             <Folder class="!h-3 !w-3" /> {{ projectName }}
-            <span :class="['text-11px rounded-full px-1.5 py-0.5', styles.immutableHint]"
-              >创建后项目不可更改</span
-            >
           </span>
           <Button type="text" size="small" @click="emit('close')">×</Button>
         </header>

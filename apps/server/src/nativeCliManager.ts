@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ServerResponse } from "node:http";
 import { createReadStream } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
@@ -42,18 +42,6 @@ export interface NativeSessionStateView {
   configOptions: SessionConfigOption[];
   modes: null;
   messages?: TranscriptMessage[];
-}
-
-interface NativeProviderSessionView {
-  sessionId: string;
-  cwd: string;
-  title?: string;
-  updatedAt?: string;
-}
-
-export interface NativeProviderSessionsView {
-  supported: boolean;
-  sessions: NativeProviderSessionView[];
 }
 
 interface NativeModel {
@@ -152,19 +140,6 @@ export class NativeCliManager {
     });
   }
 
-  listSessions(agentId?: string): Array<{
-    agentId: string;
-    conversationId: string;
-    sessionId: string;
-    createdAt: number;
-    lastUsed: number;
-  }> {
-    return [...this.sessions.values()]
-      .filter((session) => !agentId || session.agentId === agentId)
-      .map(({ runtime: _runtime, models: _models, model: _model, ...session }) => session)
-      .sort((left, right) => right.lastUsed - left.lastUsed);
-  }
-
   async getSessionState(
     agentId: string,
     conversationId: string,
@@ -185,40 +160,6 @@ export class NativeCliManager {
       session.sessionId !== conversationId || Boolean(providerSessionId),
     );
     return sessionView(session, history);
-  }
-
-  async listProviderSessions(agentId: string): Promise<NativeProviderSessionsView> {
-    const agent = this.requireAgent(agentId);
-    const executable = resolveExecutable(agent.command);
-    if (!executable && agent.transport !== "opencode") return { supported: false, sessions: [] };
-    const cwd = agent.cwd || this.config.cwd || defaultWorkspaceDir();
-    switch (agent.transport) {
-      case "codex":
-        return {
-          supported: true,
-          sessions: await discoverCodexSessions(executable!, cwd, agent.args),
-        };
-      case "claude":
-        return { supported: true, sessions: await discoverClaudeSessions(cwd) };
-      case "pi":
-      case "omp":
-        return { supported: true, sessions: await discoverPiSessions(cwd, agent.transport) };
-      case "opencode": {
-        if (!this.localChat) return { supported: false, sessions: [] };
-        const sessions = await this.localChat.listProviderSessions(cwd);
-        return {
-          supported: true,
-          sessions: sessions.map((session) => ({
-            sessionId: session.sessionId,
-            cwd: session.cwd || cwd,
-            ...(session.title ? { title: session.title } : {}),
-            ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
-          })),
-        };
-      }
-      default:
-        return { supported: false, sessions: [] };
-    }
   }
 
   async setSessionConfigOption(
@@ -1520,133 +1461,9 @@ async function discoverCodexModels(
   }
 }
 
-async function discoverCodexSessions(
-  executable: string,
-  cwd: string,
-  extraArgs: string[],
-): Promise<NativeProviderSessionView[]> {
-  let exited: Error | null = null;
-  const rpc = new JsonRpcProcess(
-    executable,
-    ["app-server", "--stdio", ...extraArgs],
-    cwd,
-    () => {},
-    (error) => {
-      exited = error;
-    },
-  );
-  try {
-    await rpc.request("initialize", {
-      clientInfo: { name: "open-chat", title: "Open Chat", version: "0.1.0" },
-      capabilities: { experimentalApi: true },
-    });
-    rpc.notify("initialized", {});
-    const sessions: NativeProviderSessionView[] = [];
-    let cursor = "";
-    for (let page = 0; page < 100; page += 1) {
-      if (exited) throw exited;
-      const response = await rpc.request("thread/list", {
-        ...(cursor ? { cursor } : {}),
-        limit: 100,
-        sortKey: "recency_at",
-        sortDirection: "desc",
-        sourceKinds: ["appServer", "cli", "vscode"],
-      });
-      const result = asRecord(response.result) ?? {};
-      for (const threadValue of Array.isArray(result.data) ? result.data : []) {
-        const thread = asRecord(threadValue);
-        const id = stringValue(thread?.id);
-        if (!id) continue;
-        const updatedAt = numericValue(thread?.updatedAt);
-        sessions.push({
-          sessionId: id,
-          cwd: stringValue(thread?.cwd) || cwd,
-          ...(stringValue(thread?.name) || stringValue(thread?.preview)
-            ? { title: stringValue(thread?.name) || stringValue(thread?.preview) }
-            : {}),
-          ...(updatedAt !== undefined
-            ? { updatedAt: new Date(normalizeEpochMillis(updatedAt)).toISOString() }
-            : {}),
-        });
-      }
-      cursor = stringValue(result.nextCursor);
-      if (!cursor) break;
-    }
-    return sessions;
-  } finally {
-    rpc.close();
-  }
-}
-
-async function discoverClaudeSessions(cwd: string): Promise<NativeProviderSessionView[]> {
-  const root = join(homedir(), ".claude", "projects");
-  const projectDirs = await readdir(root, { withFileTypes: true }).catch(() => []);
-  const sessions: NativeProviderSessionView[] = [];
-  for (const project of projectDirs) {
-    if (!project.isDirectory()) continue;
-    const projectPath = join(root, project.name);
-    const files = await readdir(projectPath, { withFileTypes: true }).catch(() => []);
-    for (const file of files) {
-      if (!file.isFile() || !file.name.endsWith(".jsonl")) continue;
-      const sessionId = basename(file.name, ".jsonl");
-      const fullPath = join(projectPath, file.name);
-      const lines = await readJsonLines(fullPath, 200);
-      const title = firstConversationText(lines, "user");
-      const fileStat = await stat(fullPath).catch(() => undefined);
-      sessions.push({
-        sessionId,
-        cwd: project.name === encodeProjectPath(cwd) ? cwd : decodeClaudeProjectPath(project.name),
-        ...(title ? { title: title.slice(0, 120) } : {}),
-        ...(fileStat ? { updatedAt: fileStat.mtime.toISOString() } : {}),
-      });
-    }
-  }
-  return sessions.sort((left, right) =>
-    (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""),
-  );
-}
-
 /** pi / omp 的会话存储根目录：pi 在 ~/.pi/agent/sessions，omp 在 ~/.omp/agent/sessions。 */
 function piSessionRoot(transport: NativeTransport): string {
   return join(homedir(), transport === "omp" ? ".omp" : ".pi", "agent", "sessions");
-}
-
-async function discoverPiSessions(
-  cwd: string,
-  transport: NativeTransport,
-): Promise<NativeProviderSessionView[]> {
-  const root = piSessionRoot(transport);
-  const dirs = await readdir(root, { withFileTypes: true }).catch(() => []);
-  const sessions: NativeProviderSessionView[] = [];
-  for (const dir of dirs) {
-    if (!dir.isDirectory()) continue;
-    const files = await readdir(join(root, dir.name), { withFileTypes: true }).catch(() => []);
-    for (const file of files) {
-      if (!file.isFile() || !file.name.endsWith(".jsonl")) continue;
-      const fullPath = join(root, dir.name, file.name);
-      const lines = await readJsonLines(fullPath, 200);
-      const header = lines.find((line) => line.type === "session");
-      const sessionId = stringValue(header?.id) || basename(file.name, ".jsonl");
-      // pi / omp 的历史标题：session_info.name（pi 旧格式）与 title.title（omp 格式），
-      // 取最后一条非空值，回退到首条用户消息。
-      const title =
-        lines
-          .filter((line) => line.type === "session_info" || line.type === "title")
-          .map((line) => stringValue(line.name) || stringValue(line.title))
-          .filter(Boolean)
-          .at(-1) || firstMessageText(lines, "user");
-      const fileStat = await stat(fullPath).catch(() => undefined);
-      sessions.push({
-        sessionId,
-        cwd: stringValue(header?.cwd) || cwd,
-        ...(title ? { title: title.slice(0, 120) } : {}),
-        ...(fileStat ? { updatedAt: fileStat.mtime.toISOString() } : {}),
-      });
-    }
-  }
-  return sessions.sort((left, right) =>
-    (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""),
-  );
 }
 
 async function findPiSessionPath(
@@ -1727,24 +1544,6 @@ async function readJsonLines(
   return values;
 }
 
-function firstConversationText(lines: Array<Record<string, unknown>>, role: string): string {
-  for (const line of lines) {
-    const message = asRecord(line.message);
-    if (stringValue(message?.role) !== role) continue;
-    const text = contentText(message?.content) || stringValue(message?.content);
-    if (text) return text;
-  }
-  return "";
-}
-
-function firstMessageText(lines: Array<Record<string, unknown>>, role: string): string {
-  return firstConversationText(lines, role);
-}
-
-function encodeProjectPath(value: string): string {
-  return value.replaceAll("/", "-");
-}
-
 function encodePiProjectPath(value: string, transport: NativeTransport): string {
   if (transport === "omp") {
     // omp 的会话目录名：`-` + 相对 $HOME 的路径（`/` 转 `-`），例如
@@ -1754,10 +1553,6 @@ function encodePiProjectPath(value: string, transport: NativeTransport): string 
     return `-${relative.replace(/^\/+/, "").replaceAll("/", "-")}`;
   }
   return `--${value.replace(/^\/+/, "").replaceAll("/", "-")}--`;
-}
-
-function decodeClaudeProjectPath(value: string): string {
-  return value.startsWith("-") ? value.replaceAll("-", "/") : value;
 }
 
 async function readCodexSessionHistory(
@@ -2045,14 +1840,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-function numericValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function normalizeEpochMillis(value: number): number {
-  return value < 10_000_000_000 ? value * 1000 : value;
 }
 
 function rpcId(value: unknown): string {
