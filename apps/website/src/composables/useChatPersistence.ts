@@ -79,7 +79,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
         // 如任务「新建会话」），全部持久化，刷新后不丢失。
         Boolean(String(conversation.key ?? "").trim()),
       )
-      .map((conversation, index) => {
+      .map((conversation) => {
         const normalizedLabel =
           typeof conversation.label === "string" && conversation.label.trim()
             ? conversation.label
@@ -87,20 +87,9 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
         const normalizedGroup =
           typeof conversation.group === "string" ? conversation.group : "今天";
 
-        const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
-        const normalizedMessages = messages.map((item, messageIndex) => {
-          const fallbackId = `${Date.now()}-${index}-${messageIndex}`;
-          return {
-            id: item.id ?? fallbackId,
-            status: item.status,
-            message:
-              typeof item.message === "object" && item.message !== null
-                ? { ...item.message }
-                : ({ role: "assistant", content: String(item.message ?? "") } as XModelMessage),
-            ...(item.extraInfo ? { extraInfo: item.extraInfo } : {}),
-          };
-        });
-
+        // 消息内容不落本地：会话内容由网关按 sessionId 拉取（refreshAcpSession
+        // → loadAcpSession）。这里只持久化会话索引与关键元数据，避免长回合内容
+        // 反复全量写入 IndexedDB（旧实现单会话可膨胀到数 MB、刷新恢复还占内存）。
         return {
           key: String(conversation.key),
           label: normalizedLabel,
@@ -108,7 +97,6 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
           ...(typeof conversation.updatedAt === "number"
             ? { updatedAt: conversation.updatedAt }
             : {}),
-          messages: normalizedMessages,
           workspaceDrafts: Array.isArray(conversation.workspaceDrafts)
             ? conversation.workspaceDrafts
             : [],
@@ -295,7 +283,10 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
   watch(
     [conversationList, currentConversationKey],
     () => {
-      schedulePersistState();
+      // 流式期间每个 chunk 都会替换 messages（触发 deep watch），若每 250ms
+      // 全量深拷贝+序列化+写 IndexedDB，长回合会把写入队列与内存双双打爆。
+      // 回合运行期间跳过，回合结束时 finalizeSessionRun 会落一次持久化。
+      if (!isRequesting.value) schedulePersistState();
     },
     { deep: true },
   );

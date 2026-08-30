@@ -19,8 +19,8 @@ catalogs:
       specifier: ^0.0.1
       version: 0.0.1
     '@antdv-next/x-markdown':
-      specifier: ^0.1.2
-      version: 0.1.2
+      specifier: ^0.1.4
+      version: 0.1.4
     '@antdv-next/x-sdk':
       specifier: ^0.0.2
       version: 0.0.2
@@ -198,7 +198,7 @@ importers:
         version: 0.0.1(vue@3.5.31(typescript@5.9.3))
       '@antdv-next/x-markdown':
         specifier: 'catalog:'
-        version: 0.1.2(vue@3.5.31(typescript@5.9.3))
+        version: 0.1.4(vue@3.5.31(typescript@5.9.3))
       '@antdv-next/x-sdk':
         specifier: 'catalog:'
         version: 0.0.2(vue@3.5.31(typescript@5.9.3))
@@ -366,8 +366,8 @@ packages:
     peerDependencies:
       vue: '>=3.5.0'
 
-  '@antdv-next/x-markdown@0.1.2':
-    resolution: {integrity: sha512-1uiB6Bv/5P1nkWxnRFFHHxb5mzq30ZgQFf+0OPJathO4r0GaWxYcRlmiVAyCqOLU22cQZnlq8jUVTRcoXVZDuw==}
+  '@antdv-next/x-markdown@0.1.4':
+    resolution: {integrity: sha512-P7HFanpLrxmUYIj1DDuiKoz4oKJRoBJlQOX4IiKtnxRjEmYFrBFFRl3CKrLOkgKYIVCBWeWboJlJeGd4efT7SA==}
     peerDependencies:
       vue: '>=3.5.0'
 
@@ -3798,7 +3798,7 @@ snapshots:
     dependencies:
       vue: 3.5.31(typescript@5.9.3)
 
-  '@antdv-next/x-markdown@0.1.2(vue@3.5.31(typescript@5.9.3))':
+  '@antdv-next/x-markdown@0.1.4(vue@3.5.31(typescript@5.9.3))':
     dependencies:
       dompurify: 3.4.12
       katex: 0.16.47

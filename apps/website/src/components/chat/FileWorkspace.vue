@@ -13,6 +13,7 @@ import {
   type Component,
 } from "vue";
 import type { EditableWorkspaceFile } from "../../utils/fileWorkspace";
+import { isMarkdownPlainText } from "../../composables/markdownRenderLimits";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 import WorkspaceHeaderBar from "./WorkspaceHeaderBar.vue";
 import WorkspacePreviewTitle from "./WorkspacePreviewTitle.vue";
@@ -160,8 +161,16 @@ const downloadSelectedFile = () => {
         <template #previewRender="{ file }">
           <div v-if="resolvePreviewFile(file)" class="flex h-full min-h-0 w-full flex-col">
             <div class="min-h-0 flex-1 overflow-auto">
+              <pre
+                v-if="
+                  isMarkdownFile(resolvePreviewFile(file)!) &&
+                  markdownView === 'preview' &&
+                  isMarkdownPlainText(resolvePreviewFile(file)?.content ?? '', false)
+                "
+                class="m-0 w-full max-w-full whitespace-pre-wrap break-words px-6 pt-5 pb-10 text-[12.5px] leading-[1.7] text-brand-foreground"
+                >{{ resolvePreviewFile(file)?.content ?? "" }}</pre>
               <XMarkdown
-                v-if="isMarkdownFile(resolvePreviewFile(file)!) && markdownView === 'preview'"
+                v-else-if="isMarkdownFile(resolvePreviewFile(file)!) && markdownView === 'preview'"
                 :content="resolvePreviewFile(file)?.content ?? ''"
                 :components="markdownComponents"
                 :class-name="markdownClassName"
@@ -241,8 +250,16 @@ const downloadSelectedFile = () => {
         <template #previewRender="{ file }">
           <div v-if="resolvePreviewFile(file)" class="flex h-full min-h-0 w-full flex-col">
             <div class="min-h-0 flex-1 overflow-auto">
+              <pre
+                v-if="
+                  isMarkdownFile(resolvePreviewFile(file)!) &&
+                  markdownView === 'preview' &&
+                  isMarkdownPlainText(resolvePreviewFile(file)?.content ?? '', false)
+                "
+                class="m-0 w-full max-w-full whitespace-pre-wrap break-words px-6 pt-5 pb-10 text-[12.5px] leading-[1.7] text-brand-foreground"
+                >{{ resolvePreviewFile(file)?.content ?? "" }}</pre>
               <XMarkdown
-                v-if="isMarkdownFile(resolvePreviewFile(file)!) && markdownView === 'preview'"
+                v-else-if="isMarkdownFile(resolvePreviewFile(file)!) && markdownView === 'preview'"
                 :content="resolvePreviewFile(file)?.content ?? ''"
                 :components="markdownComponents"
                 :class-name="markdownClassName"

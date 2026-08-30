@@ -1,6 +1,7 @@
 <script lang="ts">
 import { CodeHighlighter, Mermaid } from "@antdv-next/x";
 import { defineComponent, h, inject, type VNode } from "vue";
+import { CODE_HIGHLIGHT_LIMIT } from "../../composables/markdownRenderLimits";
 import { markdownThemeKey } from "./markdownTheme";
 
 const extractText = (nodes: VNode[]): string =>
@@ -36,6 +37,9 @@ export default defineComponent({
 
       if (!isBlock && !language) return h("code", code);
       if (language === "mermaid") return h(Mermaid, { content: code });
+      if (code.length > CODE_HIGHLIGHT_LIMIT) {
+        return h("pre", { class: "xmd-plain-code" }, code);
+      }
 
       return h(CodeHighlighter, {
         content: code,

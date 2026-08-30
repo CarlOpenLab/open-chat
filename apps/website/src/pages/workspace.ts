@@ -73,7 +73,6 @@ export interface Workspace {
   workspaceDiffStats: { added: number; removed: number };
   historyBack: string[];
   historyForward: string[];
-  autoScrollMode: "follow" | "always" | "never";
 
   // ===== 供应商 / 项目 =====
   agents: AgentView[];
@@ -142,7 +141,6 @@ export interface Workspace {
   handleFileModeChange: (value: boolean) => void;
   handleProjectPathChange: (value: string) => void;
   handleProjectPathRemove: (value: string) => void;
-  handleAutoScrollModeChange: (mode: "follow" | "always" | "never") => void;
 
   // ===== 设置 / 通知 =====
   handleTaskCompletionNotificationsChange: (enabled: boolean) => Promise<void>;

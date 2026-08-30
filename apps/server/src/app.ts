@@ -43,6 +43,7 @@ import { resolveExecutable } from "./commandEnv";
 import { pickProjectDirectory } from "./projectPicker";
 import { writeNativeEvent } from "./nativeEvents";
 import { readGitWorkspace, switchGitBranch } from "./gitWorkspace";
+import { listSkills } from "./skills";
 
 /** 附件存储单例：落盘到 ~/.cc-hearts-open-code/attachments（OPEN_CHAT_DATA_DIR 可覆盖）。 */
 const attachments = attachmentStore;
@@ -249,6 +250,18 @@ export function createGatewayApp(
       res.json(await readGitWorkspace(projectPath));
     } catch (err) {
       return sendRouteError(res, err, "Git 状态读取失败");
+    }
+  });
+
+  // 输入区 "/" suggestion 的 skills 列表；projectPath 可选，缺省只返回全局。
+  app.get("/api/skills", async (req: Request, res: Response) => {
+    try {
+      if (!isLoopbackRequest(req)) throw GatewayError.unauthorized();
+      const rawProjectPath = optionalString(req.query.projectPath);
+      const projectPath = rawProjectPath ? parseProjectPath(rawProjectPath) : undefined;
+      res.json(await listSkills(projectPath ?? ""));
+    } catch (err) {
+      return sendRouteError(res, err, "Skills 列表读取失败");
     }
   });
 

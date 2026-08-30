@@ -1,21 +1,25 @@
 <script setup lang="ts">
 import { computed, ref, watch, onBeforeUnmount } from "vue";
-import { filterQuickCommands, type QuickCommandMeta } from "../../utils/senderCommands";
+import type { SkillsIndex } from "../../services/ai";
+import { filterSuggestionGroups, type SenderSuggestion } from "../../utils/senderCommands";
 
 interface Props {
   modelValue: string;
   visible?: boolean;
   isOhMyPi?: boolean;
+  /** 项目 / 全局 skills（Agent 会话才由 ChatInput 拉取）；空列表时对应分组隐藏。 */
+  skills?: SkillsIndex | null;
 }
 
 interface Emits {
-  (e: "select", command: QuickCommandMeta, remaining: string): void;
+  (e: "select", item: SenderSuggestion, remaining: string): void;
   (e: "close"): void;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   visible: true,
   isOhMyPi: false,
+  skills: null,
 });
 
 const emit = defineEmits<Emits>();
@@ -38,25 +42,31 @@ const argPart = computed(() => {
   return afterSlash.slice(spaceIndex + 1);
 });
 
-const filtered = computed(() => filterQuickCommands(query.value, Boolean(props.isOhMyPi)));
+const groups = computed(() =>
+  filterSuggestionGroups(query.value, props.skills, Boolean(props.isOhMyPi)),
+);
+
+/** 键盘导航把分组摊平成一个列表。 */
+const flatItems = computed(() => groups.value.flatMap((group) => group.items));
 
 const shouldShow = computed(() => {
   if (!props.visible) return false;
   const trimmed = props.modelValue.trimStart();
   if (!trimmed.startsWith("/")) return false;
+  const flat = flatItems.value;
   if (
     trimmed.includes(" ") &&
-    filtered.value.length === 1 &&
-    filtered.value[0].command.toLowerCase() === query.value.toLowerCase()
+    flat.length === 1 &&
+    flat[0].name.toLowerCase() === query.value.toLowerCase()
   ) {
     return false;
   }
-  return filtered.value.length > 0;
+  return flat.length > 0;
 });
 
 const selectedIndex = ref(0);
 
-watch(filtered, (list) => {
+watch(flatItems, (list) => {
   if (selectedIndex.value >= list.length) selectedIndex.value = 0;
 });
 
@@ -67,8 +77,11 @@ watch(
   },
 );
 
-const select = (command: QuickCommandMeta) => {
-  emit("select", command, argPart.value);
+const itemKey = (item: SenderSuggestion): string =>
+  item.kind === "command" ? `cmd-${item.command}` : `skill-${item.source}-${item.name}`;
+
+const select = (item: SenderSuggestion) => {
+  emit("select", item, argPart.value);
 };
 
 defineExpose({
@@ -76,15 +89,15 @@ defineExpose({
     return shouldShow.value;
   },
   move(delta: -1 | 1) {
-    const len = filtered.value.length;
+    const len = flatItems.value.length;
     if (!len) return false;
     selectedIndex.value = (selectedIndex.value + delta + len) % len;
     return true;
   },
   confirm() {
-    const cmd = filtered.value[selectedIndex.value];
-    if (!cmd) return false;
-    emit("select", cmd, argPart.value);
+    const item = flatItems.value[selectedIndex.value];
+    if (!item) return false;
+    select(item);
     return true;
   },
 });
@@ -105,35 +118,46 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
 
 <template>
   <Transition name="quick-commands">
-    <div v-if="shouldShow" class="quick-commands-card" role="listbox" aria-label="快捷指令">
+    <div v-if="shouldShow" class="quick-commands-card" role="listbox" aria-label="斜杠建议">
       <div class="quick-commands-list">
-        <button
-          v-for="(cmd, index) in filtered"
-          :key="cmd.command"
-          type="button"
-          role="option"
-          :aria-selected="index === selectedIndex"
-          class="quick-commands-item"
-          :class="{
-            'is-selected': index === selectedIndex,
-            'is-ohmy': cmd.ohMyPiPriority && isOhMyPi,
-          }"
-          @click="select(cmd)"
-          @mouseenter="selectedIndex = index"
-          @mousemove="selectedIndex = index"
-        >
-          <span class="quick-commands-icon">{{ cmd.icon }}</span>
-          <span class="quick-commands-copy">
+        <template v-for="group in groups" :key="group.key">
+          <div class="quick-commands-group" role="presentation">{{ group.title }}</div>
+          <button
+            v-for="item in group.items"
+            :key="itemKey(item)"
+            type="button"
+            role="option"
+            :aria-selected="flatItems[selectedIndex] === item"
+            class="quick-commands-item"
+            :class="{
+              'is-selected': flatItems[selectedIndex] === item,
+              'is-ohmy': item.kind === 'command' && item.ohMyPiPriority && isOhMyPi,
+            }"
+            :title="item.kind === 'command' ? item.placeholder : item.scope"
+            @click="select(item)"
+            @mouseenter="selectedIndex = flatItems.indexOf(item)"
+            @mousemove="selectedIndex = flatItems.indexOf(item)"
+          >
+            <span class="quick-commands-icon">{{
+              item.kind === "command" ? item.icon : "🧩"
+            }}</span>
             <span class="quick-commands-label">
-              /{{ cmd.command }}
-              <span v-if="cmd.ohMyPiPriority && isOhMyPi" class="quick-commands-badge"
+              /{{ item.name }}
+              <span
+                v-if="item.kind === 'skill'"
+                class="quick-commands-scope"
+                :class="`is-${item.source}`"
+                >{{ item.source === "project" ? "项目" : "全局" }}</span
+              >
+              <span
+                v-if="item.kind === 'command' && item.ohMyPiPriority && isOhMyPi"
+                class="quick-commands-badge"
                 >Oh My Pi</span
               >
             </span>
-            <span class="quick-commands-desc">{{ cmd.description }}</span>
-          </span>
-          <span class="quick-commands-placeholder">{{ cmd.placeholder }}</span>
-        </button>
+            <span class="quick-commands-desc">{{ item.description }}</span>
+          </button>
+        </template>
       </div>
     </div>
   </Transition>
@@ -146,10 +170,20 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
 
 .quick-commands-list {
   overflow-y: auto;
-  padding: 4px;
+  max-height: 320px;
+  padding: 3px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+}
+
+.quick-commands-group {
+  padding: 5px 9px 2px;
+  color: var(--brand-ghost);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  user-select: none;
 }
 
 .quick-commands-item {
@@ -157,9 +191,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 10px;
+  padding: 3px 9px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   cursor: pointer;
   text-align: left;
@@ -185,31 +219,38 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
 
 .quick-commands-icon {
   flex: none;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: var(--brand-inset);
-  border: 1px solid var(--brand-border);
-  font-size: 13px;
-}
-
-.quick-commands-copy {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  width: 16px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .quick-commands-label {
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   font-size: 12px;
   font-weight: 600;
   color: var(--brand-foreground);
+}
+
+.quick-commands-scope {
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 13px;
+}
+
+.quick-commands-scope.is-project {
+  background: color-mix(in srgb, var(--brand-accent) 14%, transparent);
+  color: var(--brand-accent);
+}
+
+.quick-commands-scope.is-global {
+  background: var(--brand-inset);
+  color: var(--brand-muted-strong);
 }
 
 .quick-commands-badge {
@@ -219,24 +260,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
   color: white;
   font-size: 9px;
   font-weight: 600;
-  line-height: 14px;
+  line-height: 13px;
 }
 
 .quick-commands-desc {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 11px;
   color: var(--brand-muted);
-  line-height: 14px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.quick-commands-placeholder {
-  flex: none;
-  max-width: 160px;
-  font-size: 10px;
-  color: var(--brand-ghost);
-  text-align: right;
+  line-height: 15px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

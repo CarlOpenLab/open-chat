@@ -62,8 +62,12 @@ const hasQueuedMessages = (conversation: unknown): boolean => {
 /** 全新会话（从未发过消息）：无任何运行信号时归为「待开始」而非「已完成」。 */
 const hasNoMessages = (conversation: unknown): boolean => {
   if (!conversation || typeof conversation !== "object") return true;
-  const messages = (conversation as Record<string, unknown>).messages;
-  return !Array.isArray(messages) || messages.length === 0;
+  const obj = conversation as Record<string, unknown>;
+  const messages = obj.messages;
+  if (Array.isArray(messages) && messages.length > 0) return false;
+  // 本地不再持久化消息内容：已同步到网关的会话（有 providerSessionId）刷新后
+  // 内容由接口恢复，不应归为「待开始」。
+  return !(typeof obj.providerSessionId === "string" && obj.providerSessionId.trim().length > 0);
 };
 
 /**

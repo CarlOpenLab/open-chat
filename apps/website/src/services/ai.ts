@@ -49,6 +49,20 @@ export interface GitWorkspaceInfo {
   detached: boolean;
 }
 
+/** 单个 skill 的展示信息（与网关 /api/skills 返回结构一致）。 */
+export interface SkillSummary {
+  name: string;
+  description: string;
+  source: "project" | "global";
+  /** 所在 skills 根目录（相对项目目录或 home），如 .claude/skills */
+  scope: string;
+}
+
+export interface SkillsIndex {
+  project: SkillSummary[];
+  global: SkillSummary[];
+}
+
 /** 附件渲染 URL（历史消息图片按引用读取）。 */
 export function attachmentUrl(reference: string, name: string): string {
   return `${API_BASE_URL}/api/attachments/${encodeURIComponent(reference)}/${encodeURIComponent(name)}`;
@@ -151,6 +165,22 @@ export const aiService = {
     });
   },
 
+  /** 读取项目 / 全局 skills（输入区 "/" suggestion 用）；projectPath 为空时只返回全局。 */
+  async getSkills(projectPath = ""): Promise<SkillsIndex> {
+    const trimmed = projectPath.trim();
+    const query = trimmed ? `?${new URLSearchParams({ projectPath: trimmed })}` : "";
+    const response = await fetch(`${API_BASE_URL}/api/skills${query}`, {
+      headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
+    });
+    const data = (await response.json().catch(() => ({}))) as Partial<SkillsIndex> & {
+      error?: { message?: string };
+    };
+    if (!response.ok) {
+      throw new Error(data.error?.message || `Skills 列表读取失败（HTTP ${response.status}）`);
+    }
+    return { project: readSkillSummaries(data.project), global: readSkillSummaries(data.global) };
+  },
+
   /**
    * 上传附件（图片/文件）到网关，落盘 `~/.cc-hearts-open-code/attachments/`。
    * 返回持久引用，后续发送消息与历史渲染都只用引用，字节不再回传浏览器。
@@ -187,6 +217,22 @@ export const aiService = {
     };
   },
 };
+
+function readSkillSummaries(value: unknown): SkillSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const skill = entry as Partial<SkillSummary>;
+    if (typeof skill?.name !== "string" || !skill.name) return [];
+    return [
+      {
+        name: skill.name,
+        description: typeof skill.description === "string" ? skill.description : "",
+        source: skill.source === "project" ? ("project" as const) : ("global" as const),
+        scope: typeof skill.scope === "string" ? skill.scope : "",
+      },
+    ];
+  });
+}
 
 async function requestGitWorkspace(url: string, init: RequestInit = {}): Promise<GitWorkspaceInfo> {
   const headers = new Headers(init.headers);

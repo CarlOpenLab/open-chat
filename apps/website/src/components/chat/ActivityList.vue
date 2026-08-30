@@ -25,6 +25,8 @@ import type {
   ToolMessage,
   TranscriptMessage,
 } from "@cc-heart/open-chat-types";
+import { isMarkdownPlainText } from "../../composables/markdownRenderLimits";
+import { useMarkdownStreaming } from "../../composables/useMarkdownStreaming";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 import UnifiedDiff from "./UnifiedDiff.vue";
@@ -213,7 +215,9 @@ const entries = computed<ActivityEntry[]>(() => {
     } else if (message.role === "fileChange") {
       list.push(fileChangeActivityEntry(message));
     } else if (message.role === "plan") {
-      for (const [index, entry] of message.entries.entries()) {
+      // entries 缺省时按空计划处理：任何 getter 抛错都会让组件进入半初始化
+      // 状态，随后每次渲染持续报错（见 firstPreviewLine 注释）。
+      for (const [index, entry] of (message.entries ?? []).entries()) {
         const status: ActivityEntry["status"] =
           entry.status === "completed"
             ? "success"
@@ -235,7 +239,7 @@ const entries = computed<ActivityEntry[]>(() => {
         });
       }
     } else if (message.role === "workspace") {
-      for (const file of message.files) {
+      for (const file of message.files ?? []) {
         const writing = file.status === "streaming" && props.streaming;
         list.push({
           id: `file-${file.path}`,
@@ -246,7 +250,7 @@ const entries = computed<ActivityEntry[]>(() => {
           status: writing ? "running" : "success",
         });
       }
-      for (const [index, error] of message.errors.entries()) {
+      for (const [index, error] of (message.errors ?? []).entries()) {
         list.push({
           id: `workspace-error-${index}`,
           kind: "workspace",
@@ -262,6 +266,23 @@ const entries = computed<ActivityEntry[]>(() => {
   return normalizeEntryIds(list);
 });
 
+/** 最后一条思考条目的内容（流式中只有它会持续增长）。 */
+const lastReasoningId = computed(() => {
+  const reasoning = entries.value.filter((entry) => entry.kind === "reasoning");
+  return reasoning.at(-1)?.id ?? "";
+});
+const streamingReasoningContent = computed(() => {
+  const reasoning = entries.value.filter((entry) => entry.kind === "reasoning");
+  return reasoning.at(-1)?.content ?? "";
+});
+// 长思考内容流式渲染节流：x-markdown 每次 content 更新都会对累计全文做完整
+// 重解析/重建（marked → DOMPurify → DOM → VNode），超长文本会平方级放大
+// CPU 与内存（实测 400KB≈52s、1MB 直接 OOM），这里限制为步进渲染。
+const { content: reasoningDisplayContent, streaming: reasoningStreaming } = useMarkdownStreaming(
+  streamingReasoningContent,
+  reasoningRunning,
+);
+
 /** 活动摘要："正在执行：N 次命令，M 次思考" / "已执行：…"。 */
 const summary = computed(() => summarizeMessages(props.messages));
 const anyRunning = computed(() => entries.value.some((entry) => entry.status === "running"));
@@ -272,6 +293,17 @@ const summaryLabel = computed(() =>
 const hasDetail = (entry: ActivityEntry): boolean =>
   Boolean(entry.content) || Boolean(entry.sections?.length) || Boolean(entry.fileChanges?.length);
 const isItemExpanded = (id: string) => props.itemExpandedIds.includes(id);
+
+/**
+ * 思考内容是否走纯文本：规则同 markdownRenderLimits.isMarkdownPlainText，
+ * 只对「最后一条思考」（流式中唯一持续增长的那条）套用流式降级，
+ * 历史思考按最终长度判定。
+ */
+const isReasoningPlainText = (entry: ActivityEntry): boolean => {
+  const isStreamingEntry = entry.id === lastReasoningId.value;
+  const content = isStreamingEntry ? reasoningDisplayContent.value : entry.content;
+  return isMarkdownPlainText(content, isStreamingEntry && props.streaming);
+};
 
 const toggleSummary = () => emit("update:summaryExpanded", !props.summaryExpanded);
 
@@ -289,8 +321,14 @@ const toggleItem = (entry: ActivityEntry) => {
  * - JSON 对象（如 bash 的 { stdout, stderr, exitCode }）取第一个有内容的字符串首行，避免预览显示裸 `{`；
  * - 普通文本取第一个非空且非纯 JSON 标点的行；
  * - 过长截断，避免把整段输出塞进标题行。
+ *
+ * 注意：必须用函数声明（提升）而非 const 箭头函数。`entries` computed 会在
+ * setup 阶段被 useMarkdownStreaming 立即求值（读取最后一条思考内容），
+ * 若此时 messages 已含 tool 消息，会同步调用 toolActivityEntry → firstPreviewLine；
+ * 晚于该求值点声明的 const 会命中 TDZ（ReferenceError），导致 setup 抛错、
+ * 组件进入半初始化状态，之后每次渲染都报 `reading 'length'`。
  */
-const firstPreviewLine = (text?: string, max = 120): string => {
+function firstPreviewLine(text?: string, max = 120): string {
   if (!text) return "";
   const takeLine = (value: string) => {
     const line =
@@ -323,7 +361,7 @@ const firstPreviewLine = (text?: string, max = 120): string => {
     // 非 JSON 内容，走普通首行逻辑。
   }
   return takeLine(text);
-};
+}
 
 const copiedSection = ref("");
 let copyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -427,19 +465,26 @@ onBeforeUnmount(() => {
             @click.stop
           >
             <div class="activity-collapse-content">
-              <!-- 思考展开：弱化 markdown（位于行下方） -->
+              <!-- 思考展开：弱化 markdown（位于行下方）；超长思考用纯文本 -->
               <div
                 v-if="entry.kind === 'reasoning' && entry.content"
                 class="box-border w-full min-w-0 max-w-full overflow-hidden px-1"
               >
+                <pre
+                  v-if="isReasoningPlainText(entry)"
+                  class="m-0 w-full max-w-full whitespace-pre-wrap break-words text-[12px] leading-[1.6] text-brand-muted-strong"
+                  >{{
+                    entry.id === lastReasoningId ? reasoningDisplayContent : entry.content
+                  }}</pre>
                 <XMarkdown
-                  :content="entry.content"
+                  v-else
+                  :content="entry.id === lastReasoningId ? reasoningDisplayContent : entry.content"
                   :components="markdownComponents"
-                  :streaming="{
-                    hasNextChunk: reasoningRunning,
-                    enableAnimation: reasoningRunning,
-                    tail: false,
-                  }"
+                  :streaming="
+                    entry.id === lastReasoningId
+                      ? reasoningStreaming
+                      : { hasNextChunk: false, enableAnimation: false, tail: false }
+                  "
                   :class-name="[markdownClassName, 'activity-reasoning-markdown'].join(' ')"
                   :config="{ breaks: true }"
                   open-links-in-new-tab

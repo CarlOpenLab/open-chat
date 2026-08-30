@@ -1,4 +1,5 @@
 /** Sender 斜杠指令解析：让输入区的 goal 等指令能以结构化方式发送给模型。 */
+import type { SkillSummary, SkillsIndex } from "../services/ai";
 
 export const SENDER_COMMANDS = ["goal", "system", "instruction", "objective", "review"] as const;
 
@@ -116,14 +117,73 @@ export function getQuickCommandsForAgent(isOhMyPi: boolean): QuickCommandMeta[] 
   return QUICK_COMMANDS;
 }
 
-export function filterQuickCommands(query: string, isOhMyPi: boolean): QuickCommandMeta[] {
-  const commands = getQuickCommandsForAgent(isOhMyPi);
+// ============ "/" suggestion：内置指令 + 项目 / 全局 Skills ============
+
+export type SenderSuggestion =
+  | ({ kind: "command" } & QuickCommandMeta)
+  | ({ kind: "skill" } & SkillSummary);
+
+export interface SuggestionGroup {
+  key: "commands" | "project" | "global";
+  title: string;
+  items: SenderSuggestion[];
+}
+
+/** 组装 "/" suggestion 的分组列表：内置指令 → 项目 Skills → 全局 Skills（空组不展示）。 */
+export function buildSuggestionGroups(
+  skills: SkillsIndex | null,
+  isOhMyPi: boolean,
+): SuggestionGroup[] {
+  const groups: SuggestionGroup[] = [
+    {
+      key: "commands",
+      title: "指令",
+      items: getQuickCommandsForAgent(isOhMyPi).map((meta) => ({
+        kind: "command",
+        name: meta.command,
+        ...meta,
+      })),
+    },
+  ];
+  if (skills?.project.length) {
+    groups.push({
+      key: "project",
+      title: "项目 Skills",
+      items: skills.project.map((skill) => ({ kind: "skill", ...skill })),
+    });
+  }
+  if (skills?.global.length) {
+    groups.push({
+      key: "global",
+      title: "全局 Skills",
+      items: skills.global.map((skill) => ({ kind: "skill", ...skill })),
+    });
+  }
+  return groups;
+}
+
+/** 按斜杠后的 query 过滤建议；命中名字 / 别名 / 描述，q 为空时返回全量。 */
+export function filterSuggestionGroups(
+  query: string,
+  skills: SkillsIndex | null,
+  isOhMyPi: boolean,
+): SuggestionGroup[] {
   const q = query.trim().toLowerCase().replace(/^\//, "");
-  if (!q) return commands;
-  return commands.filter(
-    (item) =>
+  const groups = buildSuggestionGroups(skills, isOhMyPi);
+  if (!q) return groups;
+  return groups
+    .map((group) => ({ ...group, items: group.items.filter((item) => matchesSuggestion(item, q)) }))
+    .filter((group) => group.items.length > 0);
+}
+
+function matchesSuggestion(item: SenderSuggestion, q: string): boolean {
+  if (item.kind === "command") {
+    return (
       item.command.toLowerCase().includes(q) ||
       item.label.toLowerCase().includes(q) ||
-      item.aliases.some((alias) => alias.toLowerCase().includes(q)),
-  );
+      item.description.toLowerCase().includes(q) ||
+      item.aliases.some((alias) => alias.toLowerCase().includes(q))
+    );
+  }
+  return item.name.toLowerCase().includes(q) || item.description.toLowerCase().includes(q);
 }

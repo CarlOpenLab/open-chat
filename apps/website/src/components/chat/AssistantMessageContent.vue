@@ -6,6 +6,8 @@ import { Globe2, TriangleAlert } from "@lucide/vue";
 import { computed, ref } from "vue";
 import type { Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
+import { isMarkdownPlainText } from "../../composables/markdownRenderLimits";
+import { useMarkdownStreaming } from "../../composables/useMarkdownStreaming";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
 
 interface Props {
@@ -22,11 +24,14 @@ const markdownComponents: Record<string, Component> = {
   code: MarkdownCodeRenderer,
 };
 
-const markdownStreaming = computed(() => ({
-  hasNextChunk: props.streaming,
-  enableAnimation: props.streaming,
-  tail: false,
-}));
+/** 是否降级为纯文本：规则见 markdownRenderLimits.isMarkdownPlainText。 */
+const isPlainText = computed(() => isMarkdownPlainText(props.content, props.streaming));
+
+/** 流式渲染频率控制：规则见 useMarkdownStreaming。 */
+const { content: displayContent, streaming: markdownStreaming } = useMarkdownStreaming(
+  computed(() => props.content),
+  computed(() => props.streaming),
+);
 
 const chatNotices = computed(() => {
   const notices = props.item.extraInfo?.chatNotices;
@@ -61,10 +66,14 @@ const onFaviconError = (url: string) => {
       </span>
     </div>
 
-    <!-- 正文始终单独渲染 -->
+    <!-- 正文始终单独渲染；超长内容用纯文本，避免 markdown 管线内存爆炸 -->
+    <pre
+      v-if="content.trim() && isPlainText"
+      class="m-0 w-full max-w-full whitespace-pre-wrap break-words text-[12.5px] leading-[1.7] text-brand-foreground"
+      >{{ displayContent }}</pre>
     <XMarkdown
-      v-if="content.trim()"
-      :content="content"
+      v-else-if="content.trim()"
+      :content="displayContent"
       :components="markdownComponents"
       :streaming="markdownStreaming"
       :class-name="markdownClassName"

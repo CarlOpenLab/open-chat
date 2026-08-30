@@ -8,7 +8,7 @@ catalog:
   "@antdv-next/icons": ^1.0.5
   "@antdv-next/x": 1.2.3-beta.1
   "@antdv-next/x-card": ^0.0.1
-  "@antdv-next/x-markdown": ^0.1.2
+  "@antdv-next/x-markdown": ^0.1.4
   "@antdv-next/x-sdk": ^0.0.2
   "@codemirror/lang-css": ^6.3.1
   "@codemirror/lang-javascript": ^6.2.5

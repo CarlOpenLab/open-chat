@@ -27,15 +27,20 @@ import { Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, h, onBeforeUnmount, ref, watch, type Component } from "vue";
 import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import type { PermissionRequest } from "../../services/OpenChatProvider";
-import { aiService, type GitWorkspaceInfo, type UploadedAttachment } from "../../services/ai";
+import {
+  aiService,
+  type GitWorkspaceInfo,
+  type SkillsIndex,
+  type UploadedAttachment,
+} from "../../services/ai";
 import type { QueuedChatMessage } from "../../services/chatStorage";
 import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../../utils/projectPath";
 import {
-  filterQuickCommands,
+  filterSuggestionGroups,
   formatCommandForModel,
   parseSenderCommand,
 } from "../../utils/senderCommands";
-import type { QuickCommandMeta } from "../../utils/senderCommands";
+import type { QuickCommandMeta, SenderSuggestion } from "../../utils/senderCommands";
 import ModelIcon from "../Icons/ModelIcon.vue";
 import QuickCommands from "./QuickCommands.vue";
 
@@ -482,41 +487,104 @@ const senderSlotConfig = computed(() => {
   return [{ type: "text" as const, value: text }];
 });
 
-const hasSuggestion = computed(() => {
+// ============ "/" suggestion：内置指令 + 项目 / 全局 Skills ============
+
+/** Agent 会话才拉取 skills（API 直连会话没有 CLI 去解析 "/skill"，只展示内置指令）。 */
+const skills = ref<SkillsIndex>({ project: [], global: [] });
+let skillsSequence = 0;
+
+const loadSkills = async (path: string) => {
+  const sequence = ++skillsSequence;
+  try {
+    const result = await aiService.getSkills(path);
+    if (sequence === skillsSequence) skills.value = result;
+  } catch {
+    // skills 只是 suggestion 增强，拉取失败静默降级为仅内置指令。
+    if (sequence === skillsSequence) skills.value = { project: [], global: [] };
+  }
+};
+
+watch(
+  () => [props.agentMode, props.projectPath] as const,
+  ([agentMode, path]) => {
+    if (!agentMode) {
+      skillsSequence += 1;
+      skills.value = { project: [], global: [] };
+      return;
+    }
+    void loadSkills(path);
+  },
+  { immediate: true },
+);
+
+/** 斜杠后的过滤词（首个空白前的 token）。 */
+const slashQuery = computed(() => {
   const trimmed = props.modelValue.trimStart();
-  if (!trimmed.startsWith("/")) return false;
-  const q = trimmed.slice(1).split(/\s/)[0] ?? "";
-  const filtered = filterQuickCommands(q, Boolean(props.isOhMyPi));
-  if (
-    trimmed.includes(" ") &&
-    filtered.length === 1 &&
-    filtered[0].command.toLowerCase() === q.toLowerCase()
-  )
-    return false;
-  return filtered.length > 0;
+  if (!trimmed.startsWith("/")) return "";
+  return trimmed.slice(1).split(/\s/)[0] ?? "";
 });
 
-// ============ 快捷指令组件（Oh My Pi 优先，斜杠触发） ============
+/** Esc 关闭面板后记录关闭时的过滤词；输入继续变化（换词 / 退回 "/"）才重新允许弹出。 */
+const suggestionDismissedAtQuery = ref<string | null>(null);
+
+watch(slashQuery, (query) => {
+  if (suggestionDismissedAtQuery.value !== null && query !== suggestionDismissedAtQuery.value) {
+    suggestionDismissedAtQuery.value = null;
+  }
+});
+
+const dismissSuggestion = () => {
+  suggestionDismissedAtQuery.value = slashQuery.value;
+};
+
+const hasSuggestion = computed(() => {
+  if (suggestionDismissedAtQuery.value !== null) return false;
+  const trimmed = props.modelValue.trimStart();
+  if (!trimmed.startsWith("/")) return false;
+  const flat = filterSuggestionGroups(
+    slashQuery.value,
+    skills.value,
+    Boolean(props.isOhMyPi),
+  ).flatMap((group) => group.items);
+  // 已输入空格且候选都是精确匹配：视为指令已敲定，收起面板让位给参数输入
+  if (
+    trimmed.includes(" ") &&
+    flat.length > 0 &&
+    flat.every((item) => item.name.toLowerCase() === slashQuery.value.toLowerCase())
+  ) {
+    return false;
+  }
+  return flat.length > 0;
+});
+
+// ============ 快捷指令组件（斜杠触发，含项目 / 全局 skills） ============
 const quickCommandsRef = ref<InstanceType<typeof QuickCommands> | null>(null);
 const senderRef = ref<InstanceType<typeof Sender> | null>(null);
 
-const handleQuickSelect = (command: QuickCommandMeta, remaining: string) => {
-  if (command.command === "goal") {
-    activeSkill.value = { value: "goal", title: "🎯 Goal", closable: { disabled: false } };
-  } else if (command.command === "review") {
-    activeSkill.value = { value: "review", title: "🔍 Review", closable: { disabled: false } };
-  } else if (command.command === "instruction") {
+const COMMAND_TITLES: Record<QuickCommandMeta["command"], string> = {
+  goal: "🎯 Goal",
+  review: "🔍 Review",
+  instruction: "📋 Instruction",
+  system: "⚙️ System",
+};
+
+const handleSuggestionSelect = (item: SenderSuggestion, remaining: string) => {
+  if (item.kind === "command") {
     activeSkill.value = {
-      value: "instruction",
-      title: "📋 Instruction",
+      value: item.command,
+      title: COMMAND_TITLES[item.command],
       closable: { disabled: false },
     };
-  } else if (command.command === "system") {
-    activeSkill.value = { value: "system", title: "⚙️ System", closable: { disabled: false } };
+    const nextValue = remaining.trim();
+    emit("update:modelValue", nextValue);
+    emit("change", nextValue);
+  } else {
+    // skill 以 "/名称 参数" 原样发送，由 Agent CLI 自行解析执行
+    const nextValue = `/${item.name}${remaining ? ` ${remaining}` : " "}`;
+    emit("update:modelValue", nextValue);
+    emit("change", nextValue);
   }
-  const nextValue = remaining.trim();
-  emit("update:modelValue", nextValue);
-  emit("change", nextValue);
+  suggestionDismissedAtQuery.value = null;
   setTimeout(() => {
     (senderRef.value as unknown as { focus?: () => void })?.focus?.();
   }, 0);
@@ -853,6 +921,7 @@ const handleSenderKeyDown = (event: KeyboardEvent): void | false => {
     }
     if (event.key === "Escape") {
       event.preventDefault();
+      dismissSuggestion();
       return false;
     }
   }
@@ -928,6 +997,7 @@ const chipClass = (active: boolean, disabled = false) => {
         :class="[
           {
             'has-permission': Boolean(pendingPermission),
+            'has-suggestion': hasSuggestion,
             'has-navigation': hasHeaderNavigation,
           },
         ]"
@@ -948,7 +1018,9 @@ const chipClass = (active: boolean, disabled = false) => {
               ref="quickCommandsRef"
               :model-value="modelValue"
               :is-oh-my-pi="isOhMyPi"
-              @select="handleQuickSelect"
+              :skills="skills"
+              @select="handleSuggestionSelect"
+              @close="dismissSuggestion"
             />
           </div>
           <div v-else-if="visibleHeaderPanel === 'queue'" class="queued-message-panel">
@@ -1136,7 +1208,7 @@ const chipClass = (active: boolean, disabled = false) => {
       :slot-config="senderSlotConfig"
       :loading="false"
       :skill="activeSkill"
-      placeholder="做什么都可以... 试试 /goal 目标 或 /review 复审"
+      placeholder="做什么都可以... 输入 / 唤起指令与技能"
       :on-cancel="() => emit('cancel')"
       :on-change="handleChange"
       :on-submit="handleSubmit"

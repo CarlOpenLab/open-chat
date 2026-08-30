@@ -47,7 +47,6 @@ const ws = useWorkspace();
         :search-results-by-message-id="ws.searchResultsByMessageId"
         :working="Boolean(ws.currentConversationBusyState)"
         :working-started-at-ms="ws.currentConversationBusyState?.startedAt"
-        :auto-scroll-mode="ws.autoScrollMode"
         :project-path="ws.projectPath"
         :project-path-options="ws.projectPathOptions"
         @reload="ws.handleReloadMessage($event)"

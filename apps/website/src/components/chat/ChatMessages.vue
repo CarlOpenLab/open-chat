@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { BubbleItemType, ItemType } from "@antdv-next/x";
 import { Actions, Bubble } from "@antdv-next/x";
-import { ArrowDown, Copy, RotateCcw } from "@lucide/vue";
-import { computed, h, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
+import { Copy, RotateCcw } from "@lucide/vue";
+import { computed, h, onBeforeUnmount, provide, ref, watch } from "vue";
 import type { WebSearchSourceItem, UploadedAttachment } from "../../services/ai";
 import { attachmentUrl } from "../../services/ai";
 import { formatWorkingElapsed } from "../../utils/chatDuration";
@@ -12,8 +12,6 @@ import ActivityList from "./ActivityList.vue";
 import EmptyState from "./EmptyState.vue";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import { Image } from "antdv-next";
-
-export type AutoScrollMode = "follow" | "always" | "never";
 
 interface Props {
   showWelcome: boolean;
@@ -25,8 +23,6 @@ interface Props {
   working?: boolean;
   /** 当前会话服务端运行起点，刷新恢复时与侧栏计时保持一致。 */
   workingStartedAtMs?: number;
-  /** 流式输出时的自动滚动策略，默认智能跟随 */
-  autoScrollMode?: AutoScrollMode;
   /** 空状态标题中的项目目录（由外层 Chat 传入） */
   projectPath?: string;
   projectPathOptions?: string[];
@@ -43,7 +39,6 @@ const props = withDefaults(defineProps<Props>(), {
   searchResultsByMessageId: () => ({}),
   workingStartedAtMs: undefined,
   working: false,
-  autoScrollMode: "follow",
 });
 const emit = defineEmits<Emits>();
 
@@ -64,60 +59,6 @@ function userMessageAttachments(item: {
     );
   });
 }
-const messagesRoot = ref<HTMLElement | null>(null);
-const showScrollToBottom = ref(false);
-let scrollBox: HTMLElement | null = null;
-let scrollRestoreFrame: number | null = null;
-
-const updateScrollState = () => {
-  if (!scrollBox) {
-    showScrollToBottom.value = false;
-    return;
-  }
-  const distance = scrollBox.scrollHeight - scrollBox.clientHeight - scrollBox.scrollTop;
-  showScrollToBottom.value = distance > 120;
-};
-
-const bindScrollBox = async () => {
-  await nextTick();
-  if (scrollBox) scrollBox.removeEventListener("scroll", updateScrollState);
-  scrollBox = messagesRoot.value?.querySelector<HTMLElement>(".chat-scroll-box") ?? null;
-  scrollBox?.addEventListener("scroll", updateScrollState, { passive: true });
-  updateScrollState();
-};
-
-/** 展开/收起活动详情会改变气泡高度，动画期间保持当前滚动锚点。 */
-const updateWithScrollAnchor = (update: () => void) => {
-  const box = scrollBox;
-  if (!box) {
-    update();
-    return;
-  }
-
-  if (scrollRestoreFrame !== null) cancelAnimationFrame(scrollRestoreFrame);
-  const top = box.scrollTop;
-  const maxTop = Math.max(0, box.scrollHeight - box.clientHeight);
-  const stickToBottom = maxTop - top <= 24;
-  update();
-
-  const startedAt = performance.now();
-  const restore = () => {
-    if (!scrollBox) {
-      scrollRestoreFrame = null;
-      return;
-    }
-    const nextMaxTop = Math.max(0, scrollBox.scrollHeight - scrollBox.clientHeight);
-    scrollBox.scrollTop = stickToBottom ? nextMaxTop : Math.min(top, nextMaxTop);
-    updateScrollState();
-    if (performance.now() - startedAt < 260) {
-      scrollRestoreFrame = requestAnimationFrame(restore);
-    } else {
-      scrollRestoreFrame = null;
-    }
-  };
-
-  void nextTick(restore);
-};
 const markdownTheme = computed<MarkdownTheme>(() => (props.dark ? "dark" : "light"));
 const markdownClassName = computed(() => `chat-markdown x-markdown-${markdownTheme.value}`);
 provide(markdownThemeKey, markdownTheme);
@@ -218,27 +159,6 @@ const lastAssistantMessageKey = computed(
       .find((item) => item.role === "assistant" && item.extraInfo?.messageRole === "content")?.key,
 );
 
-/** 流式中保持吸底：有消息仍在进行时，随内容增长滚动到底部。 */
-const scrollToBottom = () => {
-  if (!scrollBox) return;
-  scrollBox.scrollTo({ top: scrollBox.scrollHeight, behavior: "smooth" });
-  showScrollToBottom.value = false;
-};
-const shouldAutoScroll = (): boolean => {
-  if (props.autoScrollMode === "never") return false;
-  if (props.autoScrollMode === "always") return true;
-  // follow: 仅当用户已在底部附近时才跟随，避免打断上方阅读
-  if (!scrollBox) return false;
-  const distance = scrollBox.scrollHeight - scrollBox.clientHeight - scrollBox.scrollTop;
-  return distance <= 160;
-};
-const autoScrollOnStream = () => {
-  if (!scrollBox) return;
-  if (!displayItems.value.some((item) => isStreamingStatus(item.status))) return;
-  if (!shouldAutoScroll()) return;
-  scrollBox.scrollTo({ top: scrollBox.scrollHeight, behavior: "auto" });
-};
-
 const getThinkKey = (messageId: string | number) =>
   `${props.conversationKey || "__draft__"}::${String(messageId)}`;
 
@@ -273,17 +193,15 @@ const setSummaryExpanded = (messageId: string | number, expanded: boolean) => {
 };
 const setItemExpandedIds = (messageId: string | number, ids: string[]) => {
   const key = getThinkKey(messageId);
-  updateWithScrollAnchor(() => {
-    itemExpandedMap.value = { ...itemExpandedMap.value, [key]: ids };
-    const collapsed = !ids.includes("reasoning");
-    reasoningCollapsedMap.value = collapsed
-      ? { ...reasoningCollapsedMap.value, [key]: true }
-      : (() => {
-          const next = { ...reasoningCollapsedMap.value };
-          delete next[key];
-          return next;
-        })();
-  });
+  itemExpandedMap.value = { ...itemExpandedMap.value, [key]: ids };
+  const collapsed = !ids.includes("reasoning");
+  reasoningCollapsedMap.value = collapsed
+    ? { ...reasoningCollapsedMap.value, [key]: true }
+    : (() => {
+        const next = { ...reasoningCollapsedMap.value };
+        delete next[key];
+        return next;
+      })();
 };
 
 /** 气泡下方操作栏：复制 + 重新生成（x Actions 原生样式）。 */
@@ -390,26 +308,11 @@ watch(
     });
 
     summaryExpandedMap.value = nextSummary;
-    void bindScrollBox();
-    autoScrollOnStream();
   },
   { immediate: true },
 );
 
-watch(
-  () => props.showWelcome,
-  () => {
-    void bindScrollBox();
-  },
-);
-
-onMounted(() => {
-  void bindScrollBox();
-});
-
 onBeforeUnmount(() => {
-  scrollBox?.removeEventListener("scroll", updateScrollState);
-  if (scrollRestoreFrame !== null) cancelAnimationFrame(scrollRestoreFrame);
   if (workingTickTimer) clearInterval(workingTickTimer);
 });
 </script>
@@ -417,7 +320,6 @@ onBeforeUnmount(() => {
 <template>
   <main
     id="chat-content"
-    ref="messagesRoot"
     class="messages-wrapper relative h-full min-h-0 flex-1 overflow-hidden bg-brand-workspace py-6 px-4 lt-md:py-6 lt-md:px-4 lt-sm:py-5 lt-sm:px-3"
     :class="showWelcome ? 'flex flex-col justify-center' : ''"
     tabindex="-1"
@@ -522,17 +424,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
-
-    <button
-      v-if="!showWelcome && showScrollToBottom"
-      type="button"
-      class="scroll-to-bottom"
-      aria-label="回到底部"
-      title="回到底部"
-      @click="scrollToBottom"
-    >
-      <ArrowDown class="h-4 w-4" />
-    </button>
   </main>
 </template>
 
@@ -638,31 +529,6 @@ onBeforeUnmount(() => {
   }
 }
 
-.scroll-to-bottom {
-  position: absolute;
-  right: max(20px, calc((100% - 820px) / 2));
-  bottom: 20px;
-  z-index: 2;
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 1px solid var(--brand-border-strong);
-  border-radius: 999px;
-  background: var(--brand-composer);
-  color: var(--brand-foreground);
-  box-shadow: var(--brand-shadow-float);
-  animation: scroll-button-in 180ms ease-out both;
-  transition:
-    background 150ms ease,
-    transform 150ms ease;
-}
-
-.scroll-to-bottom:hover {
-  background: var(--brand-surface-subtle);
-  transform: translateY(-1px);
-}
-
 @keyframes message-in {
   from {
     opacity: 0;
@@ -682,17 +548,6 @@ onBeforeUnmount(() => {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes scroll-button-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.92);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 

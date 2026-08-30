@@ -20,7 +20,12 @@ export interface PersistedConversation extends Omit<ConversationItemType, "messa
   lastError?: string;
   agentId?: string;
   modelId?: string;
-  messages: DefaultMessageInfo<XModelMessage>[];
+  /**
+   * 本地不再持久化消息内容：AI 会话内容由网关按 sessionId 拉取
+   * （loadAcpSession），IndexedDB 只保存会话索引与关键元数据。
+   * 读取旧数据时兼容保留 messages（normalizePersistedChatState）。
+   */
+  messages?: DefaultMessageInfo<XModelMessage>[];
   workspaceDrafts?: WorkspaceFileDraft[];
   queuedMessages?: QueuedChatMessage[];
   queuePaused?: boolean;

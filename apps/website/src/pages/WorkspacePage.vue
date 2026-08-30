@@ -59,6 +59,7 @@ import {
   useChatPersistence,
   type OpenChatConversation,
 } from "../composables/useChatPersistence";
+import { useCoalescedUpdater } from "../composables/useCoalescedUpdater";
 import CommandPalette from "../components/chat/CommandPalette.vue";
 import SettingsDialog from "../components/chat/SettingsDialog.vue";
 import TopTabBar from "../components/layout/TopTabBar.vue";
@@ -310,31 +311,6 @@ const persistMessageTimings = (
 };
 const commandPaletteOpen = ref(false);
 const settingsOpen = ref(false);
-const CHAT_AUTO_SCROLL_KEY = "open-chat-auto-scroll-mode-v1";
-type AutoScrollMode = "follow" | "always" | "never";
-const readAutoScrollMode = (): AutoScrollMode => {
-  try {
-    const stored = localStorage.getItem(CHAT_AUTO_SCROLL_KEY);
-    if (stored === "follow" || stored === "always" || stored === "never") return stored;
-    // 兼容旧的布尔值存储
-    if (stored === "false" || stored === "0") return "never";
-    if (stored === "true" || stored === "1") return "always";
-  } catch {
-    // ignore
-  }
-  return "follow";
-};
-const autoScrollMode = ref<AutoScrollMode>(readAutoScrollMode());
-watch(autoScrollMode, (value) => {
-  try {
-    localStorage.setItem(CHAT_AUTO_SCROLL_KEY, value);
-  } catch {
-    // ignore
-  }
-});
-const handleAutoScrollModeChange = (mode: AutoScrollMode) => {
-  autoScrollMode.value = mode;
-};
 const TASK_COMPLETION_NOTIFICATIONS_KEY = "open-chat-task-completion-notifications";
 const browserNotificationsSupported =
   typeof window !== "undefined" && typeof window.Notification !== "undefined";
@@ -1986,6 +1962,22 @@ const finalizeSessionRun = (convKey: string, outcome: "success" | "error" | "abo
   schedulePersistState();
 };
 
+// ============ 流式 chunk 合并更新 ============
+// 每个 chunk 都会走 transformMessage + updateConversationMessages（触发整棵
+// 消息树重渲染）。真实模型 10~30 chunk/s 尚可，快速流（如 mock 8ms/chunk）
+// 一秒钟上百次全量更新会让 GC 追不上、堆内存堆积。useCoalescedUpdater 把
+// 会话更新合并到 100ms 一拍：chunk 处理本身（transformMessage 增量累积）
+// 仍逐 chunk 执行，仅减少对外可见的整树更新次数；流结束/出错时 flush 落盘。
+//
+// streamPendingOrigins：合并窗口内「已累积但尚未应用」的 target 消息。
+// 窗口内每个 chunk 都基于它继续累加（见 onUpdate），批次应用后清除。
+const streamPendingOrigins = new Map<string, XModelMessage>();
+const { schedule: scheduleStreamMessageUpdate, flush: flushStreamMessageUpdate } =
+  useCoalescedUpdater<DefaultMessageInfo<XModelMessage>[]>((convKey, msgs) => {
+    streamPendingOrigins.delete(convKey);
+    updateConversationMessages(convKey, persistMessageTimings(convKey, msgs));
+  }, 100);
+
 const runSessionRequest = (
   convKey: string,
   requestParams: OpenChatParams,
@@ -1995,6 +1987,8 @@ const runSessionRequest = (
 ) => {
   const conv = conversationList.value.find((item) => String(item.key) === convKey);
   if (!conv) return;
+  // 新回合开始：清掉上一回合可能残留的未应用 origin，避免跨回合串内容。
+  streamPendingOrigins.delete(convKey);
 
   const runAgentId = conv.agentId || activeAgentId.value;
   const sessionProvider = createSessionProvider(convKey, runAgentId);
@@ -2051,8 +2045,13 @@ const runSessionRequest = (
       if (targetIdx === -1) return;
 
       const targetMsg = msgs[targetIdx];
+      // 会话更新被合并到时间闸统一应用（scheduleStreamMessageUpdate），
+      // currentConv.messages 尚未包含本窗口内已累积的增量。transformMessage
+      // 必须基于「已累积但未落地」的 origin 逐 chunk 继续累加，否则窗口内
+      // 每个 chunk 都从旧状态起步，只有最后一个增量被保留（内容变残缺）。
+      const pendingOrigin = streamPendingOrigins.get(convKey) ?? targetMsg.message;
       const nextMsg = sessionProvider.transformMessage({
-        originMessage: targetMsg.message,
+        originMessage: pendingOrigin,
         chunk,
         chunks: [],
         status: "updating",
@@ -2065,15 +2064,20 @@ const runSessionRequest = (
         message: nextMsg,
         ...(extraInfo ? { extraInfo } : {}),
       };
-      updateConversationMessages(convKey, persistMessageTimings(convKey, msgs));
+      streamPendingOrigins.set(convKey, nextMsg);
+      // 合并到时间闸统一应用，避免快速流逐 chunk 全量更新打爆渲染/GC。
+      scheduleStreamMessageUpdate(convKey, msgs);
 
       const pending = optimisticMessages.get(convKey);
       if (pending && hasAcknowledgedOptimisticMessage(msgs, pending)) {
         optimisticMessages.delete(convKey);
       }
-      schedulePersistState();
+      // 不再逐 chunk 持久化：回合运行期间跳过（见 useChatPersistence deep watch），
+      // finalizeSessionRun 在回合结束时统一落盘，避免流式长回合打爆 IndexedDB 队列。
     },
     onSuccess: (chunks: XModelResponse[], responseHeaders: Headers) => {
+      // 先落掉最后一批未应用的 chunk，再基于最新会话状态生成最终消息。
+      flushStreamMessageUpdate(convKey);
       const currentConv = conversationList.value.find((item) => String(item.key) === convKey);
       if (currentConv && currentConv.messages) {
         const msgs = [...currentConv.messages];
@@ -2109,6 +2113,8 @@ const runSessionRequest = (
           (isAbort ? "请求已中止" : "请求失败，请重试！");
       }
 
+      // 先落掉最后一批未应用的 chunk，再基于最新会话状态标记错误。
+      flushStreamMessageUpdate(convKey);
       const currentConv = conversationList.value.find((item) => String(item.key) === convKey);
       if (currentConv && currentConv.messages) {
         const msgs = [...currentConv.messages];
@@ -2987,7 +2993,6 @@ const workspace = reactive({
   workspaceDiffStats,
   historyBack,
   historyForward,
-  autoScrollMode,
 
   // 供应商 / 项目
   agents,
@@ -3052,7 +3057,6 @@ const workspace = reactive({
   handleFileModeChange,
   handleProjectPathChange,
   handleProjectPathRemove,
-  handleAutoScrollModeChange,
 
   // 设置 / 通知
   handleTaskCompletionNotificationsChange,
@@ -3112,14 +3116,12 @@ provideWorkspace(workspace);
       :theme-mode="themeMode"
       :task-completion-notifications-enabled="taskCompletionNotificationsEnabled"
       :browser-notifications-supported="browserNotificationsSupported"
-      :auto-scroll-mode="autoScrollMode"
       @update:open="settingsOpen = $event"
       @theme-mode-change="emit('themeModeChange', $event)"
       @task-completion-notifications-change="handleTaskCompletionNotificationsChange"
       @test-task-completion-notification="handleTestTaskCompletionNotification"
       @export-history="handleExportLocalHistory"
       @clear-history="handleClearLocalHistory"
-      @auto-scroll-mode-change="handleAutoScrollModeChange"
     />
   </div>
 </template>
