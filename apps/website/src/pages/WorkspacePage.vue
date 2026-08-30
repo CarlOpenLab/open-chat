@@ -410,6 +410,7 @@ const historyLocked = ref(false);
 // ============ URL 会话路由 ============
 // URL 格式：/chat/{agentId}/{sessionId}，sessionId 优先用供应商真实会话 id（ACP），
 // 其次用本地会话 key。复制链接即可直达对应供应商的会话。
+// 会话路由只属于对话视图：看板页不写路由，地址栏保持根路径 /。
 
 const safeDecode = (value: string): string => {
   try {
@@ -421,6 +422,8 @@ const safeDecode = (value: string): string => {
 
 /** 将当前打开的会话同步到 URL（push 记历史 / replace 原地替换）。 */
 const syncConversationRoute = (mode: "push" | "replace") => {
+  // 看板页不写 /chat/... 路由：会话路由只属于对话视图
+  if (viewMode.value !== "chat") return;
   const conversation = getCurrentConversation();
   const sessionPart = conversation?.providerSessionId?.trim() || currentConversationKey.value || "";
   const path = sessionPart
@@ -923,6 +926,12 @@ const viewMode = ref<"board" | "chat">(
 );
 watch(viewMode, (mode) => {
   localStorage.setItem("open-chat-view", mode);
+  // 路由跟随视图：对话视图写 /chat/...，看板视图归零到根路径
+  if (mode === "chat") {
+    syncConversationRoute("replace");
+  } else {
+    window.history.replaceState({}, "", "/");
+  }
 });
 
 const resetToDraftConversation = () => {
@@ -1283,8 +1292,17 @@ const restoreRouteConversation = async (
   return true;
 };
 
+/** 浏览器前进/后退：按路由恢复会话，并让视图跟随路由（/chat/... → 对话，/ → 看板）。 */
 const handleRoutePopState = () => {
-  void restoreRouteConversation();
+  void restoreRouteConversation().then((isChatRoute) => {
+    if (isChatRoute) {
+      // 会话路由只属于对话视图
+      if (viewMode.value !== "chat") viewMode.value = "chat";
+    } else if (window.location.pathname === "/") {
+      // 根路径即看板视图
+      if (viewMode.value !== "board") viewMode.value = "board";
+    }
+  });
 };
 
 /** Attach sources received mid-stream to the assistant message that produced them. */
@@ -1686,6 +1704,13 @@ onMounted(async () => {
   // URL 直达：打开复制的链接时恢复对应供应商与会话（仅本地会话，不再预拉供应商全量）
   await restoreRouteConversation(initialChatPath);
   if (componentUnmounted) return;
+  // 会话直达链接（/chat/...）强制进入对话视图；地址栏随后与当前会话对齐
+  if (parseChatRoute(initialChatPath)) {
+    viewMode.value = "chat";
+  }
+  if (viewMode.value === "chat") {
+    syncConversationRoute("replace");
+  }
   // Release session/config watchers only after the final route conversation
   // is known. Releasing earlier creates a throwaway draft session request.
   isHydrating.value = false;

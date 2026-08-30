@@ -104,8 +104,8 @@ export function modelMessagesToBubbleItems(
 
     // 单条消息片段过多（agent 回合常见：思考/正文/工具反复交错）时，每个片段
     // 都会平铺成一行独立气泡，行级渲染开销 ~0.5-1MB/行，几十上百片段就能把
-    // 页面内存打爆。超过阈值后把正文片段合并为单个内容气泡、思考片段合并为
-    // 单个活动条目，文本内容不丢失（mergeContentMessages 用空行连接）。
+    // 页面内存打爆。超过阈值后按相邻同角色片段合并（保持原始时间顺序），
+    // 文本内容不丢失（mergeContentMessages 用空行连接）。
     const merged = buildMergedBubbleItems(fragments, assistantWaiting, status, bubbleExtra, id);
     if (merged) {
       items.push(...merged);
@@ -139,10 +139,10 @@ const MERGE_FRAGMENT_THRESHOLD = 32;
 
 /**
  * 片段折叠（仅当单条消息片段数超过阈值）：
- * - 全部 content 片段 → 单个内容气泡（内容按序拼接，不丢文本）；
- * - 全部 reasoning 片段 → 单个思考活动条目；
- * - tool/plan/fileChange/workspace 等保持原样（折叠行成本低，displayItems 会归组）。
- * 返回 null 表示无需折叠。
+ * 相邻同角色片段分为一组（run），每组折叠为一行气泡，组顺序即片段到达顺序 ——
+ * 思考/正文/工具反复交错的回合仍按时间顺序呈现（思考 → 正文 → 工具 → 思考 → …），
+ * 只是把每段连续碎片压成一行（正文合并不丢文本，思考合并进同一活动条目）。
+ * 返回 null 表示无需折叠（没有可合并的连续片段）。
  */
 function buildMergedBubbleItems(
   fragments: TranscriptMessage[],
@@ -152,63 +152,76 @@ function buildMergedBubbleItems(
   messageId?: string | number,
 ): BubbleItemType[] | null {
   if (fragments.length <= MERGE_FRAGMENT_THRESHOLD) return null;
-  const contentFragments = fragments.filter((fragment) => fragment.role === "content");
-  const reasoningFragments = fragments.filter((fragment) => fragment.role === "reasoning");
-  const otherFragments = fragments.filter(
-    (fragment) => fragment.role !== "content" && fragment.role !== "reasoning",
-  );
-  if (contentFragments.length <= 1 && reasoningFragments.length <= 1) return null;
+  // 相邻同角色片段成组（run）：只折叠连续片段，顺序即片段到达顺序
+  const runs: TranscriptMessage[][] = [];
+  for (const fragment of fragments) {
+    const lastRun = runs.at(-1);
+    if (lastRun && lastRun[0].role === fragment.role) lastRun.push(fragment);
+    else runs.push([fragment]);
+  }
+  if (!runs.some((run) => run.length > 1)) return null;
 
   const msgKey = messageId ?? "message";
   const items: BubbleItemType[] = [];
-  const mergedContent = mergeContentMessages(contentFragments);
-  if (contentFragments.length > 1 && mergedContent) {
-    const last = contentFragments.at(-1)!;
-    items.push({
-      key: `${msgKey}::content`,
-      role: "assistant",
-      status: assistantWaiting ? "updating" : status,
-      loading: false,
-      content: mergedContent,
-      extraInfo: {
-        messageRole: "content",
-        message: { ...last, content: mergedContent },
-        ...bubbleExtra,
-      },
-    });
-  }
-  if (reasoningFragments.length > 1) {
-    const first = reasoningFragments[0];
-    items.push({
-      key: `${msgKey}::reasoning`,
-      role: "assistant",
-      status: assistantWaiting ? "updating" : status,
-      loading: false,
-      content: "",
-      extraInfo: {
-        messageRole: "activities",
-        message: {
-          ...first,
-          content: mergeReasoningMessages(reasoningFragments),
+  for (const run of runs) {
+    const role = run[0].role;
+    const first = run[0];
+    const last = run.at(-1)!;
+    if (role === "content" && run.length > 1) {
+      const mergedContent = mergeContentMessages(run);
+      if (!mergedContent) continue;
+      items.push({
+        key: `${msgKey}::content-${items.length}`,
+        role: "assistant",
+        status: assistantWaiting ? "updating" : status,
+        loading: false,
+        content: mergedContent,
+        extraInfo: {
+          messageRole: "content",
+          message: { ...last, content: mergedContent },
+          ...bubbleExtra,
         },
-      },
-    });
+      });
+      continue;
+    }
+    if (role === "reasoning" && run.length > 1) {
+      items.push({
+        key: `${msgKey}::reasoning-${items.length}`,
+        role: "assistant",
+        status: assistantWaiting ? "updating" : status,
+        loading: false,
+        content: "",
+        extraInfo: {
+          messageRole: "activities",
+          message: {
+            ...first,
+            content: mergeReasoningMessages(run),
+          },
+          ...bubbleExtra,
+        },
+      });
+      continue;
+    }
+    // 单片段 / 不可合并片段（tool/plan/fileChange/workspace/user）：按原样平铺，保持顺序
+    for (const fragment of run) {
+      items.push({
+        key: fragment.id ? `${msgKey}::${fragment.id}` : `${msgKey}-${items.length}`,
+        role: fragment.role === "user" ? "user" : "assistant",
+        status: assistantWaiting ? "updating" : status,
+        loading: false,
+        content: fragment.role === "user" || fragment.role === "content" ? fragment.content : "",
+        extraInfo: {
+          messageRole: fragment.role,
+          message: fragment,
+          ...bubbleExtra,
+          ...(fragment.role === "user" || fragment.role === "content"
+            ? { attachments: fragment.attachments }
+            : {}),
+        },
+      });
+    }
   }
-  for (const fragment of otherFragments) {
-    items.push({
-      key: `${msgKey}::${fragment.id}`,
-      role: "assistant",
-      status: assistantWaiting ? "updating" : status,
-      loading: false,
-      content: "",
-      extraInfo: {
-        messageRole: fragment.role,
-        message: fragment,
-        ...bubbleExtra,
-      },
-    });
-  }
-  return items;
+  return items.length ? items : null;
 }
 
 /** 兜底：没有 fragments 的旧消息按 role 转单片段。 */
