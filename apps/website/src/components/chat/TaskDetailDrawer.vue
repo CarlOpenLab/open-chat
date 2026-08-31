@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, h, ref, watch } from "vue";
-import { Button, Drawer, Dropdown, Input, Select, Tag, Tooltip } from "antdv-next";
+import { Button, DatePicker, Drawer, Dropdown, Input, Select, Tag, Tooltip } from "antdv-next";
 import { TextArea } from "antdv-next";
 import type { Task } from "../../services/taskStorage";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
@@ -297,15 +297,16 @@ const cancelEditSession = () => {
               </div>
               <div class="flex flex-col gap-1">
                 <span class="text-11px text-muted-foreground">截止</span>
-                <Input
-                  type="date"
-                  :value="task.dueAt ? new Date(task.dueAt).toISOString().slice(0, 10) : ''"
+                <DatePicker
+                  :value="task.dueAt ? new Date(task.dueAt).toISOString().slice(0, 10) : null"
+                  value-format="YYYY-MM-DD"
+                  format="YYYY-MM-DD"
+                  allow-clear
+                  placeholder="选择日期"
                   class="w-full"
                   @change="
-                    (e: Event) => {
-                      const v = (e.target as HTMLInputElement).value;
-                      emit('updateTask', task!.id, { dueAt: v ? new Date(v).getTime() : null });
-                    }
+                    (v: string | null) =>
+                      emit('updateTask', task!.id, { dueAt: v ? new Date(v).getTime() : null })
                   "
                 />
               </div>

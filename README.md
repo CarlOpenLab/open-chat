@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/website/public/logo.png" width="96" height="96" alt="Open Chat logo" />
+  <img src="apps/website/public/logo.svg" width="96" height="96" alt="Open Chat logo" />
 </p>
 
 <h1 align="center">Open Chat</h1>

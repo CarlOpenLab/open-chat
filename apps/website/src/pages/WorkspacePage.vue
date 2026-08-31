@@ -2916,6 +2916,7 @@ const handleCreateSessionForTask = (taskId: string) => {
     key: newKey,
     label: task.title.slice(0, 40) || "新对话",
     group: "今天",
+    updatedAt: Date.now(),
     agentId: activeAgentId.value,
     // 与草稿落地（ensureActiveConversation / sendMessageNow）一致：ACP 代理下
     // currentModel 是残留的 API 模型，必须用 inputCurrentModel 记录真实模型。
