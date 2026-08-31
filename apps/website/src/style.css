@@ -44,6 +44,7 @@
   --brand-muted: var(--muted-foreground);
   --brand-muted-strong: #52525b;
   --brand-border: var(--border);
+  --brand-composer: var(--background);
   --brand-border-strong: var(--border-strong);
   --brand-primary: var(--foreground);
   --brand-primary-hover: #27272a;
