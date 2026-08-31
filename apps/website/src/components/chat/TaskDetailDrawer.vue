@@ -109,6 +109,18 @@ const saveTags = () => {
   emit("updateTask", props.task.id, { tags });
 };
 
+/** 本地时区日期，避免 toISOString 的 UTC 偏移导致日期串移位 */
+const localDateOf = (ts: number): string => {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+/** 截止日期存当天本地 23:59:59.999：当天截止当天内不算逾期 */
+const dueAtFromPicker = (v: string): number => new Date(`${v}T23:59:59.999`).getTime();
+
 const sessionList = computed(() => {
   if (!props.task) return [];
   const map = new Map<string, OpenChatConversation>();
@@ -298,7 +310,7 @@ const cancelEditSession = () => {
               <div class="flex flex-col gap-1">
                 <span class="text-11px text-muted-foreground">截止</span>
                 <DatePicker
-                  :value="task.dueAt ? new Date(task.dueAt).toISOString().slice(0, 10) : null"
+                  :value="task.dueAt ? localDateOf(task.dueAt) : null"
                   value-format="YYYY-MM-DD"
                   format="YYYY-MM-DD"
                   allow-clear
@@ -306,7 +318,7 @@ const cancelEditSession = () => {
                   class="w-full"
                   @change="
                     (v: string | null) =>
-                      emit('updateTask', task!.id, { dueAt: v ? new Date(v).getTime() : null })
+                      emit('updateTask', task!.id, { dueAt: v ? dueAtFromPicker(v) : null })
                   "
                 />
               </div>

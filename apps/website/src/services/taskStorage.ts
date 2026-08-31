@@ -103,6 +103,25 @@ function normalizeProjectPath(value: unknown): string | null {
   return t ? t : null;
 }
 
+/**
+ * 旧版本把截止日期存成 UTC 零点（`new Date("YYYY-MM-DD").getTime()`），
+ * 本地时区下当天上午就会算作逾期。识别 UTC 零点的时间戳，
+ * 迁移为该 UTC 日期在本地时区的 23:59:59.999（当天截止当天不逾期）。
+ */
+function normalizeDueAt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  const d = new Date(value);
+  if (
+    d.getUTCHours() === 0 &&
+    d.getUTCMinutes() === 0 &&
+    d.getUTCSeconds() === 0 &&
+    d.getUTCMilliseconds() === 0
+  ) {
+    return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999).getTime();
+  }
+  return value;
+}
+
 export function normalizeTask(value: unknown): Task | null {
   if (!value || typeof value !== "object") return null;
   const obj = value as Record<string, unknown>;
@@ -112,8 +131,7 @@ export function normalizeTask(value: unknown): Task | null {
   const status = isTaskStatus(obj.status) ? obj.status : "todo";
   const priority = normalizeTaskPriority(obj.priority);
   const tags = normalizeTags(obj.tags);
-  const dueAt =
-    typeof obj.dueAt === "number" && Number.isFinite(obj.dueAt) && obj.dueAt > 0 ? obj.dueAt : null;
+  const dueAt = normalizeDueAt(obj.dueAt);
   const description = typeof obj.description === "string" ? obj.description.slice(0, 8000) : "";
   const projectPath = normalizeProjectPath(obj.projectPath);
   const createdAt =
