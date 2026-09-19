@@ -65,8 +65,6 @@ export interface GatewayStartOptions {
   port?: number;
   /** 提供时以静态站点（SPA）形式托管 Web UI，与 API 同源。 */
   staticDir?: string;
-  /** 开发模式：不生成访问密码，Web 界面直接放行（免输入密码）。 */
-  dev?: boolean;
   /** 监听成功回调（URL 已确定，可用于自动打开浏览器）。 */
   onListen?: (info: { url: string; host: string; port: number }) => void;
 }
@@ -76,6 +74,8 @@ export interface GatewayHandle {
   url: string;
   host: string;
   port: number;
+  /** 本次启动的 Web 访问密码（始终生成；用于拼接 ?token= 自动登录 URL）。 */
+  password?: string;
   /** 停止本地 agent / opencode 会话并关闭 HTTP 服务。 */
   stop(): Promise<void>;
 }
@@ -112,8 +112,9 @@ export function createGatewayApp(
 
   // 访问控制路由总是注册，供前端 App.vue 统一探测状态：
   // - 启用密码（access）时：status 返回真实授权状态，未授权走密码登录；
-  // - 开发模式 / 未启用（access 为 undefined）时：status 恒为 authorized: true，
-  //   登录直接放行，且不挂 /api 鉴权中间件。
+  // - 未启用（access 为 undefined，仅供纯 API-key 客户端复用）时：status 恒为
+  //   authorized: true，登录直接放行，且不挂 /api 鉴权中间件。
+  // startGateway 总会生成 access；任何模式（含 --dev）都有 Web 访问密码。
   app.get("/api/access/status", (req: Request, res: Response) => {
     res.json({ authorized: access ? hasWebAccess(req, access, config.gatewayApiKey) : true });
   });
@@ -596,15 +597,12 @@ export function createGatewayApp(
  */
 export async function startGateway(options: GatewayStartOptions): Promise<GatewayHandle> {
   const runtime = loadGatewayRuntime();
-  // 开发模式不生成访问密码：Web 界面直接放行（createGatewayApp 在 access 为
-  // undefined 时让 /api/access/status 恒返回 authorized: true 且不挂鉴权中间件）。
-  const dev = options.dev === true || process.env.NODE_ENV === "development";
-  const access: WebAccessControl | undefined = dev
-    ? undefined
-    : {
-        password: randomBytes(12).toString("base64url"),
-        sessionToken: randomBytes(32).toString("base64url"),
-      };
+  // 任何模式都生成一次性访问密码：前端优先读 URL 里的 ?token= 自动登录，
+  // 手动输入框作回退；密码随进程退出失效。
+  const access: WebAccessControl = {
+    password: randomBytes(12).toString("base64url"),
+    sessionToken: randomBytes(32).toString("base64url"),
+  };
   const app = createGatewayApp(runtime, options.staticDir, access);
 
   const host = options.host ?? "0.0.0.0";
@@ -646,12 +644,15 @@ export async function startGateway(options: GatewayStartOptions): Promise<Gatewa
   console.log(`Health:      http://${host}:${actualPort}/health`);
   console.log(`Models:      http://${host}:${actualPort}/api/models`);
   console.log(`Chat:        http://${host}:${actualPort}/api/chat/completions`);
-  if (access) {
-    console.log(`Web password: ${access.password}`);
-    console.log("Web access:  enter this password in the browser; it changes on every start");
+  if (options.staticDir) {
+    console.log(`Web UI:      ${url}?token=${access.password}`);
   } else {
-    console.log("Web access:  disabled（开发模式，无需输入密码）");
+    // 无静态托管 = 开发模式（Vite dev server 代理 /api 到本网关）。
+    // 密码在网关启动后才生成，Vite 横幅早打印了不含 token 的 URL，这里补全。
+    console.log(`Web UI (dev): http://localhost:3000/?token=${access.password}`);
   }
+  console.log(`Web password: ${access.password}`);
+  console.log("Web access:  打开带 ?token= 的 URL 自动登录；密码每次启动变化");
   console.log(`Gateway auth: ${runtime.config.gatewayApiKey ? "enabled" : "disabled"}`);
   console.log(`Web search:  ${runtime.searchProvider ? runtime.searchProvider.name : "disabled"}`);
   console.log(`Local AI:    ${runtime.localChat ? "enabled (opencode)" : "disabled"}`);
@@ -674,7 +675,7 @@ export async function startGateway(options: GatewayStartOptions): Promise<Gatewa
     });
   };
 
-  return { server, url, host: displayHost, port: actualPort, stop };
+  return { server, url, host: displayHost, port: actualPort, password: access.password, stop };
 }
 
 function createLocalChatManager(config: AppConfig): LocalChatManager | null {
@@ -756,7 +757,11 @@ async function handleAgentChat(
     // A page refresh only disconnects this response; the tracked run continues
     // and can be re-subscribed through /api/acp/session/stream. AbortError here
     // therefore only comes from the explicit session cancellation endpoint.
-    if (err instanceof Error && err.name === "AbortError") return;
+    // acp-hub 把取消包成 AdapterError('prompt_failed', 'Prompt aborted')，
+    // 真正的 AbortError 放在 cause 上——同样视为用户主动取消。
+    const abortCause =
+      err instanceof Error && err.cause instanceof DOMException && err.cause.name === "AbortError";
+    if ((err instanceof Error && err.name === "AbortError") || abortCause) return;
     console.error(`Agent ${agentId} error:`, err);
     if (!res.headersSent) {
       if (err instanceof GatewayError) return sendGatewayError(res, err);
