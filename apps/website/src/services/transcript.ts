@@ -162,7 +162,9 @@ function buildMergedBubbleItems(
   const msgKey = messageId ?? "message";
   const items: BubbleItemType[] = [];
   const mergedContent = mergeContentMessages(contentFragments);
-  if (contentFragments.length > 1 && mergedContent) {
+  // 阈值触发时单条正文/思考同样要渲染（常见：长回合末尾只有一段总结正文），
+  // 否则唯一的 content/reasoning 片段会被整条丢弃。
+  if (contentFragments.length > 0 && mergedContent) {
     const last = contentFragments.at(-1)!;
     items.push({
       key: `${msgKey}::content`,
@@ -177,7 +179,7 @@ function buildMergedBubbleItems(
       },
     });
   }
-  if (reasoningFragments.length > 1) {
+  if (reasoningFragments.length > 0) {
     const first = reasoningFragments[0];
     items.push({
       key: `${msgKey}::reasoning`,
