@@ -735,6 +735,8 @@ const headerPanels = computed<SenderHeaderPanel[]>(() => [
 const hasHeaderNavigation = computed(() => headerPanels.value.length > 1);
 const visibleHeaderPanel = computed<SenderHeaderPanel>(() => {
   if (headerPanels.value.includes(activeHeaderPanel.value)) return activeHeaderPanel.value;
+  // 权限请求需要立即处理：找不到用户停留的面板时优先弹出权限，而不是默认第一项（队列）
+  if (hasPendingPermission.value) return "permission";
   return headerPanels.value[0] ?? "attachments";
 });
 
@@ -748,9 +750,15 @@ const switchHeaderPanel = (direction: -1 | 1) => {
 watch(
   () => props.queuedMessages.length,
   (length, previousLength) => {
-    if (length > previousLength) activeHeaderPanel.value = "queue";
+    if (length > previousLength && !hasPendingPermission.value) activeHeaderPanel.value = "queue";
   },
 );
+
+// 权限请求到达立即切到权限面板——藏在队列/附件后面不处理，
+// agent 会一直等，最终权限请求超时被取消（「权限请求已取消」）。
+watch(hasPendingPermission, (pending) => {
+  if (pending) activeHeaderPanel.value = "permission";
+});
 
 /** 把 File 列表上传到网关并加入预览行；非图片忽略。 */
 const stageFiles = async (files: File[]) => {
