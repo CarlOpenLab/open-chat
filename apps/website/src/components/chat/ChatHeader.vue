@@ -9,7 +9,6 @@ import {
   Pencil,
   Pin,
   PanelLeftOpen,
-  PanelRight,
   Trash2,
   X,
 } from "@lucide/vue";
@@ -19,14 +18,9 @@ import { computed, h, nextTick, ref, watch } from "vue";
 interface Props {
   title: string;
   sidebarOpen: boolean;
-  rightPanelOpen: boolean;
-  rightPanelAvailable?: boolean;
   syncing?: boolean;
   canGoBack?: boolean;
   canGoForward?: boolean;
-  /** 工作区草稿相对 AI 版本的增删行数，两者皆为 0 时不展示 */
-  diffAdded?: number;
-  diffRemoved?: number;
   /** 是否显示右上角关闭抽屉按钮 */
   showClose?: boolean;
 }
@@ -34,7 +28,6 @@ interface Emits {
   (e: "toggleSidebar"): void;
   (e: "navigateBack"): void;
   (e: "navigateForward"): void;
-  (e: "toggleRightPanel"): void;
   (e: "export"): void;
   (e: "rename", title: string): void;
   (e: "pin"): void;
@@ -43,17 +36,12 @@ interface Emits {
   (e: "close"): void;
 }
 const props = withDefaults(defineProps<Props>(), {
-  rightPanelAvailable: true,
   syncing: false,
   canGoBack: false,
   canGoForward: false,
-  diffAdded: 0,
-  diffRemoved: 0,
   showClose: false,
 });
 const emit = defineEmits<Emits>();
-
-const hasDiff = computed(() => props.diffAdded > 0 || props.diffRemoved > 0);
 
 const handleCopyLink = async () => {
   try {
@@ -182,16 +170,7 @@ const titleMenu = computed<MenuProps>(() => ({
     </Dropdown>
     <div class="min-w-0 flex-1" />
 
-    <!-- 右侧：diff 统计 + 保存状态 + 右侧面板开关 -->
-    <span
-      v-if="hasDiff"
-      class="mr-[6px] flex flex-none items-center gap-[7px] text-[11px] font-medium tabular-nums"
-      :aria-label="`工作区改动：新增 ${diffAdded} 行，删除 ${diffRemoved} 行`"
-    >
-      <span class="text-brand-success">+{{ diffAdded }}</span>
-      <span class="text-brand-danger">-{{ diffRemoved }}</span>
-    </span>
-
+    <!-- 右侧：保存状态 + 复制链接 -->
     <span
       v-if="syncing"
       class="mr-1 flex items-center gap-[6px] text-[10px] text-brand-muted-strong"
@@ -205,18 +184,6 @@ const titleMenu = computed<MenuProps>(() => ({
         class="!w-[26px] !h-[26px] !p-0 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
         aria-label="复制当前会话链接"
         @click="handleCopyLink"
-      />
-    </Tooltip>
-    <Tooltip v-if="rightPanelAvailable" :title="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'">
-      <Button
-        type="text"
-        size="small"
-        :icon="h(PanelRight, { class: rightPanelOpen ? 'text-brand-foreground' : '' })"
-        :class="rightPanelOpen ? '!bg-brand-surface-subtle' : ''"
-        class="!w-[26px] !h-[26px] !p-0 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
-        :aria-label="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'"
-        :aria-pressed="rightPanelOpen"
-        @click="emit('toggleRightPanel')"
       />
     </Tooltip>
     <Tooltip v-if="showClose" title="关闭抽屉">

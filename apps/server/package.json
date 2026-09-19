@@ -15,6 +15,10 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
     "@cc-heart/open-chat-types": "workspace:*",
+    "acp-hub-adapter-claude": "workspace:*",
+    "acp-hub-adapter-codex": "workspace:*",
+    "acp-hub-adapter-pi": "workspace:*",
+    "acp-hub-core": "workspace:*",
     "cors": "catalog:",
     "express": "catalog:"
   },

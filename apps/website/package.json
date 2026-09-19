@@ -28,6 +28,7 @@
     "antdv-next": "catalog:",
     "antdv-style": "catalog:",
     "codemirror": "catalog:",
+    "dayjs": "catalog:",
     "install": "catalog:",
     "shiki": "catalog:",
     "vue": "catalog:"

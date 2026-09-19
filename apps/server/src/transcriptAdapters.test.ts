@@ -527,3 +527,87 @@ describe("provider transcript adapters", () => {
     expect(collector.messages[3]).toMatchObject({ role: "content", content: "Done." });
   });
 });
+
+describe("acp-hub unified event collector", () => {
+  it("collects message/thought deltas, tool upserts, and plans into flat messages", async () => {
+    const { collectHubEvent } = await import("./transcript/adapters/hub");
+    const collector = createTranscriptCollector();
+    const events = [
+      { type: "message_delta", text: "Hello" },
+      { type: "thought_delta", text: "Thinking…" },
+      {
+        type: "tool_call",
+        toolCall: {
+          toolCallId: "edit-1",
+          status: "in_progress",
+          kind: "edit",
+          title: "edit file.ts",
+          rawInput: { path: "file.ts" },
+        },
+      },
+      {
+        type: "tool_call_update",
+        toolCall: {
+          toolCallId: "edit-1",
+          status: "completed",
+          kind: "edit",
+          title: "edit file.ts",
+          rawInput: { path: "file.ts" },
+          rawOutput: { ok: true },
+        },
+      },
+      {
+        type: "plan",
+        entries: [
+          { content: "Step one", priority: "high", status: "completed" },
+          { content: "Step two", priority: "medium", status: "in_progress" },
+        ],
+      },
+      { type: "message_delta", text: " done" },
+    ] as const;
+    for (const event of events) collectHubEvent(collector, event as never);
+
+    expect(collector.messages.map((message) => message.role)).toEqual([
+      "content",
+      "reasoning",
+      "tool",
+      "plan",
+      "content",
+    ]);
+    expect(collector.messages[0]).toMatchObject({ role: "content", content: "Hello" });
+    // 相邻 content 累积合并到同一条消息
+    expect(collector.messages[4]).toMatchObject({ role: "content", content: " done" });
+    const tool = collector.messages[2];
+    if (tool.role === "tool") {
+      expect(tool).toMatchObject({
+        id: "edit-1",
+        name: "edit file.ts",
+        status: "completed",
+        output: JSON.stringify({ ok: true }, null, 2),
+      });
+    }
+    const plan = collector.messages[3];
+    if (plan.role === "plan") {
+      expect(plan.entries).toEqual([
+        { content: "Step one", status: "completed" },
+        { content: "Step two", status: "in_progress" },
+      ]);
+    }
+  });
+
+  it("normalizes failed tool calls to error status with the raw output as error", async () => {
+    const { normalizeHubActivity } = await import("./transcript/adapters/hub");
+    const activity = normalizeHubActivity({
+      toolCallId: "bash-1",
+      status: "failed",
+      kind: "execute",
+      rawOutput: "exit 1",
+    });
+    expect(activity).toMatchObject({
+      id: "bash-1",
+      name: "execute",
+      status: "error",
+      error: "exit 1",
+    });
+  });
+});

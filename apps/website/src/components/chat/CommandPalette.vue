@@ -4,7 +4,6 @@ import {
   MessageSquare,
   Moon,
   PanelLeft,
-  PanelRight,
   Search,
   Settings2,
   SquarePen,
@@ -27,7 +26,6 @@ interface Emits {
   (e: "openSettings"): void;
   (e: "toggleTheme"): void;
   (e: "toggleSidebar"): void;
-  (e: "toggleRightPanel"): void;
   (e: "exportHistory"): void;
   (e: "clearHistory"): void;
   (e: "selectConversation", key: string): void;
@@ -38,7 +36,6 @@ type PaletteCommand =
   | { kind: "settings"; label: string }
   | { kind: "theme"; label: string }
   | { kind: "sidebar"; label: string }
-  | { kind: "rightPanel"; label: string }
   | { kind: "export"; label: string }
   | { kind: "clear"; label: string };
 
@@ -62,7 +59,6 @@ const commandGroups: { title: string; items: PaletteCommand[] }[] = [
       { kind: "new", label: "新建任务" },
       { kind: "settings", label: "打开设置" },
       { kind: "sidebar", label: "切换侧边栏" },
-      { kind: "rightPanel", label: "切换右侧面板" },
       { kind: "theme", label: "切换主题" },
       { kind: "export", label: "导出聊天记录" },
       { kind: "clear", label: "清空本地历史" },
@@ -142,9 +138,6 @@ const run = (row: PaletteRow) => {
     case "sidebar":
       emit("toggleSidebar");
       break;
-    case "rightPanel":
-      emit("toggleRightPanel");
-      break;
     case "export":
       emit("exportHistory");
       break;
@@ -165,8 +158,6 @@ const commandIcon = (command: PaletteCommand) => {
       return props.dark ? Sun : Moon;
     case "sidebar":
       return PanelLeft;
-    case "rightPanel":
-      return PanelRight;
     case "export":
       return Download;
     case "clear":

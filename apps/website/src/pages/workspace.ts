@@ -68,9 +68,6 @@ export interface Workspace {
   isPiAgent: boolean;
   pendingPermission: PermissionRequest | null;
   fileModeEnabled: boolean;
-  rightPanelOpen: boolean;
-  workspaceAvailable: boolean;
-  workspaceDiffStats: { added: number; removed: number };
   historyBack: string[];
   historyForward: string[];
 
@@ -93,6 +90,7 @@ export interface Workspace {
   boardOpenKey: string;
   drawerWidth: number;
   taskNowTick: number;
+  isHydrating: boolean;
   boardStatusSignals: SessionStatusSignals;
 
   // ===== 浮层 =====
@@ -111,6 +109,7 @@ export interface Workspace {
   handlePinConversation: (conversationKey?: string) => void;
   handleArchiveConversation: (conversationKey?: string) => void;
   handleDeleteConversation: (conversationKey?: string) => void;
+  confirmDeleteConversation: () => void;
   handleSidebarRename: (conversationKey: string, title: string) => void;
   handleNewConversation: () => void;
   handleActiveChange: ConversationsActiveChange;
@@ -165,6 +164,8 @@ export interface Workspace {
   handleRetrySessionForTask: (taskId: string, sessionKey: string) => void;
   handleRemoveSessionLink: (taskId: string, sessionKey: string) => void;
   closeTaskDrawer: () => void;
+  /** 看板 AI 助手回合结束后从网关重载任务（flush 挂起的本地保存后拉取）。 */
+  refreshTasksFromServer: () => Promise<void>;
 }
 
 /** Conversations 组件 onActiveChange 的 key 是 string | number，内部统一转 string。 */

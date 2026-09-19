@@ -87,20 +87,24 @@ const DEFAULT_LOCAL: LocalConfig = {
 /**
  * 内置默认 agents：自动发现本机已安装的编码 CLI。
  *
- * - codex / claude / pi / opencode / omp 均走原生传输（无需 ACP 适配器）
- * - omp（Oh My Pi）是 Pi 的 fork，`--mode rpc` 协议兼容，但 CLI 参数
- *   （`--auto-approve` 而非 `--approve`）与会话存储目录（`~/.omp` 而非 `~/.pi`）
- *   不同，因此单独列为 `omp` transport，与 pi 区分开。
- * - 未安装的 CLI 会在界面里标记为"不可用"，不影响其他 agent
+ * 所有 stdio CLI（codex / claude / pi / omp / 自定义 ACP）统一经 acp-hub
+ * 适配器走 Agent Client Protocol：内置 CLI 由各自的 ACP 桥接包启动
+ * （首次运行经 npx 自动获取，需本机已安装并登录对应的 CLI）：
+ * - codex   → npx -y acp-extension-codex（内部 spawn codex app-server）
+ * - claude  → npx -y @zed-industries/claude-code-acp（需 Claude Code CLI）
+ * - pi / omp → npx @mariozechner/pi --mode acp / oh-my-pi --mode acp
+ * - opencode 保持原生本地 HTTP 服务（localProvider），不经 ACP。
+ * `cliCommand` 仍指向原始 CLI，用于"CLI 已安装"检测；`command` 是 ACP 桥接启动命令。
+ * 未安装的 CLI 会在界面里标记为"不可用"，不影响其他 agent。
  */
 const DEFAULT_ACP_AGENTS: AcpAgentConfig[] = [
   {
     id: "codex",
     name: "Codex",
-    description: "OpenAI Codex CLI via native app-server",
+    description: "OpenAI Codex CLI via ACP (acp-extension-codex)",
     enabled: true,
-    command: "codex",
-    args: [],
+    command: "npx",
+    args: ["-y", "acp-extension-codex"],
     cliCommand: "codex",
     cwd: "",
     adapterHint: "请先安装并登录 Codex CLI",
@@ -121,10 +125,10 @@ const DEFAULT_ACP_AGENTS: AcpAgentConfig[] = [
   {
     id: "claude",
     name: "Claude Code",
-    description: "Claude Code CLI via native stream-json",
+    description: "Claude Code CLI via ACP (claude-code-acp)",
     enabled: true,
-    command: "claude",
-    args: [],
+    command: "npx",
+    args: ["-y", "@zed-industries/claude-code-acp"],
     cliCommand: "claude",
     cwd: "",
     adapterHint: "请先安装并登录 Claude Code CLI",
@@ -133,25 +137,25 @@ const DEFAULT_ACP_AGENTS: AcpAgentConfig[] = [
   {
     id: "pi",
     name: "Pi",
-    description: "Pi coding agent via native RPC mode",
+    description: "Pi coding agent via ACP (pi --mode acp)",
     enabled: true,
     command: "pi",
-    args: [],
+    args: ["--mode", "acp"],
     cliCommand: "pi",
     cwd: "",
-    adapterHint: "请先安装并配置 Pi coding agent",
+    adapterHint: "需要本地安装支持 ACP 模式的 Pi CLI（pi --mode acp）",
     transport: "pi",
   },
   {
     id: "omp",
     name: "Oh My Pi",
-    description: "Oh My Pi (omp) coding agent via native RPC mode",
+    description: "Oh My Pi (omp) via ACP (omp acp)",
     enabled: true,
     command: "omp",
-    args: [],
+    args: ["acp"],
     cliCommand: "omp",
     cwd: "",
-    adapterHint: "请先安装 Oh My Pi (https://omp.sh)",
+    adapterHint: "需要支持 ACP 的 Oh My Pi（omp acp，v18+）",
     transport: "omp",
   },
 ];

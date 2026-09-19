@@ -9,6 +9,7 @@ import { Drawer } from "antdv-next";
 import TaskBoardView from "../components/chat/TaskBoardView.vue";
 import TaskDetailDrawer from "../components/chat/TaskDetailDrawer.vue";
 import ConversationPanel from "../components/chat/ConversationPanel.vue";
+import BoardAssistantDrawer from "../components/board/BoardAssistantDrawer.vue";
 import { useWorkspace } from "./workspace";
 
 const ws = useWorkspace();
@@ -25,6 +26,7 @@ const ws = useWorkspace();
       :project-path-options="ws.projectPathOptions"
       :current-project-path="ws.projectPath"
       :dark="ws.dark"
+      :loading="ws.isHydrating"
       @open-task="ws.handleTaskOpen($event)"
       @move-task="(id, status) => ws.handleTaskMove(id, status)"
       @create-task="ws.handleTaskCreate($event)"
@@ -71,7 +73,7 @@ const ws = useWorkspace();
     :open="Boolean(ws.boardOpenKey)"
     placement="right"
     :width="ws.drawerWidth"
-    :keyboard="false"
+    :keyboard="true"
     :body-style="{ padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }"
     :header-style="{ display: 'none' }"
     destroy-on-close
@@ -79,11 +81,22 @@ const ws = useWorkspace();
   >
     <ConversationPanel v-if="ws.boardOpenKey" />
   </Drawer>
+
+  <!-- 看板 AI 助手：悬浮按钮 + 聊天抽屉 -->
+  <BoardAssistantDrawer :agents="ws.agents" @tasks-mutated="ws.refreshTasksFromServer()" />
 </template>
 
 <style scoped>
 /* 抽屉内右面板：覆盖在消息流之上 */
 :deep(.board-drawer .ant-drawer-body) {
   position: relative;
+}
+
+/* 移动端：抽屉全屏，避免 560+ 宽度在窄屏溢出 */
+@media (max-width: 768px) {
+  :deep(.board-drawer) {
+    width: 100vw !important;
+    max-width: 100vw !important;
+  }
 }
 </style>

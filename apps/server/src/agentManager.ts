@@ -3,20 +3,20 @@ import type { AcpConfig } from "./config";
 import type { LocalChatManager } from "./localProvider";
 import { AcpManager, type AcpAgentView, type AcpSessionStateView } from "./acpManager";
 import {
-  NativeCliManager,
-  type NativeAgentView,
-  type NativeSessionStateView,
-} from "./nativeCliManager";
+  OpenCodeManager,
+  type OpenCodeAgentView,
+  type OpenCodeSessionStateView,
+} from "./openCodeManager";
 import { GatewayError } from "./error";
 import { SessionRunRegistry } from "./sessionRunRegistry";
 import type { TranscriptMessage } from "./transcript/types";
 
-export type AgentView = AcpAgentView | NativeAgentView;
-type AgentSessionStateView = AcpSessionStateView | NativeSessionStateView;
+export type AgentView = AcpAgentView | OpenCodeAgentView;
+type AgentSessionStateView = AcpSessionStateView | OpenCodeSessionStateView;
 
 export class AgentManager {
   private readonly acp: AcpManager;
-  private readonly native: NativeCliManager;
+  private readonly openCode: OpenCodeManager | null;
   private readonly runs = new SessionRunRegistry();
 
   constructor(
@@ -24,13 +24,14 @@ export class AgentManager {
     localChat: LocalChatManager | null,
   ) {
     this.acp = new AcpManager(config);
-    this.native = new NativeCliManager(config, localChat);
+    this.openCode = localChat ? new OpenCodeManager(config, localChat) : null;
   }
 
   listAgents(): AgentView[] {
     const byId = new Map<string, AgentView>();
-    for (const agent of [...this.native.listAgents(), ...this.acp.listAgents()]) {
-      byId.set(agent.id, agent);
+    for (const agent of this.acp.listAgents()) byId.set(agent.id, agent);
+    if (this.openCode) {
+      for (const agent of this.openCode.listAgents()) byId.set(agent.id, agent);
     }
     return this.config.agents.flatMap((agent) => {
       const view = byId.get(agent.id);
@@ -47,7 +48,10 @@ export class AgentManager {
     if (this.acp.hasAgent(agentId)) {
       return this.acp.getSessionState(agentId, conversationId, projectPath, providerSessionId);
     }
-    return this.native.getSessionState(agentId, conversationId, projectPath, providerSessionId);
+    if (this.openCode?.hasAgent(agentId)) {
+      return this.openCode.getSessionState(agentId, conversationId, projectPath, providerSessionId);
+    }
+    throw GatewayError.invalidRequest(`未知的本地 Agent：${agentId}`);
   }
 
   setSessionConfigOption(
@@ -68,14 +72,17 @@ export class AgentManager {
         providerSessionId,
       );
     }
-    return this.native.setSessionConfigOption(
-      agentId,
-      conversationId,
-      configId,
-      value,
-      projectPath,
-      providerSessionId,
-    );
+    if (this.openCode?.hasAgent(agentId)) {
+      return this.openCode.setSessionConfigOption(
+        agentId,
+        conversationId,
+        configId,
+        value,
+        projectPath,
+        providerSessionId,
+      );
+    }
+    throw GatewayError.invalidRequest(`未知的本地 Agent：${agentId}`);
   }
 
   async runTurn(
@@ -121,16 +128,18 @@ export class AgentManager {
           tracked.response,
           tracked.signal,
         );
-      } else {
-        await this.native.runTurn(
+      } else if (this.openCode?.hasAgent(agentId)) {
+        await this.openCode.runTurn(
           agentId,
           conversationId,
           text,
           projectPath,
+          providerSessionId,
           tracked.response,
           tracked.signal,
-          providerSessionId,
         );
+      } else {
+        throw GatewayError.invalidRequest(`未知的本地 Agent：${agentId}`);
       }
       this.runs.finish(agentId, conversationId);
     } catch (error) {
@@ -147,10 +156,11 @@ export class AgentManager {
     permissionId: string,
     response: "once" | "always" | "reject",
   ): Promise<void> {
-    return this.managerFor(agentId).replyPermission(permissionId, response);
+    if (this.acp.hasAgent(agentId)) return this.acp.replyPermission(permissionId, response);
+    throw GatewayError.invalidRequest(`未知的本地 Agent：${agentId}`);
   }
 
-  /** 订阅由网关启动的会话事件流（SSE）；native CLI 不通过文件轮询伪造实时事件。 */
+  /** 订阅由网关启动的会话事件流（SSE）；本地 CLI 不通过文件轮询伪造实时事件。 */
   async subscribeSessionStream(
     agentId: string,
     conversationId: string,
@@ -174,13 +184,7 @@ export class AgentManager {
 
   stop(): void {
     this.runs.stop();
-    this.native.stop();
+    this.openCode?.stop();
     this.acp.stop();
-  }
-
-  private managerFor(agentId: string): NativeCliManager | AcpManager {
-    if (this.native.hasAgent(agentId)) return this.native;
-    if (this.acp.hasAgent(agentId)) return this.acp;
-    throw GatewayError.invalidRequest(`未知的本地 Agent：${agentId}`);
   }
 }

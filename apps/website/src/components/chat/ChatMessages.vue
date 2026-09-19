@@ -2,9 +2,10 @@
 import type { BubbleItemType, ItemType } from "@antdv-next/x";
 import { Actions, Bubble } from "@antdv-next/x";
 import { Copy, RotateCcw } from "@lucide/vue";
-import { computed, h, onBeforeUnmount, provide, ref, watch } from "vue";
+import { computed, h, onBeforeUnmount, provide, ref, toRef, watch } from "vue";
 import type { WebSearchSourceItem, UploadedAttachment } from "../../services/ai";
 import { attachmentUrl } from "../../services/ai";
+import { useNow } from "../../composables/useNow";
 import { formatWorkingElapsed } from "../../utils/chatDuration";
 import type { TranscriptMessage } from "@cc-heart/open-chat-types";
 import AssistantMessageContent from "./AssistantMessageContent.vue";
@@ -230,26 +231,10 @@ const buildMessageActions = (item: BubbleItemType): ItemType[] => {
 };
 
 /** 列尾"工作中 · Xs"跳动计时：跟随 busy 状态，会话运行中每秒刷新。 */
-const nowMs = ref(Date.now());
-let workingTickTimer: ReturnType<typeof setInterval> | undefined;
-watch(
-  () => props.working,
-  (working) => {
-    if (working && !workingTickTimer) {
-      nowMs.value = Date.now();
-      workingTickTimer = setInterval(() => {
-        nowMs.value = Date.now();
-      }, 1000);
-    } else if (!working && workingTickTimer) {
-      clearInterval(workingTickTimer);
-      workingTickTimer = undefined;
-    }
-  },
-  { immediate: true },
-);
+const workingNow = useNow(toRef(props, "working"));
 const workingElapsed = computed(() =>
   props.workingStartedAtMs
-    ? formatWorkingElapsed(Math.max(0, nowMs.value - props.workingStartedAtMs))
+    ? formatWorkingElapsed(Math.max(0, workingNow.value - props.workingStartedAtMs))
     : "",
 );
 

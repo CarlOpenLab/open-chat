@@ -276,6 +276,29 @@ a {
   --brand-shadow-xs: none;
   --brand-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.18);
   --brand-shadow-float: 0 4px 20px rgba(0, 0, 0, 0.28);
+  /* token 收敛：shadcn 基础变量别名到 brand 令牌，自定义组件
+     （看板/卡片等）与 chat 组件在 .chat-app 内共用同一套色板，
+     主题切换只需改 brand 值 */
+  --background: var(--brand-background);
+  --foreground: var(--brand-foreground);
+  --card: var(--brand-surface);
+  --card-foreground: var(--brand-foreground);
+  --subtle: var(--brand-surface-muted);
+  --muted: var(--brand-surface-subtle);
+  --muted-foreground: var(--brand-muted);
+  --border: var(--brand-border);
+  --border-strong: var(--brand-border-strong);
+  --input: var(--brand-border-strong);
+  --success: var(--brand-success);
+  --danger: var(--brand-danger);
+  --danger-subtle: var(--brand-danger-subtle);
+  --danger-border: hsla(4, 55%, 63%, 0.35);
+  --warning: #f59e0b;
+  --warning-subtle: hsla(38, 92%, 50%, 0.12);
+  --warning-border: hsla(38, 92%, 50%, 0.35);
+  --fill-faint: var(--brand-surface-muted);
+  --primary-subtle: var(--brand-surface-subtle);
+  --primary-subtle-hover: hsla(0, 0%, 94%, 0.1);
 }
 
 html[data-theme="dark"] .chat-app {

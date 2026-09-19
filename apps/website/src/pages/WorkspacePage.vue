@@ -26,15 +26,11 @@ import {
   type OpenChatParams,
   type PermissionRequest,
 } from "../services/OpenChatProvider";
-import {
-  collectFileWorkspaceState,
-  collectWorkspaceDiffStats,
-  type EditableWorkspaceFile,
-} from "../utils/fileWorkspace";
 import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../utils/projectPath";
 import { FILE_WORKSPACE_SYSTEM_PROMPT } from "../prompts/fileWorkspace";
 import { deriveBoardStatus, hasPersistedError, type SessionStatus } from "../utils/sessionStatus";
 import { loadChatState, type QueuedChatMessage } from "../services/chatStorage";
+import { useNow } from "../composables/useNow";
 import {
   API_AGENT,
   cancelAcpTurn,
@@ -46,6 +42,7 @@ import {
   type AcpSessionState,
   type AgentView,
 } from "../services/acp";
+import { loadServerState, saveServerState } from "../services/serverState";
 import {
   appendTranscriptMessageToModelMessages,
   isHiddenModelMessage,
@@ -61,6 +58,7 @@ import {
 } from "../composables/useChatPersistence";
 import { useCoalescedUpdater } from "../composables/useCoalescedUpdater";
 import CommandPalette from "../components/chat/CommandPalette.vue";
+import DeleteConversationModal from "../components/chat/DeleteConversationModal.vue";
 import SettingsDialog from "../components/chat/SettingsDialog.vue";
 import TopTabBar from "../components/layout/TopTabBar.vue";
 import BoardPage from "./BoardPage.vue";
@@ -158,17 +156,16 @@ const schedulePersistTasks = () => {
     void saveTasks(taskList.value);
   }, 200);
 };
-const taskFilter = ref<"all" | "active" | "completed">("all");
-const taskSearch = ref("");
-const taskNewModalOpen = ref(false);
-const taskNewForm = reactive({
-  title: "",
-  description: "",
-  priority: "medium" as Task["priority"],
-  projectPath: "",
-});
-/** 看板/任务看板主视图切换：默认 tasks，任务优先；会话看板作为辅助透视 */
-const mainViewMode = ref<"tasks" | "conversations">("tasks");
+/** 看板 AI 助手回合结束后调用：先 flush 挂起的本地保存，再从网关重载任务，
+ *  保证看板与（可能被助手改过的）服务端状态一致。 */
+const refreshTasksFromServer = async () => {
+  if (persistTasksTimer) {
+    clearTimeout(persistTasksTimer);
+    persistTasksTimer = null;
+    await saveTasks(taskList.value);
+  }
+  taskList.value = await loadTasks();
+};
 const pendingPermissions = reactive(new Map<string, PermissionRequest>());
 /** 看板抽屉宽度：桌面默认 1080，上限视口 92%；移动端由 CSS 全屏接管。 */
 const DRAWER_WIDTH_DEFAULT = 1080;
@@ -177,6 +174,16 @@ const drawerWidth = ref(
     ? Math.min(DRAWER_WIDTH_DEFAULT, Math.floor(window.innerWidth * 0.92))
     : DRAWER_WIDTH_DEFAULT,
 );
+/** 移动端断点监听：跨越 767px 时收起侧栏并重算抽屉宽度上限 */
+const mobileLayoutMedia =
+  typeof window !== "undefined" ? window.matchMedia("(max-width: 767px)") : null;
+const handleMobileLayoutChange = (event: MediaQueryListEvent) => {
+  if (event.matches) {
+    conversationsOpen.value = false;
+    boardOpenKey.value = "";
+  }
+  drawerWidth.value = Math.min(DRAWER_WIDTH_DEFAULT, Math.floor(window.innerWidth * 0.92));
+};
 /** 出错 / 手动停止后未恢复的会话：驱动「已终止」列。 */
 const stoppedConversationKeys = ref<Set<string>>(new Set());
 const boardStatusSignals = computed(
@@ -187,8 +194,8 @@ const boardStatusSignals = computed(
       stoppedKeys: stoppedConversationKeys.value,
     }) satisfies import("../utils/sessionStatus").SessionStatusSignals,
 );
-const rightPanelOpen = ref(false);
 const deleteOpen = ref(false);
+const deleteTargetKey = ref("");
 const currentConversationKey = ref<string>("");
 const thinkingEnabled = ref(true);
 const workMode = ref<"build" | "plan">("build");
@@ -200,7 +207,6 @@ const defaultProjectPath = ref("");
 const PROJECT_PATH_HISTORY_KEY = "open-chat-project-paths-v1";
 /** 全局项目历史（与供应商/模型解耦）：不再按 agentId 分区 */
 const projectPathHistory = ref<string[]>([]);
-const selectedWorkspacePath = ref<string[]>([]);
 const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const showWelcome = ref(true);
 const isHydrating = ref(true);
@@ -481,33 +487,50 @@ const normalizeProjectPath = (value: string | undefined): string => {
 
 const loadProjectPathHistory = () => {
   if (typeof window === "undefined") return;
-  try {
-    const stored = JSON.parse(localStorage.getItem(PROJECT_PATH_HISTORY_KEY) || "null") as unknown;
-    if (!stored) return;
-    let paths: string[] = [];
-    if (Array.isArray(stored)) {
-      paths = stored.filter((v): v is string => typeof v === "string");
-    } else if (typeof stored === "object") {
-      // 兼容旧数据：Record<agentId, string[]> → 合并为全局列表
-      for (const value of Object.values(stored as Record<string, unknown>)) {
-        if (Array.isArray(value)) {
-          paths.push(...value.filter((v): v is string => typeof v === "string"));
-        }
+  // 项目历史存网关（局域网共享）；localStorage 旧数据仅在网关为空时一次性迁移
+  void loadServerState("project-paths")
+    .then((stored) => {
+      if (Array.isArray(stored) && stored.length) {
+        projectPathHistory.value = uniqueDirectoryPaths(
+          stored.filter((v): v is string => typeof v === "string").map(normalizeProjectPath),
+        ).slice(0, 20);
+        return;
       }
-    }
-    projectPathHistory.value = uniqueDirectoryPaths(paths.map(normalizeProjectPath)).slice(0, 20);
+      if (stored && typeof stored === "object") {
+        // 兼容旧数据：Record<agentId, string[]> → 合并为全局列表
+        const paths: string[] = [];
+        for (const value of Object.values(stored as Record<string, unknown>)) {
+          if (Array.isArray(value)) {
+            paths.push(...value.filter((v): v is string => typeof v === "string"));
+          }
+        }
+        if (paths.length) {
+          projectPathHistory.value = uniqueDirectoryPaths(paths.map(normalizeProjectPath)).slice(
+            0,
+            20,
+          );
+        }
+        return;
+      }
+      migrateLegacyProjectPaths();
+    })
+    .catch(() => migrateLegacyProjectPaths());
+};
+
+/** localStorage 旧副本仅在网关无数据时上传，避免覆盖其他设备的数据。 */
+const migrateLegacyProjectPaths = () => {
+  try {
+    const legacy = localStorage.getItem(PROJECT_PATH_HISTORY_KEY);
+    if (!legacy) return;
+    localStorage.removeItem(PROJECT_PATH_HISTORY_KEY);
+    void saveServerState("project-paths", JSON.parse(legacy)).catch(() => {});
   } catch {
-    projectPathHistory.value = [];
+    // ignore
   }
 };
 
 const saveProjectPathHistory = () => {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(PROJECT_PATH_HISTORY_KEY, JSON.stringify(projectPathHistory.value));
-  } catch {
-    // Local storage may be unavailable in private browsing; the in-memory list still works.
-  }
+  void saveServerState("project-paths", [...projectPathHistory.value]).catch(() => {});
 };
 
 const rememberProjectPath = (value: string) => {
@@ -858,39 +881,6 @@ const searchResultsByMessageId = computed<Record<string, WebSearchSourceItem[]>>
   }
   return map;
 });
-const currentFileWorkspace = computed(() =>
-  collectFileWorkspaceState(
-    currentConversationMessages.value.map(({ id, message }) => ({
-      id,
-      role: message.role,
-      content: message.content,
-      messages: Array.isArray((message as { fragments?: unknown }).fragments)
-        ? ((message as { fragments: unknown }).fragments as TranscriptMessage[])
-        : undefined,
-    })),
-  ),
-);
-const editableWorkspaceFiles = computed<EditableWorkspaceFile[]>(() => {
-  const drafts = getCurrentConversation()?.workspaceDrafts ?? [];
-  return currentFileWorkspace.value.files.map((file) => {
-    const draft = drafts.find((item) => item.path === file.path);
-    const content = draft?.content ?? file.content;
-    return {
-      ...file,
-      content,
-      originalContent: file.content,
-      dirty: content !== file.content,
-      hasIncomingChange: Boolean(
-        draft && draft.baseContent !== file.content && draft.content !== file.content,
-      ),
-    };
-  });
-});
-const workspaceAvailable = computed(
-  () => fileModeEnabled.value || currentFileWorkspace.value.hasWorkspace,
-);
-/** 顶栏 `+N -M`：本地草稿相对 AI 版本的真实增删行数 */
-const workspaceDiffStats = computed(() => collectWorkspaceDiffStats(editableWorkspaceFiles.value));
 
 const updateConversationMessages = (
   conversationKey: string,
@@ -917,12 +907,30 @@ const updateConversationMessages = (
   }
 };
 
-/** 布局视图：看板页 / 对话页（TopTabBar 切换，持久化到 localStorage）。 */
-const viewMode = ref<"board" | "chat">(
-  localStorage.getItem("open-chat-view") === "chat" ? "chat" : "board",
-);
+/** 布局视图：看板页 / 对话页（TopTabBar 切换）。URL `?view=` 优先，其次 localStorage。 */
+const readInitialViewMode = (): "board" | "chat" => {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get("view");
+    if (fromUrl === "board" || fromUrl === "chat") return fromUrl;
+  } catch {
+    /* ignore */
+  }
+  return localStorage.getItem("open-chat-view") === "chat" ? "chat" : "board";
+};
+const viewMode = ref<"board" | "chat">(readInitialViewMode());
+const syncViewRoute = (mode: "board" | "chat") => {
+  try {
+    const url = new URL(window.location.href);
+    if (mode === "board") url.searchParams.delete("view");
+    else url.searchParams.set("view", mode);
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  } catch {
+    /* ignore */
+  }
+};
 watch(viewMode, (mode) => {
   localStorage.setItem("open-chat-view", mode);
+  syncViewRoute(mode);
 });
 
 const resetToDraftConversation = () => {
@@ -1173,19 +1181,8 @@ const currentConversationBusyState = computed(() =>
     : undefined,
 );
 /** 共享计时 tick：驱动任务卡片/抽屉内会话的耗时显示 */
-const taskNowTick = ref(Date.now());
-let taskTickTimer: ReturnType<typeof setInterval> | undefined;
-const stopTaskTick = () => {
-  if (taskTickTimer) clearInterval(taskTickTimer);
-  taskTickTimer = undefined;
-};
-const startTaskTick = (periodMs: number) => {
-  stopTaskTick();
-  taskTickTimer = setInterval(() => (taskNowTick.value = Date.now()), periodMs);
-};
 const hasTaskBusy = computed(() => Object.keys(conversationBusyStates.value).length > 0);
-watch(hasTaskBusy, (busy) => startTaskTick(busy ? 1000 : 30000), { immediate: true });
-onBeforeUnmount(stopTaskTick);
+const taskNowTick = useNow(hasTaskBusy);
 
 // ============ 会话持久化 ============
 
@@ -1595,30 +1592,6 @@ watch(currentConversationKey, (key) => {
   if (conversationPath) rememberProjectPath(conversationPath);
 });
 
-watch(
-  currentFileWorkspace,
-  (workspace, previousWorkspace) => {
-    const selected = selectedWorkspacePath.value.join("/");
-    if (!workspace.files.some((file) => file.path === selected)) {
-      selectedWorkspacePath.value = workspace.files[0]?.path.split("/") ?? [];
-    }
-    const hasNewRevision = workspace.files.some((file) => {
-      const previousFile = previousWorkspace?.files.find((item) => item.path === file.path);
-      return previousFile && previousFile.ownerMessageId !== file.ownerMessageId;
-    });
-    if (
-      workspace.hasWorkspace &&
-      (!previousWorkspace?.hasWorkspace ||
-        workspace.files.length > previousWorkspace.files.length ||
-        hasNewRevision ||
-        (workspace.pending && !previousWorkspace.pending))
-    ) {
-      rightPanelOpen.value = true;
-    }
-  },
-  { deep: true },
-);
-
 const handleWorkspaceKeydown = (event: KeyboardEvent) => {
   if (event.key === "Escape") {
     commandPaletteOpen.value = false;
@@ -1635,9 +1608,9 @@ onMounted(async () => {
   window.addEventListener("keydown", handleWorkspaceKeydown);
   window.addEventListener("popstate", handleRoutePopState);
   document.addEventListener("visibilitychange", handleVisibilityChange);
-  if (window.matchMedia("(max-width: 767px)").matches) {
+  mobileLayoutMedia?.addEventListener("change", handleMobileLayoutChange);
+  if (mobileLayoutMedia?.matches) {
     conversationsOpen.value = false;
-    rightPanelOpen.value = false;
   }
   const initialChatPath = window.location.pathname;
   const [persistedState, loadedAgents, loadedDefaultProjectPath, loadedTasks] = await Promise.all([
@@ -1696,6 +1669,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleWorkspaceKeydown);
   window.removeEventListener("popstate", handleRoutePopState);
   document.removeEventListener("visibilitychange", handleVisibilityChange);
+  mobileLayoutMedia?.removeEventListener("change", handleMobileLayoutChange);
   window.removeEventListener("mousemove", handleResizeMove);
   window.removeEventListener("mouseup", handleResizeEnd);
   stopAcpLiveStream();
@@ -2554,41 +2528,6 @@ const handlePermissionChange = (value: "supervised" | "auto" | "full") => {
 
 const handleFileModeChange = (value: boolean) => {
   fileModeEnabled.value = value;
-  if (value) rightPanelOpen.value = true;
-  else if (!currentFileWorkspace.value.hasWorkspace) rightPanelOpen.value = false;
-};
-
-const handleWorkspaceFileChange = (payload: { path: string; content: string }) => {
-  const conversation = getCurrentConversation();
-  const sourceFile = currentFileWorkspace.value.files.find((file) => file.path === payload.path);
-  if (!conversation || !sourceFile || sourceFile.status === "streaming") return;
-
-  const drafts = conversation.workspaceDrafts ?? [];
-  const existing = drafts.find((draft) => draft.path === payload.path);
-  if (payload.content === sourceFile.content) {
-    conversation.workspaceDrafts = drafts.filter((draft) => draft.path !== payload.path);
-  } else {
-    conversation.workspaceDrafts = [
-      ...drafts.filter((draft) => draft.path !== payload.path),
-      {
-        path: payload.path,
-        baseContent: existing?.baseContent ?? sourceFile.content,
-        content: payload.content,
-        updatedAt: Date.now(),
-      },
-    ];
-  }
-  schedulePersistState();
-};
-
-const clearWorkspaceDraft = (path: string, successMessage: string) => {
-  const conversation = getCurrentConversation();
-  if (!conversation) return;
-  conversation.workspaceDrafts = (conversation.workspaceDrafts ?? []).filter(
-    (draft) => draft.path !== path,
-  );
-  schedulePersistState();
-  message.success(successMessage);
 };
 
 const handleReloadMessage = (messageId: string | number) => {
@@ -2701,7 +2640,15 @@ const handleArchiveConversation = (conversationKey: string = currentConversation
   message.success("对话已归档");
 };
 
+/** 打开删除确认弹窗；确认后由 confirmDeleteConversation 执行删除。 */
 const handleDeleteConversation = (conversationKey: string = currentConversationKey.value) => {
+  if (!conversationKey) return;
+  deleteTargetKey.value = conversationKey;
+  deleteOpen.value = true;
+};
+
+const confirmDeleteConversation = () => {
+  const conversationKey = deleteTargetKey.value;
   if (!conversationKey) return;
   conversationList.value = conversationList.value.filter(
     (conversation) => String(conversation.key) !== conversationKey,
@@ -2717,6 +2664,7 @@ const handleDeleteConversation = (conversationKey: string = currentConversationK
   }
   if (tasksPruned) schedulePersistTasks();
   deleteOpen.value = false;
+  deleteTargetKey.value = "";
   if (conversationKey === boardOpenKey.value) {
     boardOpenKey.value = "";
   }
@@ -2988,9 +2936,6 @@ const workspace = reactive({
   isPiAgent,
   pendingPermission,
   fileModeEnabled,
-  rightPanelOpen,
-  workspaceAvailable,
-  workspaceDiffStats,
   historyBack,
   historyForward,
 
@@ -3031,6 +2976,7 @@ const workspace = reactive({
   handlePinConversation,
   handleArchiveConversation,
   handleDeleteConversation,
+  confirmDeleteConversation,
   handleSidebarRename,
   handleNewConversation,
   handleActiveChange,
@@ -3076,13 +3022,14 @@ const workspace = reactive({
   handleRetrySessionForTask,
   handleRemoveSessionLink,
   closeTaskDrawer,
+  refreshTasksFromServer,
 }) satisfies Workspace;
 
 provideWorkspace(workspace);
 </script>
 <template>
   <div
-    class="workspace-root relative flex h-screen min-h-[100dvh] flex-col overflow-hidden bg-brand-background text-brand-foreground selection:bg-brand-surface-subtle selection:text-brand-foreground"
+    class="workspace-root chat-app relative flex h-screen min-h-[100dvh] flex-col overflow-hidden bg-brand-background text-brand-foreground selection:bg-brand-surface-subtle selection:text-brand-foreground"
   >
     <!-- 顶部布局切换：横线 hover 唤起居中 Segmented -->
     <TopTabBar v-model="viewMode" />
@@ -3104,7 +3051,6 @@ provideWorkspace(workspace);
       @open-settings="settingsOpen = true"
       @toggle-theme="emit('toggleTheme')"
       @toggle-sidebar="handleSidebarToggle"
-      @toggle-right-panel="rightPanelOpen = !rightPanelOpen"
       @export-history="handleExportLocalHistory"
       @clear-history="handleClearLocalHistory"
       @select-conversation="handleCommandPaletteSelectConversation"
@@ -3123,6 +3069,9 @@ provideWorkspace(workspace);
       @export-history="handleExportLocalHistory"
       @clear-history="handleClearLocalHistory"
     />
+
+    <!-- 删除会话二次确认 -->
+    <DeleteConversationModal v-model:open="deleteOpen" @confirm="confirmDeleteConversation" />
   </div>
 </template>
 

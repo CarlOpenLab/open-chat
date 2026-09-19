@@ -1,10 +1,8 @@
 import type { ConversationItemType } from "@antdv-next/x";
 import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
 import { isValidWorkspaceFileDraft, type WorkspaceFileDraft } from "../utils/fileWorkspace";
-import { deleteLocalValue, readLocalValue, writeLocalValue } from "./localDatabase";
+import { clearServerState, loadServerState, saveServerState } from "./serverState";
 import type { UploadedAttachment } from "./ai";
-
-const CHAT_STATE_KEY = "chat-state-v1";
 
 export interface QueuedChatMessage {
   id: string;
@@ -157,39 +155,28 @@ export function normalizePersistedChatState(value: unknown): PersistedChatState 
 }
 
 export async function loadChatState(): Promise<PersistedChatState | null> {
-  if (typeof window === "undefined" || !("indexedDB" in window)) {
-    return null;
-  }
-
   try {
-    const raw = await readLocalValue<unknown>(CHAT_STATE_KEY);
+    // 状态存网关（局域网共享）；IndexedDB 旧数据由 serverState 一次性迁移
+    const raw = await loadServerState("chat-state");
     return normalizePersistedChatState(raw);
   } catch (error) {
-    console.error("Failed to load chat state from IndexedDB:", error);
+    console.error("Failed to load chat state:", error);
     return null;
   }
 }
 
 export async function saveChatState(state: PersistedChatState): Promise<void> {
-  if (typeof window === "undefined" || !("indexedDB" in window)) {
-    return;
-  }
-
   try {
-    await writeLocalValue(CHAT_STATE_KEY, state);
+    await saveServerState("chat-state", state);
   } catch (error) {
-    console.error("Failed to save chat state to IndexedDB:", error);
+    console.error("Failed to save chat state:", error);
   }
 }
 
 export async function clearChatState(): Promise<void> {
-  if (typeof window === "undefined" || !("indexedDB" in window)) {
-    return;
-  }
-
   try {
-    await deleteLocalValue(CHAT_STATE_KEY);
+    await clearServerState("chat-state");
   } catch (error) {
-    console.error("Failed to clear chat state from IndexedDB:", error);
+    console.error("Failed to clear chat state:", error);
   }
 }

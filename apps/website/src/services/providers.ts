@@ -1,4 +1,4 @@
-import { deleteLocalValue, readLocalValue, writeLocalValue } from "./localDatabase";
+import { loadServerState, saveServerState } from "./serverState";
 
 type ProviderApi = "chat/completions" | "responses";
 
@@ -29,14 +29,14 @@ interface ProviderInput {
   models: ProviderModelInfo[];
 }
 
-/** 本地持久化形态：apiKey 明文保存在浏览器 IndexedDB（与服务端无关）。 */
+/** 本地持久化形态：apiKey 明文随服务商配置存网关（与任务/会话一致，局域网共享）。 */
 export interface StoredLocalProvider extends ProviderInput {
   id: string;
   createdAt: number;
   updatedAt: number;
 }
 
-const PROVIDERS_KEY = "providers-v1";
+const PROVIDERS_STATE = "providers" as const;
 
 interface ProvidersFile {
   version: 1;
@@ -83,17 +83,17 @@ function normalizeInput(input: ProviderInput): ProviderInput {
 }
 
 async function loadAll(): Promise<StoredLocalProvider[]> {
-  const raw = await readLocalValue<ProvidersFile>(PROVIDERS_KEY);
+  const raw = (await loadServerState(PROVIDERS_STATE)) as ProvidersFile | null;
   if (!raw || !Array.isArray(raw.providers)) return [];
   return raw.providers;
 }
 
 async function saveAll(providers: StoredLocalProvider[]): Promise<void> {
   const payload: ProvidersFile = { version: 1, providers };
-  await writeLocalValue(PROVIDERS_KEY, payload);
+  await saveServerState(PROVIDERS_STATE, payload);
 }
 
-/** 服务商数据全部存储在浏览器本地（IndexedDB），不请求任何服务端接口。 */
+/** 服务商数据存网关（IndexedDB 旧数据由 serverState 一次性迁移）。 */
 export const providerService = {
   async list(): Promise<ProviderView[]> {
     const providers = await loadAll();
@@ -161,6 +161,6 @@ export const providerService = {
 
   /** 清除全部服务商（设置面板「清空」用）。 */
   async clear(): Promise<void> {
-    await deleteLocalValue(PROVIDERS_KEY);
+    await saveAll([]);
   },
 };

@@ -44,6 +44,8 @@ import { pickProjectDirectory } from "./projectPicker";
 import { writeNativeEvent } from "./nativeEvents";
 import { readGitWorkspace, switchGitBranch } from "./gitWorkspace";
 import { listSkills } from "./skills";
+import { isAllowedStateName, readState, writeState, deleteState } from "./stateStore";
+import { listBoardTasks, createBoardTask, patchBoardTask, deleteBoardTask } from "./boardTasks";
 
 /** 附件存储单例：落盘到 ~/.cc-hearts-open-code/attachments（OPEN_CHAT_DATA_DIR 可覆盖）。 */
 const attachments = attachmentStore;
@@ -150,8 +152,101 @@ export function createGatewayApp(
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
+  // ===== 状态持久化：任务 / 会话索引存网关，浏览器无状态，局域网共享 =====
+  app.get("/api/state/:name", (req: Request, res: Response) => {
+    const name = String(req.params.name);
+    if (!isAllowedStateName(name)) {
+      return res.status(404).json({ error: { message: `unknown state: ${name}` } });
+    }
+    const envelope = readState(name);
+    if (!envelope) return res.status(404).json({ found: false });
+    res.json({ found: true, updatedAt: envelope.updatedAt, data: envelope.data });
+  });
+
+  app.put("/api/state/:name", (req: Request, res: Response) => {
+    const name = String(req.params.name);
+    if (!isAllowedStateName(name)) {
+      return res.status(404).json({ error: { message: `unknown state: ${name}` } });
+    }
+    try {
+      const envelope = writeState(name, req.body ?? null);
+      res.json({ ok: true, updatedAt: envelope.updatedAt });
+    } catch (err) {
+      sendRouteError(res, err, "状态写入失败");
+    }
+  });
+
+  app.delete("/api/state/:name", (req: Request, res: Response) => {
+    const name = String(req.params.name);
+    if (!isAllowedStateName(name)) {
+      return res.status(404).json({ error: { message: `unknown state: ${name}` } });
+    }
+    try {
+      deleteState(name);
+      res.json({ ok: true });
+    } catch (err) {
+      sendRouteError(res, err, "状态清除失败");
+    }
+  });
+
+  // ===== 看板任务操作：看板 AI 助手（本地 ACP agent 经 curl）读写任务 =====
+  app.get("/api/board/tasks", (_req: Request, res: Response) => {
+    res.json({ tasks: listBoardTasks() });
+  });
+
+  app.post("/api/board/tasks", (req: Request, res: Response) => {
+    try {
+      const task = createBoardTask(req.body);
+      if (!task) {
+        return sendGatewayError(res, GatewayError.invalidRequest("请求体需包含 title 字段"));
+      }
+      res.status(201).json({ task });
+    } catch (err) {
+      sendRouteError(res, err, "任务创建失败");
+    }
+  });
+
+  app.patch("/api/board/tasks/:id", (req: Request, res: Response) => {
+    const id = typeof req.params.id === "string" ? req.params.id : "";
+    try {
+      const result = patchBoardTask(id, req.body);
+      if (result === null) {
+        return sendGatewayError(res, GatewayError.invalidRequest("请求体包含非法字段"));
+      }
+      if (result === undefined) {
+        return res.status(404).json({ error: { message: `task not found: ${id}` } });
+      }
+      res.json({ task: result });
+    } catch (err) {
+      sendRouteError(res, err, "任务更新失败");
+    }
+  });
+
+  app.delete("/api/board/tasks/:id", (req: Request, res: Response) => {
+    const id = typeof req.params.id === "string" ? req.params.id : "";
+    try {
+      // 硬确认门槛：DELETE 必须带 { "confirmed": true }，否则拒绝。
+      // 仅靠系统提示无法保证 agent 先征求用户同意，删除是不可逆操作，在 API 层兜底。
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (body.confirmed !== true) {
+        return sendGatewayError(
+          res,
+          GatewayError.invalidRequest(
+            '删除任务前必须先向用户确认，征得明确同意后在请求体中加入 "confirmed": true 再重试',
+          ),
+        );
+      }
+      if (!deleteBoardTask(id)) {
+        return res.status(404).json({ error: { message: `task not found: ${id}` } });
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      sendRouteError(res, err, "任务删除失败");
+    }
+  });
+
   // 模型发现：服务端搜索能力 + 本地 opencode（AI 取本地的）模型/供应商。
-  // 手动配置的服务商数据仍在客户端本地（IndexedDB），前端会合并展示。
+  // 手动配置的服务商数据存网关（/api/state/providers，局域网共享），前端合并展示。
   app.get("/api/models", async (_req: Request, res: Response) => {
     let local: {
       enabled: boolean;

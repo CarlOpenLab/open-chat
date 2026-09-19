@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, ref, watch } from "vue";
+import { computed, h, ref, watch } from "vue";
 import { Button, Dropdown, Input, Modal, Select, Tooltip } from "antdv-next";
 import {
   Archive,
@@ -12,6 +12,7 @@ import {
   Settings,
   Sun,
 } from "@lucide/vue";
+import { useNow } from "../../composables/useNow";
 import type { AgentView } from "../../services/acp";
 import type { Task } from "../../services/taskStorage";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
@@ -39,6 +40,8 @@ interface Props {
   projectPathOptions?: string[];
   currentProjectPath?: string;
   dark?: boolean;
+  /** 本地状态水合中：显示骨架屏避免看板闪现空态 */
+  loading?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -51,6 +54,7 @@ const props = withDefaults(defineProps<Props>(), {
   projectPathOptions: () => [],
   currentProjectPath: "",
   dark: true,
+  loading: false,
 });
 const emit = defineEmits<{
   (e: "openTask", id: string): void;
@@ -85,8 +89,10 @@ const useStyles = createStyles(({ token, css }) => ({
 
     &.is-drag-over {
       background: var(--primary-subtle-hover);
-      border-color: var(--brand-primary);
-      box-shadow: 0 0 0 2px var(--primary-subtle);
+      border-color: var(--brand-accent);
+      box-shadow:
+        0 0 0 1px var(--brand-accent),
+        inset 0 0 24px hsla(14, 62%, 62%, 0.08);
     }
   `,
   colDot: {
@@ -118,21 +124,10 @@ const useStyles = createStyles(({ token, css }) => ({
 
 const { styles } = useStyles();
 
-const nowTick = ref(Date.now());
-let tickTimer: ReturnType<typeof setInterval> | undefined;
-const stopTick = () => {
-  if (tickTimer) clearInterval(tickTimer);
-  tickTimer = undefined;
-};
-const startTick = (periodMs: number) => {
-  stopTick();
-  tickTimer = setInterval(() => (nowTick.value = Date.now()), periodMs);
-};
 const hasBusy = computed(
   () => Object.keys((props.statusSignals ?? {}).busyStates ?? {}).length > 0,
 );
-watch(hasBusy, (busy) => startTick(busy ? 1000 : 30000), { immediate: true });
-onBeforeUnmount(stopTick);
+const nowTick = useNow(hasBusy);
 
 const search = ref("");
 const selectedPriority = ref<TaskPriority | "">("");
@@ -328,15 +323,6 @@ const pickCreateProjectPath = async () => {
   }
 };
 
-// 兼容旧逻辑：保留 quick 状态以免模板菜单等引用报错，实际走 modal
-const quickTitle = ref("");
-const showQuickCreate = ref(false);
-const quickCreateStatus = ref<TaskStatus>("todo");
-const quickProjectPath = ref("");
-const quickProjectOptions = createProjectOptions;
-const submitQuickCreate = handleCreateFromModal;
-const pickQuickProjectPath = pickCreateProjectPath;
-
 const templateMenu = computed(() => ({
   items: [
     { key: "blank", label: "空白任务" },
@@ -511,7 +497,31 @@ const templateMenu = computed(() => ({
 
     <!-- 泳道看板主体区域 -->
     <div class="flex-1 overflow-x-auto overflow-y-hidden p-5">
-      <div class="flex gap-4.5 h-full min-w-max items-start">
+      <!-- 骨架屏：本地状态水合中 -->
+      <div
+        v-if="loading"
+        class="flex gap-4.5 h-full min-w-max items-start"
+        role="status"
+        aria-label="看板加载中"
+      >
+        <section
+          v-for="n in 4"
+          :key="n"
+          class="flex flex-col max-h-full p-3 rounded-2xl flex-none w-[310px] gap-3 animate-pulse"
+          :style="{ background: 'var(--fill-faint)', border: '1px solid var(--border)' }"
+        >
+          <div class="flex items-center gap-2 pb-1">
+            <div class="w-2 h-2 rounded-full" style="background: var(--border-strong)" />
+            <div class="h-3.5 w-16 rounded" style="background: var(--border-strong)" />
+            <div class="h-4 w-5 rounded-full ml-auto" style="background: var(--border-strong)" />
+          </div>
+          <div class="h-20 rounded-xl" style="background: var(--card)" />
+          <div class="h-20 rounded-xl" style="background: var(--card)" />
+          <div class="h-14 rounded-xl" style="background: var(--card)" />
+        </section>
+      </div>
+
+      <div v-else class="flex gap-4.5 h-full min-w-max items-start">
         <section
           v-for="column in columns"
           :key="column.status"
@@ -554,7 +564,7 @@ const templateMenu = computed(() => ({
 
           <!-- 任务卡片列表（独立纵向滚动区） -->
           <div class="flex-1 overflow-y-auto p-1 pr-1.5 flex flex-col gap-2.5 min-h-32">
-            <!-- 空状态 -->
+            <!-- 空状态：提示 + 快捷创建入口 -->
             <div
               v-if="column.items.length === 0"
               class="flex flex-col items-center justify-center p-6 border border-dashed border-border/70 rounded-xl text-center bg-background/30 transition-colors"
@@ -564,6 +574,15 @@ const templateMenu = computed(() => ({
               >
               <template v-else>
                 <p class="text-[12px] text-muted-foreground/80">暂无{{ column.meta.name }}任务</p>
+                <Button
+                  size="small"
+                  type="link"
+                  :icon="h(Plus)"
+                  class="!text-xs !p-0 mt-1 !text-brand-accent"
+                  @click="openCreateModal(column.status)"
+                >
+                  添加任务
+                </Button>
               </template>
             </div>
 

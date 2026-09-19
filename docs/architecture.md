@@ -190,15 +190,28 @@ rendered in the workspace.
 
 ## Server Ownership
 
-| Module                     | Responsibility                                                                             |
-| -------------------------- | ------------------------------------------------------------------------------------------ |
-| `nativeCliManager.ts`      | Native CLI process, session, permission, cancellation, and thin event adaptation lifecycle |
-| `localProvider.ts`         | OpenCode server and session lifecycle                                                      |
-| `acpManager.ts`            | ACP connection, session, event-bus, and permission lifecycle                               |
-| `transcript/types.ts`      | Canonical history, activity, plan, and stream types                                        |
-| `transcript/core.ts`       | Provider-neutral collection, merge, and activity-upsert rules                              |
-| `transcript/adapters/*.ts` | Provider history loading only                                                              |
-| `nativeEvents.ts`          | Native event contract and SSE serialization                                                |
+| Module                     | Responsibility                                                                                                                               |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `acpManager.ts`            | All stdio CLI agents (codex/claude/pi/omp/custom ACP): session, permission, cancellation, and event-bus lifecycle on top of acp-hub adapters |
+| `openCodeManager.ts`       | OpenCode agent view + session delegation to the local HTTP provider (`localProvider.ts`)                                                     |
+| `historyReaders.ts`        | Loading persisted provider sessions from native CLI stores (Claude/Pi JSONL, Codex turns)                                                    |
+| `localProvider.ts`         | OpenCode server and session lifecycle                                                                                                        |
+| `transcript/types.ts`      | Canonical history, activity, plan, and stream types                                                                                          |
+| `transcript/core.ts`       | Provider-neutral collection, merge, and activity-upsert rules                                                                                |
+| `transcript/adapters/*.ts` | Provider history loading only (`hub.ts` also accumulates live acp-hub unified events)                                                        |
+| `nativeEvents.ts`          | Native event contract and SSE serialization                                                                                                  |
+
+Live turns for every stdio agent speak ACP: `acpManager` delegates process
+spawn, handshake, and protocol translation to the vendored
+[`acp-hub`](https://github.com/CarlOpenLab/acp-hub) adapters
+(`vendor/acp-hub/packages/adapter-*`, wired in as pnpm workspace members).
+The manager consumes acp-hub's unified `SessionEvent` stream
+(`message_delta` / `thought_delta` / `tool_call(_update)` / `plan` / `usage` /
+`permission_request`), merges partial `tool_call_update`s against per-turn
+snapshots, and reuses the same native-event SSE contract below. Bridge-specific
+capabilities (models, modes, config options) surface through the ACP session
+response and `session/set_config_option`; agents whose bridge advertises no
+config options simply show no selector.
 
 Managers may retain provider lifecycle state such as a process handle, current
 turn ID, or pending permission. Renderable live content leaves the server as a
@@ -250,10 +263,22 @@ Disconnecting the originating browser tab aborts the gateway-owned task and clos
 
 ## Adding A Provider
 
-1. Add a focused adapter under `apps/server/src/transcript/adapters`.
-2. Convert history to `TranscriptMessage[]` and normalize activity states to `pending`, `running`, `completed`, or `error`.
-3. Convert only provider-specific wire records into ordered `native_event` frames through `nativeEvents.ts`.
-4. Keep process and session mechanics in the appropriate manager.
-5. Verify one assistant item per turn, tool-result upserts, error termination, and parity between loaded history and live output.
+Stdio CLI agents:
+
+1. Add (or reuse) an acp-hub adapter package for the agent's ACP bridge — either
+   a new `packages/adapter-*` in `vendor/acp-hub`, or the generic
+   `createAcpAgentAdapter(command, args)` for any ACP-speaking executable.
+2. Register the transport in `apps/server/src/config.ts` (`DEFAULT_ACP_AGENTS`)
+   and map it in `AcpManager.createAdapter`.
+3. If the agent persists sessions in its own store, extend
+   `apps/server/src/historyReaders.ts` so deep links can load provider history.
+4. Verify one assistant item per turn, tool-result upserts, error termination,
+   permission round-trip, and parity between loaded history and live output.
+
+Other provider types (HTTP APIs, local servers) keep the existing pattern: a
+focused history adapter under `apps/server/src/transcript/adapters`, conversion
+to `TranscriptMessage[]` with activity states normalized to `pending`,
+`running`, `completed`, or `error`, and provider-specific wire records
+converted into ordered `native_event` frames through `nativeEvents.ts`.
 
 No provider-specific branch should be added to the message rendering components.

@@ -47,17 +47,17 @@ See [docs/architecture.md](docs/architecture.md) for the canonical transcript co
 
 ## Supported connections
 
-| Connection            | Required command | Transport                         |
-| --------------------- | ---------------- | --------------------------------- |
-| Codex                 | `codex`          | app-server JSON-RPC               |
-| Claude Code           | `claude`         | native `stream-json` stdin/stdout |
-| Pi                    | `pi`             | RPC stdin/stdout                  |
-| Oh My Pi              | `omp`            | RPC stdin/stdout (Pi-compatible)  |
-| OpenCode              | `opencode`       | local HTTP + SSE                  |
-| Custom ACP agent      | your executable  | Agent Client Protocol             |
-| OpenAI-compatible API | provider URL     | HTTP streaming                    |
+| Connection            | Required command | Transport                       |
+| --------------------- | ---------------- | ------------------------------- |
+| Codex                 | `codex`          | ACP (via `acp-extension-codex`) |
+| Claude Code           | `claude`         | ACP (via `claude-code-acp`)     |
+| Pi                    | `pi`             | ACP (`pi --mode acp`)           |
+| Oh My Pi              | `omp`            | ACP (`omp --mode acp`)          |
+| OpenCode              | `opencode`       | local HTTP + SSE                |
+| Custom ACP agent      | your executable  | Agent Client Protocol           |
+| OpenAI-compatible API | provider URL     | HTTP streaming                  |
 
-No separate `codex-acp`, `claude-code-acp`, or `pi-acp` installation is required. Open Chat discovers commands on the inherited `PATH` and common Homebrew, `~/.local/bin`, Bun, Cargo, mise, and Volta locations; on Windows it also looks in `%APPDATA%\npm` and `%USERPROFILE%\.codex\bin`, and resolves fnm multishell junctions to their real paths (those temp dirs are deleted when the owning shell exits). Override a command or working directory with `[[acp.agents]]` in the server configuration.
+All stdio CLI agents are unified on the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) through [acp-hub](https://github.com/CarlOpenLab/acp-hub) (vendored under `vendor/acp-hub`): each built-in CLI is launched by its ACP bridge package, fetched automatically with `npx` on first use — the base CLI (`codex` / `claude` / `pi` / `omp`) must still be installed and logged in on the host. Open Chat discovers commands on the inherited `PATH` and common Homebrew, `~/.local/bin`, Bun, Cargo, mise, and Volta locations; on Windows it also looks in `%APPDATA%\npm` and `%USERPROFILE%\.codex\bin`, and resolves fnm multishell junctions to their real paths (those temp dirs are deleted when the owning shell exits). Override a command or working directory in the server configuration.
 
 ## Quick start
 
@@ -81,9 +81,11 @@ First run notes:
 
 - **No configuration file — nothing to set up.** The gateway runs on built-in
   defaults and auto-discovers the CLI agents installed on your machine: codex /
-  claude / pi / opencode / omp (Oh My Pi). Commands are found on `PATH`,
-  `~/.local/bin`, mise shims, Homebrew, and other common locations; anything
-  not installed simply shows up as unavailable in the UI.
+  claude / pi / opencode / omp (Oh My Pi). Base CLI commands are found on
+  `PATH`, `~/.local/bin`, mise shims, Homebrew, and other common locations;
+  anything not installed simply shows up as unavailable in the UI. The first
+  turn with a stdio agent fetches its ACP bridge via `npx` (network required
+  once per bridge); OpenCode runs through its own local HTTP server.
 - If the UI has not been built yet, run `pnpm open-chat --build` (builds the
   website and the CLI bundle) and start again.
 

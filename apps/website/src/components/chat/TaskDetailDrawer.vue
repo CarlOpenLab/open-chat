@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, h, ref, watch } from "vue";
-import { Button, Drawer, Dropdown, Input, Select, Tag, Tooltip } from "antdv-next";
+import { Button, DatePicker, Drawer, Dropdown, Input, Select, Tag, Tooltip } from "antdv-next";
 import { TextArea } from "antdv-next";
+import dayjs, { type Dayjs } from "dayjs";
 import type { Task } from "../../services/taskStorage";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
 import type { AgentView } from "../../services/acp";
@@ -232,6 +233,7 @@ const cancelEditSession = () => {
     :open="open"
     placement="right"
     :width="split ? 980 : 560"
+    :keyboard="true"
     :body-style="{ padding: '0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }"
     :header-style="{ display: 'none' }"
     destroy-on-close
@@ -297,15 +299,15 @@ const cancelEditSession = () => {
               </div>
               <div class="flex flex-col gap-1">
                 <span class="text-11px text-muted-foreground">截止</span>
-                <Input
-                  type="date"
-                  :value="task.dueAt ? new Date(task.dueAt).toISOString().slice(0, 10) : ''"
+                <DatePicker
+                  :value="task.dueAt ? dayjs(task.dueAt) : null"
                   class="w-full"
+                  allow-clear
+                  placeholder="无截止日期"
+                  format="YYYY-MM-DD"
                   @change="
-                    (e: Event) => {
-                      const v = (e.target as HTMLInputElement).value;
-                      emit('updateTask', task!.id, { dueAt: v ? new Date(v).getTime() : null });
-                    }
+                    (v: Dayjs | null) =>
+                      emit('updateTask', task!.id, { dueAt: v ? v.startOf('day').valueOf() : null })
                   "
                 />
               </div>
@@ -537,3 +539,22 @@ const cancelEditSession = () => {
     </template>
   </Drawer>
 </template>
+
+<style scoped>
+/* 移动端：任务抽屉全屏，split 双栏纵向堆叠 */
+@media (max-width: 900px) {
+  :deep(.ant-drawer-content-wrapper) {
+    width: 100vw !important;
+    max-width: 100vw !important;
+  }
+  .h-100vh {
+    flex-direction: column;
+    height: 100%;
+  }
+  .h-100vh > .w-90 {
+    width: 100%;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+</style>

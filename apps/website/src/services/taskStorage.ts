@@ -1,11 +1,4 @@
-import {
-  deleteTaskValue,
-  readAllTasks,
-  readLocalValue,
-  writeLocalValue,
-  writeTaskValue,
-  clearAllTasks,
-} from "./localDatabase";
+import { loadServerState, saveServerState } from "./serverState";
 import {
   isTaskStatus,
   normalizeTaskPriority,
@@ -51,8 +44,6 @@ export const TASK_TEMPLATES: Record<
     description: "## 动机\n\n## 范围\n\n## 风险\n\n",
   },
 };
-
-const TASK_FILTER_KEY = "task-board-filters-v1";
 
 export interface TaskBoardFilters {
   search: string;
@@ -167,30 +158,11 @@ export function createTaskInput(
 
 export async function loadTasks(): Promise<Task[]> {
   try {
-    const raw = await readAllTasks<unknown>();
-    if (Array.isArray(raw) && raw.length > 0) {
+    // 任务存网关（局域网共享）；IndexedDB 旧数据由 serverState 一次性迁移
+    const raw = await loadServerState("tasks");
+    if (Array.isArray(raw)) {
       const normalized = raw.map(normalizeTask).filter((t): t is Task => Boolean(t));
-      // fallback to legacy array stored in app-state if tasks store still empty but legacy exists
-      if (normalized.length > 0) return normalized.sort((a, b) => b.updatedAt - a.updatedAt);
-    }
-  } catch {
-    // ignore, fallback to legacy
-  }
-  try {
-    const legacy = await readLocalValue<unknown>("tasks-v1");
-    if (Array.isArray(legacy)) {
-      const normalized = legacy.map(normalizeTask).filter((t): t is Task => Boolean(t));
-      if (normalized.length > 0) {
-        // migrate legacy to new store
-        for (const t of normalized) {
-          try {
-            await writeTaskValue(t);
-          } catch {
-            // ignore
-          }
-        }
-        return normalized.sort((a, b) => b.updatedAt - a.updatedAt);
-      }
+      return normalized.sort((a, b) => b.updatedAt - a.updatedAt);
     }
   } catch {
     // ignore
@@ -199,48 +171,24 @@ export async function loadTasks(): Promise<Task[]> {
 }
 
 export async function saveTasks(tasks: Task[]): Promise<void> {
-  // write through both stores for compatibility
   const plain = JSON.parse(JSON.stringify(tasks)) as Task[];
-  await writeLocalValue("tasks-v1", plain);
-  // also sync to object store (clear + put)
-  try {
-    await clearAllTasks();
-    for (const t of plain) {
-      await writeTaskValue(t);
-    }
-  } catch {
-    // ignore task store sync error, legacy still has data
-  }
+  await saveServerState("tasks", plain);
 }
 
 export async function putTask(task: Task): Promise<void> {
   const normalized = normalizeTask(task);
   if (!normalized) throw new Error("Invalid task");
   normalized.updatedAt = Date.now();
-  await writeTaskValue(normalized);
-  // keep legacy array in sync
-  try {
-    const all = await loadTasks();
-    const idx = all.findIndex((t) => t.id === normalized.id);
-    if (idx >= 0) all[idx] = normalized;
-    else all.unshift(normalized);
-    await writeLocalValue("tasks-v1", JSON.parse(JSON.stringify(all)));
-  } catch {
-    // ignore
-  }
+  const all = await loadTasks();
+  const idx = all.findIndex((t) => t.id === normalized.id);
+  if (idx >= 0) all[idx] = normalized;
+  else all.unshift(normalized);
+  await saveTasks(all);
 }
 
 export async function removeTask(id: string): Promise<void> {
-  await deleteTaskValue(id);
-  try {
-    const all = await readLocalValue<Task[]>("tasks-v1");
-    if (Array.isArray(all)) {
-      const next = all.filter((t) => t.id !== id);
-      await writeLocalValue("tasks-v1", JSON.parse(JSON.stringify(next)));
-    }
-  } catch {
-    // ignore
-  }
+  const all = await loadTasks();
+  await saveTasks(all.filter((t) => t.id !== id));
 }
 
 export function updateTaskInList(
@@ -277,7 +225,7 @@ export function updateTaskInList(
 
 export async function loadTaskFilters(): Promise<TaskBoardFilters> {
   try {
-    const raw = await readLocalValue<Partial<TaskBoardFilters>>(TASK_FILTER_KEY);
+    const raw = (await loadServerState("task-filters")) as Partial<TaskBoardFilters> | null;
     if (!raw || typeof raw !== "object") return { ...DEFAULT_TASK_FILTERS };
     return {
       search: typeof raw.search === "string" ? raw.search.slice(0, 200) : "",
@@ -304,7 +252,7 @@ export async function loadTaskFilters(): Promise<TaskBoardFilters> {
 }
 
 export async function saveTaskFilters(filters: TaskBoardFilters): Promise<void> {
-  await writeLocalValue(TASK_FILTER_KEY, JSON.parse(JSON.stringify(filters)));
+  await saveServerState("task-filters", JSON.parse(JSON.stringify(filters)));
 }
 
 export function duplicateTask(task: Task): Task {

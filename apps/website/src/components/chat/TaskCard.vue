@@ -81,8 +81,9 @@ const useStyles = createStyles(({ token, css }) => ({
     }
 
     &.is-dragging {
-      opacity: 0.5;
-      transform: scale(0.98);
+      opacity: 0.55;
+      transform: scale(0.98) rotate(0.6deg);
+      box-shadow: var(--brand-shadow-float);
     }
   `,
   dueOverdue: css`
@@ -132,20 +133,34 @@ const relativeTime = (ts: number | null | undefined, now: number): string => {
   return `${Math.floor(h / 24)}d 前`;
 };
 
+/** 本地时区当天零点：截止日期按日历日比较，不受时分秒影响 */
+const startOfLocalDay = (ts: number): number => {
+  const d = new Date(ts);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+};
+
+/** 截止日相对今天零点相差的整天数：<0 逾期天数，0 今天，>0 剩余天数 */
+const dueDayDiff = computed(() => {
+  if (!props.task.dueAt) return null;
+  return Math.round(
+    (startOfLocalDay(props.task.dueAt) - startOfLocalDay(props.nowTick)) / 86400000,
+  );
+});
+
 const dueLabel = computed(() => {
-  if (!props.task.dueAt) return "";
-  const diff = props.task.dueAt - props.nowTick;
-  const days = Math.floor(diff / 86400000);
-  if (diff < 0) return `逾期 ${Math.abs(days) || 1} 天`;
-  if (days === 0) return "今天截止";
-  if (days === 1) return "明天截止";
-  return `${days} 天后`;
+  const diff = dueDayDiff.value;
+  if (diff === null) return "";
+  if (diff < 0) return `逾期 ${-diff} 天`;
+  if (diff === 0) return "今天截止";
+  if (diff === 1) return "明天截止";
+  return `${diff} 天后`;
 });
 
 const dueClass = computed(() => {
-  if (!props.task.dueAt) return "";
-  if (props.task.dueAt < props.nowTick) return styles.dueOverdue;
-  if (props.task.dueAt - props.nowTick < 86400000) return styles.dueToday;
+  const diff = dueDayDiff.value;
+  if (diff === null) return "";
+  if (diff < 0) return styles.dueOverdue;
+  if (diff === 0) return styles.dueToday;
   return styles.dueNormal;
 });
 
