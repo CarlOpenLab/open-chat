@@ -138,8 +138,30 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
     notifyResetToDraft();
   };
 
+  /**
+   * 兼容旧数据：早期「任务新建会话」未写入 updatedAt（已修复）。会话 key 内嵌
+   * 创建时间戳（`acp:{agentId}:{ts}-{rand}` / `{ts}-{rand}`），据此回填，
+   * 保证抽屉内按创建时间排序并显示时间戳，而不是落在列表末尾。
+   */
+  const creationTimestampFromKey = (key: string): number | undefined => {
+    const part =
+      String(key ?? "")
+        .split(":")
+        .pop() ?? "";
+    const match = part.match(/^(\d+)/);
+    return match ? Number(match[1]) : undefined;
+  };
+
   const applyPersistedState = (persistedState: PersistedChatState) => {
     conversationList.value = persistedState.conversationList.map((conv) => {
+      const normalizedUpdatedAt =
+        typeof conv.updatedAt === "number" && Number.isFinite(conv.updatedAt)
+          ? conv.updatedAt
+          : creationTimestampFromKey(String(conv.key));
+      const withUpdatedAt = {
+        ...conv,
+        ...(normalizedUpdatedAt ? { updatedAt: normalizedUpdatedAt } : {}),
+      };
       if (conv.label === "默认对话") {
         if (conv.messages?.length) {
           const firstUserMessage = conv.messages.find(
@@ -149,16 +171,16 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
             // 注：PersistedConversation 的 Omit + 索引签名使 key 丢失已知类型，
             // 显式重申 key（值与展开结果一致），无运行时差异。
             return {
-              ...conv,
+              ...withUpdatedAt,
               key: conv.key,
               label: getMessagePreview(firstUserMessage.message.content),
             };
           }
         }
-        return { ...conv, key: conv.key, label: "新对话" };
+        return { ...withUpdatedAt, key: conv.key, label: "新对话" };
       }
       return {
-        ...conv,
+        ...withUpdatedAt,
         key: String(conv.key),
         agentId: typeof conv.agentId === "string" && conv.agentId ? conv.agentId : "api",
         modelId:

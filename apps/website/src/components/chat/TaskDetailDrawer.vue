@@ -2,7 +2,6 @@
 import { computed, h, ref, watch } from "vue";
 import { Button, DatePicker, Drawer, Dropdown, Input, Select, Tag, Tooltip } from "antdv-next";
 import { TextArea } from "antdv-next";
-import dayjs, { type Dayjs } from "dayjs";
 import type { Task } from "../../services/taskStorage";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
 import type { AgentView } from "../../services/acp";
@@ -109,6 +108,18 @@ const saveTags = () => {
     .filter(Boolean);
   emit("updateTask", props.task.id, { tags });
 };
+
+/** 本地时区日期，避免 toISOString 的 UTC 偏移导致日期串移位 */
+const localDateOf = (ts: number): string => {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+/** 截止日期存当天本地 23:59:59.999：当天截止当天内不算逾期 */
+const dueAtFromPicker = (v: string): number => new Date(`${v}T23:59:59.999`).getTime();
 
 const sessionList = computed(() => {
   if (!props.task) return [];
@@ -300,14 +311,18 @@ const cancelEditSession = () => {
               <div class="flex flex-col gap-1">
                 <span class="text-11px text-muted-foreground">截止</span>
                 <DatePicker
-                  :value="task.dueAt ? dayjs(task.dueAt) : null"
+                  :value="task.dueAt ? localDateOf(task.dueAt) : null"
+                  value-format="YYYY-MM-DD"
+                  format="YYYY-MM-DD"
+                  allow-clear
+                  placeholder="选择日期"
                   class="w-full"
                   allow-clear
                   placeholder="无截止日期"
                   format="YYYY-MM-DD"
                   @change="
-                    (v: Dayjs | null) =>
-                      emit('updateTask', task!.id, { dueAt: v ? v.startOf('day').valueOf() : null })
+                    (v: string | null) =>
+                      emit('updateTask', task!.id, { dueAt: v ? dueAtFromPicker(v) : null })
                   "
                 />
               </div>

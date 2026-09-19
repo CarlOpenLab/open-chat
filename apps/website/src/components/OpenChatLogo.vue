@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { MessagesSquare } from "@lucide/vue";
+
 interface Props {
   size?: number;
   title?: string;
@@ -11,12 +13,10 @@ const props = withDefaults(defineProps<Props>(), {
 </script>
 
 <template>
-  <img
-    src="/logo.png"
-    :width="props.size"
-    :height="props.size"
+  <MessagesSquare
+    :size="props.size"
     class="open-chat-logo"
-    :alt="props.title || undefined"
+    :aria-label="props.title || undefined"
     :aria-hidden="props.title ? undefined : 'true'"
   />
 </template>
@@ -24,6 +24,6 @@ const props = withDefaults(defineProps<Props>(), {
 <style scoped>
 .open-chat-logo {
   display: block;
-  object-fit: contain;
+  color: inherit;
 }
 </style>
