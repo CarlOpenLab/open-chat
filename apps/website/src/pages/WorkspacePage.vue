@@ -5,7 +5,6 @@
  * - 通过 provideWorkspace 把状态下发到 BoardPage / ChatPage 展示层；
  * - 顶部 TopTabBar 负责两种布局的切换。
  */
-import { Notification as XNotification } from "@antdv-next/x";
 import type { ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
@@ -26,7 +25,7 @@ import {
   type OpenChatParams,
   type PermissionRequest,
 } from "../services/OpenChatProvider";
-import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../utils/projectPath";
+import { uniqueDirectoryPaths } from "../utils/projectPath";
 import { FILE_WORKSPACE_SYSTEM_PROMPT } from "../prompts/fileWorkspace";
 import { deriveBoardStatus, hasPersistedError, type SessionStatus } from "../utils/sessionStatus";
 import { loadChatState, type QueuedChatMessage } from "../services/chatStorage";
@@ -42,16 +41,20 @@ import {
   type AcpSessionState,
   type AgentView,
 } from "../services/acp";
-import { loadServerState, saveServerState } from "../services/serverState";
 import {
   appendTranscriptMessageToModelMessages,
   isHiddenModelMessage,
-  modelMessagesToBubbleItems,
   transcriptHistoryToModelMessages,
   type TranscriptMessage,
 } from "../services/transcript";
 import { useChatModels, type ModelCatalogEntry } from "../composables/useChatModels";
 import { useComposerData } from "../composables/useComposerData";
+import { useMessageTimings } from "../composables/workspace/useMessageTimings";
+import { useMessageView } from "../composables/workspace/useMessageView";
+import { useNotifications } from "../composables/workspace/useNotifications";
+import { useProjectPath } from "../composables/workspace/useProjectPath";
+import { useSessionErrors } from "../composables/workspace/useSessionErrors";
+import { useWorkspaceLayout } from "../composables/workspace/useWorkspaceLayout";
 import {
   getMessagePreview,
   useChatPersistence,
@@ -91,59 +94,14 @@ const emit = defineEmits<Emits>();
 // ============ 响应式状态 ============
 
 const content = ref("");
-interface OptimisticChatMessage {
-  conversationKey: string;
-  id: string;
-  message: XModelMessage;
-  extraInfo: Record<string, unknown>;
-}
 
-const optimisticMessages = reactive(new Map<string, OptimisticChatMessage>());
-const optimisticMessage = computed({
-  get: () =>
-    currentConversationKey.value
-      ? (optimisticMessages.get(currentConversationKey.value) ?? null)
-      : null,
-  set: (val: OptimisticChatMessage | null) => {
-    if (!val) {
-      if (currentConversationKey.value) optimisticMessages.delete(currentConversationKey.value);
-    } else {
-      optimisticMessages.set(val.conversationKey, val);
-    }
-  },
-});
-
-/**
- * The SDK normally preserves `optimisticId` on its local user row. Keep a
- * content fallback for the brief period where an SDK/store update omits that
- * metadata, otherwise both rows remain rendered for the whole request.
- */
-const hasAcknowledgedOptimisticMessage = (
-  source: DefaultMessageInfo<XModelMessage>[],
-  pending: OptimisticChatMessage,
-): boolean => {
-  if (
-    source.some(
-      (item) =>
-        (item.extraInfo as { optimisticId?: unknown } | undefined)?.optimisticId === pending.id,
-    )
-  ) {
-    return true;
-  }
-
-  const lastUserMessage = [...source].reverse().find((item) => item.message.role === "user");
-  return (
-    typeof lastUserMessage?.message.content === "string" &&
-    typeof pending.message.content === "string" &&
-    lastUserMessage.message.content === pending.message.content
-  );
-};
-
-const conversationsOpen = ref(true);
 /** 草稿会话在抽屉中的占位 key：不对应任何真实会话。 */
 const DRAFT_BOARD_KEY = "__draft__";
 /** 看板抽屉当前打开的会话；空串表示看板态（无聊天面板）。 */
 const boardOpenKey = ref("");
+/** 布局状态（侧栏 / 抽屉 / 浮层开关）：窄屏折叠时需要同步关闭看板抽屉。 */
+const { conversationsOpen, sidebarWidth, drawerWidth, commandPaletteOpen, settingsOpen } =
+  useWorkspaceLayout({ boardOpenKey });
 /** 任务详情抽屉：打开的任务 id，空串表示未打开。 */
 const openTaskId = ref("");
 /** 任务列表（全局跨项目），与会话解耦。 */
@@ -168,23 +126,6 @@ const refreshTasksFromServer = async () => {
   taskList.value = await loadTasks();
 };
 const pendingPermissions = reactive(new Map<string, PermissionRequest>());
-/** 看板抽屉宽度：桌面默认 1080，上限视口 92%；移动端由 CSS 全屏接管。 */
-const DRAWER_WIDTH_DEFAULT = 1080;
-const drawerWidth = ref(
-  typeof window !== "undefined"
-    ? Math.min(DRAWER_WIDTH_DEFAULT, Math.floor(window.innerWidth * 0.92))
-    : DRAWER_WIDTH_DEFAULT,
-);
-/** 移动端断点监听：跨越 767px 时收起侧栏并重算抽屉宽度上限 */
-const mobileLayoutMedia =
-  typeof window !== "undefined" ? window.matchMedia("(max-width: 767px)") : null;
-const handleMobileLayoutChange = (event: MediaQueryListEvent) => {
-  if (event.matches) {
-    conversationsOpen.value = false;
-    boardOpenKey.value = "";
-  }
-  drawerWidth.value = Math.min(DRAWER_WIDTH_DEFAULT, Math.floor(window.innerWidth * 0.92));
-};
 /** 出错 / 手动停止后未恢复的会话：驱动「已终止」列。 */
 const stoppedConversationKeys = ref<Set<string>>(new Set());
 const boardStatusSignals = computed(
@@ -202,12 +143,6 @@ const thinkingEnabled = ref(true);
 const workMode = ref<"build" | "plan">("build");
 const permissionMode = ref<"supervised" | "auto" | "full">("full");
 const fileModeEnabled = ref(false);
-const projectPath = ref("");
-const draftProjectPath = ref("");
-const defaultProjectPath = ref("");
-const PROJECT_PATH_HISTORY_KEY = "open-chat-project-paths-v1";
-/** 全局项目历史（与供应商/模型解耦）：不再按 agentId 分区 */
-const projectPathHistory = ref<string[]>([]);
 const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const showWelcome = ref(true);
 const isHydrating = ref(true);
@@ -222,176 +157,8 @@ const requestStartedAt = ref(0);
 const failedHistoryRefreshLocks = new Set<string>();
 const manuallyStoppedConversationKeys = new Set<string>();
 let scheduleNextQueuedMessage: (conversationKey: string) => void = () => {};
-const turnTimingStarts = new Map<string, number>();
-const turnTimingValues = new Map<string, { startedAtMs?: number; durationMs: number }>();
+const { persistMessageTimings } = useMessageTimings();
 
-interface MessageTimingExtraInfo {
-  turnStartedAtMs?: unknown;
-  turnDurationMs?: unknown;
-}
-
-const messageTimingKey = (conversationKey: string, messageId: string | number): string =>
-  `${conversationKey}::${String(messageId)}`;
-
-const timingExtraInfo = (extraInfo: Record<string, unknown> | undefined): MessageTimingExtraInfo =>
-  extraInfo ?? {};
-
-/**
- * Keep turn timing on the exact assistant message that produced it. The
- * conversation key scopes identical provider message ids across sessions.
- */
-const persistMessageTimings = (
-  conversationKey: string,
-  source: DefaultMessageInfo<XModelMessage>[],
-): DefaultMessageInfo<XModelMessage>[] => {
-  if (!conversationKey) return source;
-  const now = Date.now();
-  let changed = false;
-  const next = source.map((item) => {
-    if (item.message.role !== "assistant") return item;
-
-    if (item.id === undefined || item.id === null || String(item.id) === "") return item;
-    const key = messageTimingKey(conversationKey, item.id);
-    const streaming = item.status === "loading" || item.status === "updating";
-    const extraInfo = item.extraInfo as Record<string, unknown> | undefined;
-    const timing = timingExtraInfo(extraInfo);
-
-    if (streaming) {
-      if (!turnTimingStarts.has(key)) turnTimingStarts.set(key, now);
-      turnTimingValues.delete(key);
-      if ("turnStartedAtMs" in timing || "turnDurationMs" in timing) {
-        const { turnStartedAtMs: _startedAt, turnDurationMs: _duration, ...rest } = timing;
-        changed = true;
-        return {
-          ...item,
-          extraInfo: Object.keys(rest).length ? rest : undefined,
-        };
-      }
-      return item;
-    }
-
-    const startedAtMs = turnTimingStarts.get(key);
-    const persistedDuration =
-      typeof timing.turnDurationMs === "number" && timing.turnDurationMs > 0
-        ? timing.turnDurationMs
-        : undefined;
-    if (persistedDuration) {
-      turnTimingValues.set(key, {
-        startedAtMs:
-          typeof timing.turnStartedAtMs === "number" ? timing.turnStartedAtMs : undefined,
-        durationMs: persistedDuration,
-      });
-      return item;
-    }
-
-    if (!startedAtMs) {
-      const cachedTiming = turnTimingValues.get(key);
-      if (!cachedTiming) return item;
-
-      changed = true;
-      return {
-        ...item,
-        extraInfo: {
-          ...extraInfo,
-          ...(cachedTiming.startedAtMs !== undefined
-            ? { turnStartedAtMs: cachedTiming.startedAtMs }
-            : {}),
-          turnDurationMs: cachedTiming.durationMs,
-        },
-      };
-    }
-
-    turnTimingStarts.delete(key);
-    const durationMs = Math.max(1, now - startedAtMs);
-    turnTimingValues.set(key, { startedAtMs, durationMs });
-    changed = true;
-    return {
-      ...item,
-      extraInfo: {
-        ...extraInfo,
-        turnStartedAtMs: startedAtMs,
-        turnDurationMs: durationMs,
-      },
-    };
-  });
-  return changed ? next : source;
-};
-const commandPaletteOpen = ref(false);
-const settingsOpen = ref(false);
-const TASK_COMPLETION_NOTIFICATIONS_KEY = "open-chat-task-completion-notifications";
-const browserNotificationsSupported =
-  typeof window !== "undefined" && typeof window.Notification !== "undefined";
-
-const readTaskCompletionNotificationsEnabled = () => {
-  if (!browserNotificationsSupported) return false;
-  try {
-    return (
-      localStorage.getItem(TASK_COMPLETION_NOTIFICATIONS_KEY) === "true" &&
-      XNotification.permission === "granted"
-    );
-  } catch {
-    return false;
-  }
-};
-
-const taskCompletionNotificationsEnabled = ref(readTaskCompletionNotificationsEnabled());
-
-const persistTaskCompletionNotificationsEnabled = (enabled: boolean) => {
-  try {
-    localStorage.setItem(TASK_COMPLETION_NOTIFICATIONS_KEY, String(enabled));
-  } catch {
-    // Local storage may be unavailable in private browsing; keep the current session setting.
-  }
-};
-
-const handleTaskCompletionNotificationsChange = async (enabled: boolean) => {
-  if (!enabled) {
-    taskCompletionNotificationsEnabled.value = false;
-    persistTaskCompletionNotificationsEnabled(false);
-    return;
-  }
-
-  if (!browserNotificationsSupported) {
-    message.warning("当前浏览器不支持系统通知");
-    return;
-  }
-
-  try {
-    const permission = await XNotification.requestPermission();
-    const granted = permission === "granted";
-    taskCompletionNotificationsEnabled.value = granted;
-    persistTaskCompletionNotificationsEnabled(granted);
-    if (granted) {
-      message.success("已开启任务完成通知");
-    } else {
-      message.warning("浏览器未允许通知，请在网站权限设置中开启");
-    }
-  } catch (error) {
-    console.error("Failed to request browser notification permission:", error);
-    taskCompletionNotificationsEnabled.value = false;
-    persistTaskCompletionNotificationsEnabled(false);
-    message.warning("无法请求浏览器通知权限");
-  }
-};
-
-const handleTestTaskCompletionNotification = () => {
-  if (
-    !taskCompletionNotificationsEnabled.value ||
-    !browserNotificationsSupported ||
-    XNotification.permission !== "granted"
-  ) {
-    message.warning("请先开启任务完成通知并允许浏览器通知权限");
-    return;
-  }
-
-  XNotification.open({
-    title: "Open Chat · 测试通知",
-    body: "如果你能看到这条系统通知，任务完成提醒已可以正常使用。",
-    tag: "open-chat-task-completion-test",
-    duration: 8,
-    onClick: () => window.focus(),
-  });
-};
 const agents = ref<AgentView[]>([API_AGENT]);
 const activeAgentId = ref("api");
 const acpSession = ref<AcpSessionState | null>(null);
@@ -402,12 +169,6 @@ const acpRunState = ref<AcpRunStateNotice | null>(null);
 const acpStreamController = ref<AbortController | null>(null);
 let acpStreamMessageSeq = 0;
 const draftConversationKey = ref("");
-
-// 面板尺寸（sidebar 180–420，right panel 280–1000）
-/** 默认 sidebar 252，拖拽区间 SIDEBAR_MIN/MAX_WIDTH = 180 / 420 */
-const sidebarWidth = ref(252);
-const rightPanelWidth = ref(420);
-const resizing = ref<"sidebar" | "right-panel" | null>(null);
 
 // 会话历史导航（◀ ▶）
 const historyBack = ref<string[]>([]);
@@ -484,84 +245,28 @@ const isPiAgent = computed(() => {
 });
 const effectivePermissionMode = computed(() => (isPiAgent.value ? "full" : permissionMode.value));
 
-const normalizeProjectPath = (value: string | undefined): string => {
-  const path = normalizeDirectoryPath(value);
-  return path && path === normalizeDirectoryPath(defaultProjectPath.value) ? "" : path;
-};
-
-const loadProjectPathHistory = () => {
-  if (typeof window === "undefined") return;
-  // 项目历史存网关（局域网共享）；localStorage 旧数据仅在网关为空时一次性迁移
-  void loadServerState("project-paths")
-    .then((stored) => {
-      if (Array.isArray(stored) && stored.length) {
-        projectPathHistory.value = uniqueDirectoryPaths(
-          stored.filter((v): v is string => typeof v === "string").map(normalizeProjectPath),
-        ).slice(0, 20);
-        return;
-      }
-      if (stored && typeof stored === "object") {
-        // 兼容旧数据：Record<agentId, string[]> → 合并为全局列表
-        const paths: string[] = [];
-        for (const value of Object.values(stored as Record<string, unknown>)) {
-          if (Array.isArray(value)) {
-            paths.push(...value.filter((v): v is string => typeof v === "string"));
-          }
-        }
-        if (paths.length) {
-          projectPathHistory.value = uniqueDirectoryPaths(paths.map(normalizeProjectPath)).slice(
-            0,
-            20,
-          );
-        }
-        return;
-      }
-      migrateLegacyProjectPaths();
-    })
-    .catch(() => migrateLegacyProjectPaths());
-};
-
-/** localStorage 旧副本仅在网关无数据时上传，避免覆盖其他设备的数据。 */
-const migrateLegacyProjectPaths = () => {
-  try {
-    const legacy = localStorage.getItem(PROJECT_PATH_HISTORY_KEY);
-    if (!legacy) return;
-    localStorage.removeItem(PROJECT_PATH_HISTORY_KEY);
-    void saveServerState("project-paths", JSON.parse(legacy)).catch(() => {});
-  } catch {
-    // ignore
-  }
-};
-
-const saveProjectPathHistory = () => {
-  void saveServerState("project-paths", [...projectPathHistory.value]).catch(() => {});
-};
-
-const rememberProjectPath = (value: string) => {
-  const path = normalizeProjectPath(value);
-  if (!path) return;
-  const paths = uniqueDirectoryPaths([path, ...projectPathHistory.value]).slice(0, 20);
-  projectPathHistory.value = paths;
-  saveProjectPathHistory();
-};
-
-const forgetProjectPath = (value: string) => {
-  const path = normalizeProjectPath(value);
-  if (!path) return;
-  projectPathHistory.value = projectPathHistory.value.filter((item) => item !== path);
-  saveProjectPathHistory();
-};
-
-const projectPathOptions = computed(() => {
-  const current = normalizeProjectPath(projectPath.value);
-  return uniqueDirectoryPaths(
-    current ? [current, ...projectPathHistory.value] : [...projectPathHistory.value],
-  );
+const {
+  projectPath,
+  draftProjectPath,
+  defaultProjectPath,
+  projectPathHistory,
+  projectPathOptions,
+  normalizeProjectPath,
+  loadProjectPathHistory,
+  saveProjectPathHistory,
+  rememberProjectPath,
+  lastProjectPath,
+  handleProjectPathChange,
+  handleProjectPathRemove,
+} = useProjectPath({
+  conversationList,
+  currentConversationKey,
+  isConversationRunning: (key) => isConversationRunning(key),
+  schedulePersist: () => schedulePersistState(),
+  refreshAcpSession: (force) => void refreshAcpSession(force),
+  forgetFailedHistoryRefresh: (conversationKey) =>
+    failedHistoryRefreshLocks.delete(conversationKey),
 });
-
-const lastProjectPath = () => {
-  return projectPathHistory.value.map(normalizeProjectPath).find(Boolean) ?? "";
-};
 
 loadProjectPathHistory();
 
@@ -822,41 +527,13 @@ const getCurrentConversation = (): OpenChatConversation | undefined => {
   return conversationList.value.find((c) => c.key === currentConversationKey.value);
 };
 
-interface TaskCompletionNotice {
-  key: string;
-  agentId: string;
-  conversationKey: string;
-}
-
-const showTaskCompletionNotification = (notice: TaskCompletionNotice) => {
-  if (
-    !taskCompletionNotificationsEnabled.value ||
-    !browserNotificationsSupported ||
-    XNotification.permission !== "granted"
-  ) {
-    return;
-  }
-  const conversation = conversationList.value.find(
-    (item) =>
-      (item.agentId || "api") === notice.agentId && String(item.key) === notice.conversationKey,
-  );
-  const conversationTitle = String(conversation?.label ?? "").trim();
-  XNotification.open({
-    title: "Open Chat · 任务已完成",
-    body:
-      conversationTitle && conversationTitle !== "新对话"
-        ? `${conversationTitle} 已完成，可以查看结果。`
-        : "Agent 任务已完成，可以查看结果。",
-    tag: notice.key,
-    duration: 8,
-    onClick: () => window.focus(),
-  });
-};
-
-const notifyTaskCompletion = (notice: TaskCompletionNotice) => {
-  showTaskCompletionNotification(notice);
-};
-
+const {
+  browserNotificationsSupported,
+  taskCompletionNotificationsEnabled,
+  handleTaskCompletionNotificationsChange,
+  handleTestTaskCompletionNotification,
+  notifyTaskCompletion,
+} = useNotifications({ conversationList });
 const isInDraftMode = computed(() => !currentConversationKey.value);
 const currentConversationTitle = computed(() => {
   const conversation = getCurrentConversation();
@@ -1285,123 +962,20 @@ const handleRoutePopState = () => {
   });
 };
 
-/** Attach sources received mid-stream to the assistant message that produced them. */
-const attachPendingSearchSources = (conversationKey?: string) => {
-  const targetKey = conversationKey || currentConversationKey.value;
-  if (!targetKey) return;
-  const sources = pendingSearchSourcesMap.get(targetKey) ?? pendingSearchSources.value;
-  pendingSearchSourcesMap.delete(targetKey);
-  pendingSearchSources.value = null;
-  if (!sources || sources.length === 0) return;
-  const conv = conversationList.value.find((item) => String(item.key) === targetKey);
-  if (!conv || !conv.messages?.length) return;
-  const msgs = [...conv.messages];
-  const lastAssistantIdx = msgs.map((m) => m.message.role).lastIndexOf("assistant");
-  if (lastAssistantIdx !== -1) {
-    const target = msgs[lastAssistantIdx];
-    msgs[lastAssistantIdx] = {
-      ...target,
-      extraInfo: { ...target.extraInfo, webSearchResults: sources },
-    };
-    conv.messages = persistMessageTimings(targetKey, msgs);
-    schedulePersistState();
-  }
-};
-
-const setConversationLastError = (conversationKey: string, errorMessage: string) => {
-  const conv = conversationList.value.find((item) => String(item.key) === conversationKey);
-  if (!conv) return;
-  conv.lastError = errorMessage.trim() ? errorMessage.trim().slice(0, 2000) : "请求失败";
-  if (conv.statusOverride) conv.statusOverride = "";
-  // 确保抽屉打开时能看到与聊天一致的红色错误条：给最后一条 assistant 消息补 chatError
-  if (conv.messages?.length) {
-    const lastAssistant = [...conv.messages]
-      .reverse()
-      .find((item) => item.message.role === "assistant");
-    if (lastAssistant) {
-      const msg = lastAssistant.message as unknown as Record<string, unknown>;
-      const extra = (lastAssistant.extraInfo as Record<string, unknown> | undefined) ?? {};
-      if (typeof msg.chatError !== "string" || !msg.chatError) {
-        msg.chatError = conv.lastError;
-      }
-      if (typeof extra.chatError !== "string" || !extra.chatError) {
-        lastAssistant.extraInfo = { ...extra, chatError: conv.lastError };
-      }
-    }
-  }
-  conv.updatedAt = Date.now();
-  schedulePersistState();
-};
-const clearConversationLastError = (conversationKey: string) => {
-  const conv = conversationList.value.find((item) => String(item.key) === conversationKey);
-  if (!conv) return;
-  const hadError = Boolean(conv.lastError);
-  if ("lastError" in conv) delete conv.lastError;
-  // 同步清理最后一条 assistant 消息上的 chatError，避免历史错误导致 hasPersistedError 误判
-  if (conv.messages?.length) {
-    const lastAssistant = [...conv.messages].reverse().find((item) => {
-      if (!item || typeof item !== "object" || !("message" in item)) return false;
-      const message = item.message;
-      if (!message || typeof message !== "object" || !("role" in message)) return false;
-      const role = message.role;
-      return role === "assistant";
-    });
-    if (lastAssistant && typeof lastAssistant === "object") {
-      let changed = false;
-      if ("message" in lastAssistant) {
-        const message = lastAssistant.message;
-        if (message && typeof message === "object" && "chatError" in message) {
-          const chatError = message.chatError;
-          if (typeof chatError === "string" && chatError.trim()) {
-            delete (message as Record<string, unknown>).chatError;
-            changed = true;
-          }
-        }
-      }
-      if ("extraInfo" in lastAssistant) {
-        const extraInfo = lastAssistant.extraInfo;
-        if (extraInfo && typeof extraInfo === "object" && "chatError" in extraInfo) {
-          const chatError = extraInfo.chatError;
-          if (typeof chatError === "string" && chatError.trim()) {
-            const nextExtra = { ...(extraInfo as Record<string, unknown>) };
-            delete nextExtra.chatError;
-            lastAssistant.extraInfo = Object.keys(nextExtra).length
-              ? (nextExtra as never)
-              : undefined;
-            changed = true;
-          }
-        }
-      }
-      if (hadError || changed) schedulePersistState();
-      return;
-    }
-  }
-  if (hadError) schedulePersistState();
-};
-
-const getConversationErrorMessage = (key: string): string => {
-  const run = activeSessionRuns.get(key);
-  if (run?.errorText) return run.errorText;
-  const conv = conversationList.value.find((item) => String(item.key) === key);
-  if (conv?.messages?.length) {
-    const lastAssistant = [...conv.messages]
-      .reverse()
-      .find((item) => item.message.role === "assistant");
-    if (lastAssistant) {
-      const msg = lastAssistant.message as unknown as { chatError?: unknown; content?: unknown };
-      if (typeof msg.chatError === "string" && msg.chatError.trim()) return msg.chatError.trim();
-      const extraInfo = lastAssistant.extraInfo as { chatError?: unknown } | undefined;
-      if (extraInfo && typeof extraInfo.chatError === "string" && extraInfo.chatError.trim()) {
-        return extraInfo.chatError.trim();
-      }
-      if (typeof msg.content === "string" && msg.content.trim()) {
-        const text = msg.content.trim();
-        if (text !== WEB_SEARCHING_MARKER && text.length > 0) return text.slice(0, 2000);
-      }
-    }
-  }
-  return run?.errorText || "请求失败";
-};
+const {
+  attachPendingSearchSources,
+  setConversationLastError,
+  clearConversationLastError,
+  getConversationErrorMessage,
+} = useSessionErrors({
+  conversationList,
+  currentConversationKey,
+  pendingSearchSources,
+  pendingSearchSourcesMap,
+  activeSessionRuns,
+  persistMessageTimings,
+  schedulePersistState,
+});
 
 // ============ 会话实时输出（Open Chat 任务事件总线） ============
 
@@ -1615,10 +1189,6 @@ onMounted(async () => {
   window.addEventListener("keydown", handleWorkspaceKeydown);
   window.addEventListener("popstate", handleRoutePopState);
   document.addEventListener("visibilitychange", handleVisibilityChange);
-  mobileLayoutMedia?.addEventListener("change", handleMobileLayoutChange);
-  if (mobileLayoutMedia?.matches) {
-    conversationsOpen.value = false;
-  }
   const initialChatPath = window.location.pathname;
   const [persistedState, loadedAgents, loadedDefaultProjectPath, loadedTasks] = await Promise.all([
     loadChatState(),
@@ -1683,9 +1253,6 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleWorkspaceKeydown);
   window.removeEventListener("popstate", handleRoutePopState);
   document.removeEventListener("visibilitychange", handleVisibilityChange);
-  mobileLayoutMedia?.removeEventListener("change", handleMobileLayoutChange);
-  window.removeEventListener("mousemove", handleResizeMove);
-  window.removeEventListener("mouseup", handleResizeEnd);
   stopAcpLiveStream();
   if (queuedMessageTimer) clearTimeout(queuedMessageTimer);
   // 卸载前把尚未落盘的任务变更刷进 IndexedDB
@@ -1696,96 +1263,15 @@ onBeforeUnmount(() => {
   }
 });
 
-// ============ 面板拖拽调整宽度 ============
-
-const handleResizeStart = (target: "sidebar" | "right-panel") => (event: MouseEvent) => {
-  event.preventDefault();
-  resizing.value = target;
-  window.addEventListener("mousemove", handleResizeMove);
-  window.addEventListener("mouseup", handleResizeEnd);
-};
-
-const handleResizeMove = (event: MouseEvent) => {
-  if (resizing.value === "sidebar") {
-    sidebarWidth.value = Math.min(420, Math.max(180, event.clientX));
-  } else if (resizing.value === "right-panel") {
-    rightPanelWidth.value = Math.min(1000, Math.max(280, window.innerWidth - event.clientX));
-  }
-};
-
-const handleResizeEnd = () => {
-  resizing.value = null;
-  window.removeEventListener("mousemove", handleResizeMove);
-  window.removeEventListener("mouseup", handleResizeEnd);
-};
-
 // ============ 消息转换 ============
 
-const bubbleItems = computed(() => {
-  const conversationMessages = currentConversationMessages.value;
-  const pending = optimisticMessage.value;
-  const baseItems = modelMessagesToBubbleItems(conversationMessages);
-
-  /** 刷新后服务端仍在运行，但本地消息快照可能暂时没有 assistant 气泡。 */
-  const withRunningPlaceholder = (items: ReturnType<typeof modelMessagesToBubbleItems>) => {
-    if (!currentConversationBusyState.value) return items;
-    if (
-      items.some(
-        (item) =>
-          item.role === "assistant" && (item.status === "loading" || item.status === "updating"),
-      )
-    ) {
-      return items;
-    }
-    return [
-      ...items,
-      {
-        key: `${currentConversationKey.value}:running`,
-        role: "assistant" as const,
-        status: "updating" as const,
-        loading: false,
-        content: "",
-        extraInfo: {},
-      },
-    ];
-  };
-
-  if (!pending || pending.conversationKey !== currentConversationKey.value) {
-    return withRunningPlaceholder(baseItems);
-  }
-
-  // Once useXChat has emitted the local user item, only retire that optimistic
-  // row. The assistant fallback must stay until the SDK publishes its own
-  // loading/updating item, otherwise the request has a visible feedback gap.
-  const storeHasPendingMessage = hasAcknowledgedOptimisticMessage(conversationMessages, pending);
-
-  const pendingInfo: DefaultMessageInfo<XModelMessage> = {
-    id: pending.id,
-    status: "local",
-    message: pending.message,
-    extraInfo: pending.extraInfo,
-  };
-  const hasStreamingAssistant = conversationMessages.some(
-    (item) =>
-      item.message.role === "assistant" &&
-      (item.status === "loading" || item.status === "updating"),
-  );
-  const optimisticItems = storeHasPendingMessage
-    ? [...conversationMessages]
-    : [...conversationMessages, pendingInfo];
-  // Keep the transition visually continuous even while the request store is
-  // waiting to publish its placeholder row.
-  if (isConversationRunning(currentConversationKey.value) && !hasStreamingAssistant) {
-    optimisticItems.push({
-      id: `${pending.id}:thinking`,
-      // Render through AssistantMessageContent so the waiting phase uses the
-      // same "工作中" indicator as the subsequent streamed response.
-      status: "updating",
-      message: { role: "assistant", content: "" },
-    });
-  }
-  return withRunningPlaceholder(modelMessagesToBubbleItems(optimisticItems));
-});
+const { optimisticMessages, optimisticMessage, hasAcknowledgedOptimisticMessage, bubbleItems } =
+  useMessageView({
+    currentConversationKey,
+    currentConversationMessages,
+    currentConversationBusyState,
+    isConversationRunning,
+  });
 
 // ============ 事件处理 ============
 
@@ -2450,35 +1936,6 @@ watch(
   },
   { flush: "post" },
 );
-
-const handleProjectPathChange = (value: string) => {
-  if (isConversationRunning(currentConversationKey.value)) {
-    message.warning("请先停止当前会话的任务再切换项目目录");
-    return;
-  }
-  const nextPath = normalizeProjectPath(value);
-  projectPath.value = nextPath;
-  if (!currentConversationKey.value) draftProjectPath.value = nextPath;
-  if (nextPath) rememberProjectPath(nextPath);
-  const conversation = getCurrentConversation();
-  if (conversation) {
-    conversation.projectPath = projectPath.value;
-    schedulePersistState();
-    failedHistoryRefreshLocks.delete(String(conversation.key));
-  }
-  void refreshAcpSession(true);
-};
-
-const handleProjectPathRemove = (value: string) => {
-  if (isConversationRunning(currentConversationKey.value)) {
-    message.warning("请先停止当前会话的任务再删除项目目录");
-    return;
-  }
-  const removedPath = normalizeProjectPath(value);
-  if (!removedPath) return;
-  forgetProjectPath(removedPath);
-  if (normalizeProjectPath(projectPath.value) === removedPath) handleProjectPathChange("");
-};
 
 // ============ 输入区业务数据（Git / skills / 附件上传，原内嵌于 ChatInput） ============
 const composerData = useComposerData({
