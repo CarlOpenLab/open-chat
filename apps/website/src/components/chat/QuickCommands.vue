@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch, onBeforeUnmount } from "vue";
 import type { SkillsIndex } from "../../services/ai";
+import { createStyles } from "../../theme/antdvStyle";
+import type { AccentGlobalToken } from "../../theme/shadcnTheme";
 import { filterSuggestionGroups, type SenderSuggestion } from "../../utils/senderCommands";
 
 interface Props {
@@ -23,6 +25,147 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const emit = defineEmits<Emits>();
+
+const useStyles = createStyles(({ token, css }) => {
+  const accent = (token as AccentGlobalToken).colorAccent;
+  return {
+    card: css`
+      width: 100%;
+
+      .quick-commands-list {
+        overflow-y: auto;
+        max-height: 320px;
+        padding: 3px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .quick-commands-group {
+        padding: 5px 9px 2px;
+        color: ${token.colorTextQuaternary};
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        user-select: none;
+      }
+
+      .quick-commands-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 3px 9px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+        transition:
+          background ${token.motionDurationMid} ${token.motionEaseInOut},
+          border-color ${token.motionDurationMid} ${token.motionEaseInOut};
+      }
+
+      .quick-commands-item:hover,
+      .quick-commands-item.is-selected {
+        border-color: ${token.colorBorder};
+        background: ${token.colorFillTertiary};
+      }
+
+      .quick-commands-item.is-selected {
+        background: ${token.colorFillTertiary};
+        border-color: ${accent};
+      }
+
+      .quick-commands-item.is-ohmy.is-selected {
+        /* Oh My Pi 高亮：品牌紫渐变，保留字面量 */
+        background: linear-gradient(to right, rgba(99, 102, 241, 0.08), ${token.colorFillTertiary});
+      }
+
+      .quick-commands-icon {
+        flex: none;
+        width: 16px;
+        text-align: center;
+        font-size: 11px;
+        line-height: 16px;
+      }
+
+      .quick-commands-label {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        font-weight: 600;
+        color: ${token.colorText};
+      }
+
+      .quick-commands-scope {
+        padding: 1px 5px;
+        border-radius: 999px;
+        font-size: 9px;
+        font-weight: 600;
+        line-height: 13px;
+      }
+
+      .quick-commands-scope.is-project {
+        background: color-mix(in srgb, ${accent} 14%, transparent);
+        color: ${accent};
+      }
+
+      .quick-commands-scope.is-global {
+        background: ${token.colorFillSecondary};
+        color: ${token.colorTextTertiary};
+      }
+
+      .quick-commands-badge {
+        padding: 1px 5px;
+        border-radius: 999px;
+        background: ${accent};
+        color: white;
+        font-size: 9px;
+        font-weight: 600;
+        line-height: 13px;
+      }
+
+      .quick-commands-desc {
+        flex: 1 1 auto;
+        min-width: 0;
+        font-size: 11px;
+        color: ${token.colorTextSecondary};
+        line-height: 15px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      &.quick-commands-enter-active,
+      &.quick-commands-leave-active {
+        max-height: 420px;
+        overflow: hidden;
+        transition:
+          max-height ${token.motionDurationMid} ${token.motionEaseInOut},
+          margin-bottom ${token.motionDurationMid} ${token.motionEaseInOut},
+          opacity ${token.motionDurationMid} ${token.motionEaseInOut},
+          transform ${token.motionDurationMid} ${token.motionEaseInOut};
+        transform-origin: bottom center;
+      }
+
+      &.quick-commands-enter-from,
+      &.quick-commands-leave-to {
+        max-height: 0;
+        margin-bottom: 0;
+        border-color: transparent;
+        opacity: 0;
+        padding-top: 0;
+        padding-bottom: 0;
+        transform: translateY(10px) scale(0.985);
+      }
+    `,
+  };
+});
+
+const { styles } = useStyles();
 
 const query = computed(() => {
   const v = props.modelValue.trimStart();
@@ -118,7 +261,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
 
 <template>
   <Transition name="quick-commands">
-    <div v-if="shouldShow" class="quick-commands-card" role="listbox" aria-label="斜杠建议">
+    <div
+      v-if="shouldShow"
+      class="quick-commands-card"
+      :class="styles.card"
+      role="listbox"
+      aria-label="斜杠建议"
+    >
       <div class="quick-commands-list">
         <template v-for="group in groups" :key="group.key">
           <div class="quick-commands-group" role="presentation">{{ group.title }}</div>
@@ -162,138 +311,3 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
     </div>
   </Transition>
 </template>
-
-<style scoped>
-.quick-commands-card {
-  width: 100%;
-}
-
-.quick-commands-list {
-  overflow-y: auto;
-  max-height: 320px;
-  padding: 3px;
-  display: flex;
-  flex-direction: column;
-}
-
-.quick-commands-group {
-  padding: 5px 9px 2px;
-  color: var(--brand-ghost);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  user-select: none;
-}
-
-.quick-commands-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 3px 9px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-  transition:
-    background 140ms ease,
-    border-color 140ms ease;
-}
-
-.quick-commands-item:hover,
-.quick-commands-item.is-selected {
-  border-color: var(--brand-border-strong);
-  background: var(--brand-surface-subtle);
-}
-
-.quick-commands-item.is-selected {
-  background: var(--brand-surface-subtle);
-  border-color: var(--brand-accent);
-}
-
-.quick-commands-item.is-ohmy.is-selected {
-  background: linear-gradient(to right, rgba(99, 102, 241, 0.08), var(--brand-surface-subtle));
-}
-
-.quick-commands-icon {
-  flex: none;
-  width: 16px;
-  text-align: center;
-  font-size: 11px;
-  line-height: 16px;
-}
-
-.quick-commands-label {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--brand-foreground);
-}
-
-.quick-commands-scope {
-  padding: 1px 5px;
-  border-radius: 999px;
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 13px;
-}
-
-.quick-commands-scope.is-project {
-  background: color-mix(in srgb, var(--brand-accent) 14%, transparent);
-  color: var(--brand-accent);
-}
-
-.quick-commands-scope.is-global {
-  background: var(--brand-inset);
-  color: var(--brand-muted-strong);
-}
-
-.quick-commands-badge {
-  padding: 1px 5px;
-  border-radius: 999px;
-  background: var(--brand-accent);
-  color: white;
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 13px;
-}
-
-.quick-commands-desc {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--brand-muted);
-  line-height: 15px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.quick-commands-enter-active,
-.quick-commands-leave-active {
-  max-height: 420px;
-  overflow: hidden;
-  transition:
-    max-height 180ms ease,
-    margin-bottom 180ms ease,
-    opacity 180ms ease,
-    transform 180ms ease;
-  transform-origin: bottom center;
-}
-
-.quick-commands-enter-from,
-.quick-commands-leave-to {
-  max-height: 0;
-  margin-bottom: 0;
-  border-color: transparent;
-  opacity: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  transform: translateY(10px) scale(0.985);
-}
-</style>

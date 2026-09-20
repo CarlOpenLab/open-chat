@@ -12,7 +12,8 @@ import { inject, provide } from "vue";
 import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
 import type { OpenChatConversation } from "../composables/useChatPersistence";
 import type { ModelCatalogEntry } from "../composables/useChatModels";
-import type { WebSearchSourceItem } from "../services/ai";
+import type { StagedAttachment } from "../composables/useComposerData";
+import type { GitWorkspaceInfo, SkillsIndex, WebSearchSourceItem } from "../services/ai";
 import type { AcpRunStateNotice, PermissionRequest } from "../services/OpenChatProvider";
 import type { AgentView } from "../services/acp";
 import type { QueuedChatMessage } from "../services/chatStorage";
@@ -140,6 +141,20 @@ export interface Workspace {
   handleFileModeChange: (value: boolean) => void;
   handleProjectPathChange: (value: string) => void;
   handleProjectPathRemove: (value: string) => void;
+
+  // ===== 输入区业务数据（useComposerData 提供，ConversationPanel → ChatInput 受控下发） =====
+  gitWorkspace: GitWorkspaceInfo | null;
+  gitWorkspaceBusy: boolean;
+  projectPathPicking: boolean;
+  skills: SkillsIndex;
+  stagedAttachments: StagedAttachment[];
+  handlePickProjectPath: () => void;
+  /** Git 菜单打开等 UI 时机的刷新请求。 */
+  handleGitWorkspaceRefresh: () => void;
+  handleGitBranchSwitch: (branch: string) => void;
+  handleAttachmentsUpload: (files: File[]) => void;
+  /** v-model:attachments 落点（diff revoke blob URL）。 */
+  handleAttachmentsChange: (next: StagedAttachment[]) => void;
 
   // ===== 设置 / 通知 =====
   handleTaskCompletionNotificationsChange: (enabled: boolean) => Promise<void>;

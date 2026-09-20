@@ -51,6 +51,7 @@ import {
   type TranscriptMessage,
 } from "../services/transcript";
 import { useChatModels, type ModelCatalogEntry } from "../composables/useChatModels";
+import { useComposerData } from "../composables/useComposerData";
 import {
   getMessagePreview,
   useChatPersistence,
@@ -2473,6 +2474,15 @@ const handleProjectPathRemove = (value: string) => {
   if (normalizeProjectPath(projectPath.value) === removedPath) handleProjectPathChange("");
 };
 
+// ============ 输入区业务数据（Git / skills / 附件上传，原内嵌于 ChatInput） ============
+const composerData = useComposerData({
+  projectPath,
+  loading: inputRunning,
+  agentMode: isAcpAgent,
+  onProjectPathChange: handleProjectPathChange,
+});
+onBeforeUnmount(composerData.dispose);
+
 const handleModelChange = async (key: string) => {
   if (isConversationRunning(currentConversationKey.value)) {
     message.warning("请先停止当前会话的任务再切换模型");
@@ -3011,6 +3021,18 @@ const workspace = reactive({
   handleFileModeChange,
   handleProjectPathChange,
   handleProjectPathRemove,
+
+  // 输入区业务数据（useComposerData）
+  gitWorkspace: composerData.gitWorkspace,
+  gitWorkspaceBusy: composerData.gitWorkspaceBusy,
+  projectPathPicking: composerData.projectPathPicking,
+  skills: composerData.skills,
+  stagedAttachments: composerData.stagedAttachments,
+  handlePickProjectPath: composerData.handlePickProjectPath,
+  handleGitWorkspaceRefresh: composerData.handleGitWorkspaceRefresh,
+  handleGitBranchSwitch: composerData.handleGitBranchSwitch,
+  handleAttachmentsUpload: composerData.handleAttachmentsUpload,
+  handleAttachmentsChange: composerData.handleAttachmentsChange,
 
   // 设置 / 通知
   handleTaskCompletionNotificationsChange,

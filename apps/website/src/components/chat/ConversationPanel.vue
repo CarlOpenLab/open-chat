@@ -73,6 +73,11 @@ const ws = useWorkspace();
       :agent-available="ws.activeAgent.available"
       :agent-configuring="ws.acpSessionLoading"
       :is-oh-my-pi="ws.isPiAgent"
+      :git-workspace="ws.gitWorkspace"
+      :git-busy="ws.gitWorkspaceBusy"
+      :project-path-picking="ws.projectPathPicking"
+      :skills="ws.skills"
+      v-model:attachments="ws.stagedAttachments"
       @change="ws.handleChange($event)"
       @cancel="ws.handleCancel()"
       @submit="
@@ -90,6 +95,11 @@ const ws = useWorkspace();
       @file-mode-change="ws.handleFileModeChange($event)"
       @project-path-change="ws.handleProjectPathChange($event)"
       @project-path-remove="ws.handleProjectPathRemove($event)"
+      @pick-project-path="ws.handlePickProjectPath()"
+      @git-workspace-refresh="ws.handleGitWorkspaceRefresh()"
+      @git-branch-switch="ws.handleGitBranchSwitch($event)"
+      @attachments-upload="ws.handleAttachmentsUpload($event)"
+      @update:attachments="ws.handleAttachmentsChange($event)"
     />
   </div>
 </template>

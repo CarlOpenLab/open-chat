@@ -1,5 +1,14 @@
-import type { ThemeConfig } from "antdv-next";
+import type { GlobalToken, ThemeConfig } from "antdv-next";
 import { theme } from "antdv-next";
+
+/**
+ * 品牌强调色（珊瑚）。ThemeConfig.token 允许自定义键并入全局 token（useToken 透传），
+ * createStyles 消费处用 AccentGlobalToken 交叉类型取值，替代旧的 var(--brand-accent)。
+ */
+export type AccentGlobalToken = GlobalToken & { colorAccent: string };
+
+/** 浅色 / 深色各自的 accent 值，以自定义 token 注入两份主题。 */
+const accentToken = (colorAccent: string) => ({ colorAccent }) as ThemeConfig["token"];
 
 export const shadcnPalette = {
   zinc: {
@@ -29,6 +38,7 @@ const neutral = shadcnPalette.zinc;
 export const shadcnTheme: ThemeConfig = {
   algorithm: theme.defaultAlgorithm,
   token: {
+    ...accentToken("#c85f44"),
     colorPrimary: neutral[900],
     colorSuccess: shadcnPalette.success,
     colorWarning: shadcnPalette.warning,
@@ -185,6 +195,7 @@ export const shadcnDarkTheme: ThemeConfig = {
   algorithm: theme.darkAlgorithm,
   token: {
     ...shadcnTheme.token,
+    ...accentToken("#e2795b"),
     colorPrimary: neutral[50],
     colorPrimaryBg: neutral[900],
     colorPrimaryBgHover: neutral[800],
