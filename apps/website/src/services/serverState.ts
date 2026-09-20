@@ -97,11 +97,21 @@ async function clearLegacyLocal(name: ServerStateName): Promise<void> {
 /**
  * 加载状态：网关优先，一次性迁移 IndexedDB 旧数据；网关不可达回退本地。
  * `hasLocalFallback` 为假（本地也没有旧数据）时直接返回 null，不告警。
+ *
+ * tasks 额外做裂脑合并：保存时若网关不可达/未授权（401 窗口），会写本地
+ * 兜底；之后网关恢复时若只读网关，兜底里的新任务会被旧网关状态掩盖。
+ * 这里按 id 并集合并（updatedAt 新者胜），差异回写网关并清掉本地副本。
  */
 export async function loadServerState(name: ServerStateName): Promise<unknown> {
   try {
     const envelope = await fetchStateEnvelope(name);
-    if (envelope.found) return envelope.data;
+    if (envelope.found) {
+      if (name === "tasks") {
+        const merged = await mergeTasksWithLocalFallback(envelope.data);
+        if (merged) return merged;
+      }
+      return envelope.data;
+    }
     // 网关无数据：尝试一次性迁移浏览器旧数据
     const legacy = await readLegacyLocal(name);
     if (legacy !== undefined && legacy !== null) {
@@ -121,6 +131,50 @@ export async function loadServerState(name: ServerStateName): Promise<unknown> {
     }
     return legacy ?? null;
   }
+}
+
+interface TaskLike {
+  id?: unknown;
+  updatedAt?: unknown;
+}
+
+/** tasks 裂脑合并：返回非 null 表示合并结果与网关数据有差异（已回写）。 */
+async function mergeTasksWithLocalFallback(gatewayData: unknown): Promise<unknown> {
+  if (!Array.isArray(gatewayData)) return null;
+  let local: unknown;
+  try {
+    local = await readLegacyLocal("tasks");
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(local) || local.length === 0) return null;
+  const isTask = (value: unknown): value is TaskLike => typeof value === "object" && value !== null;
+  const localTasks = local.filter(isTask);
+  if (localTasks.length === 0) return null;
+  const byId = new Map<string, TaskLike>();
+  for (const task of gatewayData.filter(isTask)) {
+    if (typeof task.id === "string") byId.set(task.id, task);
+  }
+  let changed = false;
+  for (const task of localTasks) {
+    if (typeof task.id !== "string") continue;
+    const existing = byId.get(task.id);
+    const taskUpdated = typeof task.updatedAt === "number" ? task.updatedAt : 0;
+    const existingUpdated =
+      existing && typeof existing.updatedAt === "number" ? existing.updatedAt : 0;
+    if (!existing || taskUpdated >= existingUpdated) {
+      if (!existing || taskUpdated > existingUpdated) changed = true;
+      byId.set(task.id, task);
+    }
+  }
+  if (!changed) return null;
+  const merged = [...byId.values()];
+  const written = await putStateEnvelope("tasks", merged);
+  if (written) {
+    await clearLegacyLocal("tasks");
+    console.info("[state] merged local task fallback into gateway state");
+  }
+  return merged;
 }
 
 /** 保存状态：先写网关；网关失败（不可达/5xx）写本地兜底。 */

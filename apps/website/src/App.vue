@@ -147,17 +147,57 @@ const checkAccess = async () => {
   }
 };
 
+/** 登录请求本身；成功即种 session cookie，返回是否通过。 */
+const loginWithPassword = async (password: string): Promise<boolean> => {
+  const response = await fetch("/api/access/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  return response.ok;
+};
+
+/** 登录成功后把 ?token= / 旧版 ?password= 从地址栏抹掉，避免密码残留书签 / 历史记录。 */
+const stripPasswordQuery = () => {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("token") && !url.searchParams.has("password")) return;
+  url.searchParams.delete("token");
+  url.searchParams.delete("password");
+  window.history.replaceState(null, "", url);
+};
+
+/** 启动时优先读路由 query 里的 token 自动登录（CLI 打开的 URL 会带上）。 */
+const tryQueryPasswordLogin = async () => {
+  const params = new URLSearchParams(window.location.search);
+  // token 为当前参数名；password 兼容旧版链接
+  const queryPassword = params.get("token") ?? params.get("password");
+  if (!queryPassword) {
+    void checkAccess();
+    return;
+  }
+  try {
+    if (await loginWithPassword(queryPassword)) {
+      stripPasswordQuery();
+      accessGranted.value = true;
+      setGatewayAccessGranted(true);
+      return;
+    }
+    accessError.value = "URL 中的密码已失效，请输入启动终端中显示的本次密码。";
+  } catch {
+    accessError.value = "自动登录失败，请输入启动终端中显示的本次密码。";
+  } finally {
+    accessReady.value = true;
+  }
+};
+
 const submitAccessPassword = async () => {
   if (!accessPassword.value || accessSubmitting.value) return;
   accessSubmitting.value = true;
   accessError.value = "";
   try {
-    const response = await fetch("/api/access/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: accessPassword.value }),
-    });
-    if (!response.ok) throw new Error("密码不正确，请从启动终端获取本次密码。");
+    if (!(await loginWithPassword(accessPassword.value))) {
+      throw new Error("密码不正确，请从启动终端获取本次密码。");
+    }
     accessPassword.value = "";
     accessGranted.value = true;
     setGatewayAccessGranted(true);
@@ -240,7 +280,7 @@ watch(
 
 onMounted(() => {
   window.addEventListener(ACCESS_REQUIRED_EVENT, handleAccessRequired);
-  void checkAccess();
+  void tryQueryPasswordLogin();
   window.addEventListener("popstate", syncRoute);
   systemDarkQuery.addEventListener("change", handleSystemThemeChange);
 });

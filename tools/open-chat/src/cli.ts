@@ -67,7 +67,7 @@ const HELP = `open-chat — 本地启动 Open Chat 工作区（网关 + Web UI�
   --port <port>        网关端口（默认 8082，0 = 自动分配）
   --host <host>        网关监听地址（默认 0.0.0.0，可从局域网访问）
   --website-dir <dir>  静态站点目录（默认使用内置网站资源）
-  --dev                启动 Vite 开发服务器并打开 http://localhost:3000
+  --dev                启动 Vite 开发服务器并打开 http://localhost:3000（仍生成访问密码，自动带 ?token= 登录）
   --build              构建网站与 CLI 后退出（open-chat build）
   --no-open            不自动打开浏览器
   --verbose            打印更多日志
@@ -230,6 +230,15 @@ function openBrowser(url: string): void {
   child.unref();
 }
 
+/** 拼接 ?token= 自动登录参数（网关任何模式都会生成一次性密码）。
+ *  密码是 Web UI 页面 URL 的 query 参数：补全路径分隔 `/` 后再拼，
+ *  形如 http://localhost:3000/?token=xxx（不是 ...:3000?token=xxx）。 */
+function withPassword(url: string, password?: string): string {
+  if (!password) return url;
+  const withSlash = url.endsWith("/") ? url : `${url}/`;
+  return `${withSlash}?token=${encodeURIComponent(password)}`;
+}
+
 function lanUrls(port: number, host?: string): string[] {
   if (host && host !== "0.0.0.0" && host !== "::") return [];
   return Object.values(networkInterfaces())
@@ -357,15 +366,15 @@ async function main(): Promise<void> {
       host: opts.host,
       port: opts.port,
       staticDir: websiteDir,
-      dev: opts.dev,
     });
 
     const targetUrl = opts.dev ? DEV_URL : gateway.url;
+    const openUrl = withPassword(targetUrl, gateway.password);
     if (opts.verbose) {
       console.log(`[open-chat] website: ${websiteDir ?? "vite dev server"}`);
     }
-    printBanner(targetUrl, opts.dev ? lanUrls(3000, opts.host) : lanUrls(gateway.port, opts.host));
-    if (opts.open) openBrowser(targetUrl);
+    printBanner(openUrl, opts.dev ? lanUrls(3000, opts.host) : lanUrls(gateway.port, opts.host));
+    if (opts.open) openBrowser(openUrl);
   } catch (err) {
     // 任何启动失败：清掉已拉起的子进程再退出。
     killDevChild("SIGTERM");

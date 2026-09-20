@@ -190,6 +190,14 @@ vp check                # format, lint, and type checks
 vp run server#build
 vp run website#build
 vp run @cc-heart/open-chat#build
+vp run website#storybook  # component playground (Storybook) on :6006
+```
+
+每个启动都会生成一次性访问密码；打开带 `?password=` 的 URL 自动登录（密码同时打印在启动日志）。
+
+```text
+apps/website/.storybook       Storybook 配置与全局主题容器（亮/暗工具栏切换）
+apps/website/src/**/*.stories.ts  业务组件调试入口（与组件同目录，如 ChatInput.stories.ts）
 ```
 
 ## Repository layout
