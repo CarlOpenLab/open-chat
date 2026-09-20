@@ -3,12 +3,13 @@ import type { BubbleItemType } from "@antdv-next/x";
 import { Sources } from "@antdv-next/x";
 import { XMarkdown } from "@antdv-next/x-markdown";
 import { Globe2, TriangleAlert } from "@lucide/vue";
-import { computed, ref } from "vue";
+import { computed, provide, ref } from "vue";
 import type { Component } from "vue";
 import type { WebSearchSourceItem } from "../../services/ai";
 import { isMarkdownPlainText } from "../../composables/markdownRenderLimits";
 import { useMarkdownStreaming } from "../../composables/useMarkdownStreaming";
 import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
+import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 
 interface Props {
   item: BubbleItemType;
@@ -16,9 +17,21 @@ interface Props {
   markdownClassName: string;
   streaming: boolean;
   searchResults: WebSearchSourceItem[];
+  /**
+   * 独立挂载（如 Storybook）时的主题：显式传入时向下提供，让 fenced code /
+   * mermaid 用对主题；缺省时保持原行为，沿用上游注入的 markdownThemeKey。
+   */
+  theme?: MarkdownTheme;
 }
 
 const props = defineProps<Props>();
+
+if (props.theme) {
+  provide(
+    markdownThemeKey,
+    computed<MarkdownTheme>(() => props.theme ?? "light"),
+  );
+}
 
 const markdownComponents: Record<string, Component> = {
   code: MarkdownCodeRenderer,

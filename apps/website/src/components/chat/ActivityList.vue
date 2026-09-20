@@ -1,36 +1,12 @@
 <script setup lang="ts">
-import type { Component } from "vue";
 import { computed, inject, onBeforeUnmount, ref } from "vue";
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Copy,
-  ListTodo,
-  Pencil,
-  Sparkles,
-  Wrench,
-  X,
-} from "@lucide/vue";
-import { XMarkdown } from "@antdv-next/x-markdown";
-import {
-  fileChangeTitle,
-  formatActivitySummary,
-  summarizeMessages,
-  toolTitle,
-} from "@cc-heart/open-chat-types";
-import type {
-  FileChangeMessage,
-  SegmentStatus,
-  ToolMessage,
-  TranscriptMessage,
-} from "@cc-heart/open-chat-types";
-import { isMarkdownPlainText } from "../../composables/markdownRenderLimits";
+import { ChevronDown, ChevronRight } from "@lucide/vue";
+import { formatActivitySummary, summarizeMessages } from "@cc-heart/open-chat-types";
+import type { TranscriptMessage } from "@cc-heart/open-chat-types";
 import { useMarkdownStreaming } from "../../composables/useMarkdownStreaming";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
-import MarkdownCodeRenderer from "./MarkdownCodeRenderer.vue";
-import UnifiedDiff from "./UnifiedDiff.vue";
-import { formatWorkedDuration } from "../../utils/chatDuration";
+import ActivityEntryRow from "./ActivityEntryRow.vue";
+import { buildActivityEntries, hasActivityDetail, type ActivityEntry } from "./activityEntry";
 
 interface Props {
   messages: TranscriptMessage[];
@@ -60,211 +36,15 @@ const theme = inject(
   markdownThemeKey,
   computed<MarkdownTheme>(() => "dark"),
 );
-const markdownComponents: Record<string, Component> = { code: MarkdownCodeRenderer };
-const markdownClassName = computed(() => `chat-markdown x-markdown-${theme.value}`);
 
-const formatToolDetail = (value: unknown, maxLength = 4000): string => {
-  let text = "";
-  if (typeof value === "string") {
-    text = value;
-  } else if (typeof value === "object" && value !== null) {
-    try {
-      text = JSON.stringify(value, null, 2);
-    } catch {
-      text = String(value);
-    }
-  } else {
-    text = String(value ?? "");
-  }
-  return text.length > maxLength ? `${text.slice(0, maxLength)}…（内容过长已截断）` : text;
-};
-
-interface ActivityEntry {
-  id: string;
-  kind: "reasoning" | "tool" | "plan" | "workspace";
-  icon: Component | null;
-  title: string;
-  preview: string;
-  status: "running" | "success" | "error" | "pending";
-  content?: string;
-  sections?: Array<{ label: string; content: string; copyable?: boolean }>;
-  fileChanges?: Array<{
-    path: string;
-    additions?: number;
-    deletions?: number;
-    patch?: string;
-  }>;
-  fileStats?: { additions: number; deletions: number };
-}
-
-/**
- * Activity ids come from several provider protocols. Reasoning chunks in
- * particular often reuse the same provider id after a tool call, so make the
- * ids unique at the UI boundary before they are used as Vue keys/state keys.
- */
-const normalizeEntryIds = (items: ActivityEntry[]): ActivityEntry[] => {
-  const used = new Set<string>();
-  return items.map((entry, index) => {
-    const base = entry.kind === "reasoning" ? "reasoning" : entry.id || `activity-${index}`;
-    let id = base;
-    let suffix = 1;
-    while (used.has(id)) id = `${base}-${suffix++}`;
-    used.add(id);
-    return id === entry.id ? entry : { ...entry, id };
-  });
-};
-
-const reasoningRunning = computed(() => props.streaming && props.reasoningDone !== true);
-
-const segmentStatus = (status: SegmentStatus): ActivityEntry["status"] =>
-  status === "completed"
-    ? "success"
-    : status === "error"
-      ? "error"
-      : status === "running"
-        ? "running"
-        : "pending";
-
-const fileName = (path: string): string => path.split(/[\\/]/).filter(Boolean).at(-1) || path;
-
-function toolActivityEntry(tool: ToolMessage): ActivityEntry {
-  const sections: Array<{ label: string; content: string; copyable?: boolean }> = [];
-  if (tool.input !== undefined) {
-    sections.push({ label: "参数", content: formatToolDetail(tool.input, 2000), copyable: true });
-  }
-  const output = [tool.output, tool.error]
-    .filter((value): value is string => Boolean(value))
-    .map((value) => formatToolDetail(value))
-    .join("\n\n");
-  if (output) sections.push({ label: "输出", content: output, copyable: tool.input === undefined });
-
-  const status = segmentStatus(tool.status);
-  const title = toolTitle(tool.name, tool.status);
-  const preview =
-    tool.status === "error"
-      ? firstPreviewLine(tool.error)
-      : tool.status === "completed"
-        ? firstPreviewLine(tool.output) ||
-          (tool.durationMs ? `已完成 · ${(tool.durationMs / 1000).toFixed(1)}s` : "已完成")
-        : "";
-  return {
-    id: `tool-${tool.id || tool.name}`,
-    kind: "tool",
-    icon: Wrench,
-    title,
-    preview,
-    status,
-    sections: sections.length ? sections : undefined,
-  };
-}
-
-function fileChangeActivityEntry(change: FileChangeMessage): ActivityEntry {
-  const status = segmentStatus(change.status ?? "completed");
-  const title = fileChangeTitle(change.path, change.status);
-  const preview =
-    status === "success"
-      ? [
-          change.additions ? `+${change.additions}` : "",
-          change.deletions ? `-${change.deletions}` : "",
-        ]
-          .filter(Boolean)
-          .join(" ") || "已完成"
-      : "";
-  return {
-    id: `file-${change.path}`,
-    kind: "tool",
-    icon: Pencil,
-    title,
-    preview,
-    status,
-    fileChanges: [
-      {
-        path: change.path,
-        ...(change.additions !== undefined ? { additions: change.additions } : {}),
-        ...(change.deletions !== undefined ? { deletions: change.deletions } : {}),
-        ...(change.patch ? { patch: change.patch } : {}),
-      },
-    ],
-    fileStats: {
-      additions: change.additions ?? 0,
-      deletions: change.deletions ?? 0,
-    },
-  };
-}
-
-const entries = computed<ActivityEntry[]>(() => {
-  const list: ActivityEntry[] = [];
-
-  for (const message of props.messages) {
-    if (message.role === "reasoning") {
-      list.push({
-        id: `reasoning-${list.length}`,
-        kind: "reasoning",
-        icon: Sparkles,
-        title: reasoningRunning.value
-          ? "正在思考"
-          : props.reasoningDurationMs
-            ? `思考用时 ${formatWorkedDuration(props.reasoningDurationMs)}`
-            : "思考过程",
-        preview: "",
-        status: reasoningRunning.value ? "running" : "success",
-        content: message.content,
-      });
-    } else if (message.role === "tool") {
-      list.push(toolActivityEntry(message));
-    } else if (message.role === "fileChange") {
-      list.push(fileChangeActivityEntry(message));
-    } else if (message.role === "plan") {
-      // entries 缺省时按空计划处理：任何 getter 抛错都会让组件进入半初始化
-      // 状态，随后每次渲染持续报错（见 firstPreviewLine 注释）。
-      for (const [index, entry] of (message.entries ?? []).entries()) {
-        const status: ActivityEntry["status"] =
-          entry.status === "completed"
-            ? "success"
-            : entry.status === "in_progress"
-              ? "running"
-              : "pending";
-        list.push({
-          id: `plan-${list.length}-${index}`,
-          kind: "plan",
-          icon: ListTodo,
-          title: entry.content || `步骤 ${index + 1}`,
-          preview:
-            entry.status === "completed"
-              ? "已完成"
-              : entry.status === "in_progress"
-                ? "进行中"
-                : "等待中",
-          status,
-        });
-      }
-    } else if (message.role === "workspace") {
-      for (const file of message.files ?? []) {
-        const writing = file.status === "streaming" && props.streaming;
-        list.push({
-          id: `file-${file.path}`,
-          kind: "workspace",
-          icon: Pencil,
-          title: writing ? `正在写入 ${file.path}` : `已生成 ${file.path}`,
-          preview: writing ? "写入中" : "已生成",
-          status: writing ? "running" : "success",
-        });
-      }
-      for (const [index, error] of (message.errors ?? []).entries()) {
-        list.push({
-          id: `workspace-error-${index}`,
-          kind: "workspace",
-          icon: Pencil,
-          title: "文件生成异常",
-          preview: error,
-          status: "error",
-        });
-      }
-    }
-  }
-
-  return normalizeEntryIds(list);
-});
+/** 活动条目：由消息派生（见 activityEntry.buildActivityEntries）。 */
+const entries = computed<ActivityEntry[]>(() =>
+  buildActivityEntries(props.messages, {
+    streaming: props.streaming,
+    reasoningDone: props.reasoningDone,
+    reasoningDurationMs: props.reasoningDurationMs,
+  }),
+);
 
 /** 最后一条思考条目的内容（流式中只有它会持续增长）。 */
 const lastReasoningId = computed(() => {
@@ -275,6 +55,7 @@ const streamingReasoningContent = computed(() => {
   const reasoning = entries.value.filter((entry) => entry.kind === "reasoning");
   return reasoning.at(-1)?.content ?? "";
 });
+const reasoningRunning = computed(() => props.streaming && props.reasoningDone !== true);
 // 长思考内容流式渲染节流：x-markdown 每次 content 更新都会对累计全文做完整
 // 重解析/重建（marked → DOMPurify → DOM → VNode），超长文本会平方级放大
 // CPU 与内存（实测 400KB≈52s、1MB 直接 OOM），这里限制为步进渲染。
@@ -290,78 +71,28 @@ const summaryLabel = computed(() =>
   formatActivitySummary(summary.value, { running: anyRunning.value }),
 );
 
-const hasDetail = (entry: ActivityEntry): boolean =>
-  Boolean(entry.content) || Boolean(entry.sections?.length) || Boolean(entry.fileChanges?.length);
 const isItemExpanded = (id: string) => props.itemExpandedIds.includes(id);
 
-/**
- * 思考内容是否走纯文本：规则同 markdownRenderLimits.isMarkdownPlainText，
- * 只对「最后一条思考」（流式中唯一持续增长的那条）套用流式降级，
- * 历史思考按最终长度判定。
- */
-const isReasoningPlainText = (entry: ActivityEntry): boolean => {
-  const isStreamingEntry = entry.id === lastReasoningId.value;
-  const content = isStreamingEntry ? reasoningDisplayContent.value : entry.content;
-  return isMarkdownPlainText(content, isStreamingEntry && props.streaming);
-};
+/** 本条思考要渲染的文本：最后一条为节流后的流式文本，其余为原文。 */
+const reasoningContentOf = (entry: ActivityEntry): string =>
+  entry.id === lastReasoningId.value ? reasoningDisplayContent.value : (entry.content ?? "");
+
+/** 本条思考的流式标志：仅最后一条（流式中唯一增长的那条）走原生流式。 */
+const reasoningStreamingOf = (entry: ActivityEntry) =>
+  entry.id === lastReasoningId.value
+    ? reasoningStreaming.value
+    : { hasNextChunk: false, enableAnimation: false, tail: false };
 
 const toggleSummary = () => emit("update:summaryExpanded", !props.summaryExpanded);
 
 const toggleItem = (entry: ActivityEntry) => {
-  if (!hasDetail(entry)) return;
+  if (!hasActivityDetail(entry)) return;
   const expanded = isItemExpanded(entry.id);
   const next = expanded
     ? props.itemExpandedIds.filter((id) => id !== entry.id)
     : [...props.itemExpandedIds, entry.id];
   emit("update:itemExpandedIds", next);
 };
-
-/**
- * 工具输出/错误预览：
- * - JSON 对象（如 bash 的 { stdout, stderr, exitCode }）取第一个有内容的字符串首行，避免预览显示裸 `{`；
- * - 普通文本取第一个非空且非纯 JSON 标点的行；
- * - 过长截断，避免把整段输出塞进标题行。
- *
- * 注意：必须用函数声明（提升）而非 const 箭头函数。`entries` computed 会在
- * setup 阶段被 useMarkdownStreaming 立即求值（读取最后一条思考内容），
- * 若此时 messages 已含 tool 消息，会同步调用 toolActivityEntry → firstPreviewLine；
- * 晚于该求值点声明的 const 会命中 TDZ（ReferenceError），导致 setup 抛错、
- * 组件进入半初始化状态，之后每次渲染都报 `reading 'length'`。
- */
-function firstPreviewLine(text?: string, max = 120): string {
-  if (!text) return "";
-  const takeLine = (value: string) => {
-    const line =
-      value
-        .split("\n")
-        .map((l) => l.trim())
-        .find((l) => l && !/^[\s{}[\]",:'`\\=_*#-]+$/.test(l)) ?? "";
-    return line.length > max ? `${line.slice(0, max)}…` : line;
-  };
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    const findFirstString = (value: unknown): string => {
-      if (typeof value === "string" && value.trim()) return value;
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          const found = findFirstString(item);
-          if (found) return found;
-        }
-      } else if (value && typeof value === "object") {
-        for (const item of Object.values(value as Record<string, unknown>)) {
-          const found = findFirstString(item);
-          if (found) return found;
-        }
-      }
-      return "";
-    };
-    const extracted = findFirstString(parsed);
-    if (extracted) return takeLine(extracted);
-  } catch {
-    // 非 JSON 内容，走普通首行逻辑。
-  }
-  return takeLine(text);
-}
 
 const copiedSection = ref("");
 let copyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -401,165 +132,20 @@ onBeforeUnmount(() => {
     </button>
 
     <div v-if="summaryExpanded" class="flex w-full min-w-0 flex-col pl-[15px]">
-      <div
+      <ActivityEntryRow
         v-for="entry in entries"
         :key="entry.id"
-        class="flex min-w-0 flex-col"
-        @click="toggleItem(entry)"
-      >
-        <!-- 标题行：与展开内容上下布局，互不居中 -->
-        <div
-          class="my-4px group flex min-h-6 items-center rounded-[6px] px-1.5 py-[3px] text-[11.5px] leading-[14px] w-full"
-          :class="
-            hasDetail(entry)
-              ? 'cursor-pointer hover:bg-[color-mix(in_srgb,var(--brand-foreground)_6%,transparent)] active:bg-[color-mix(in_srgb,var(--brand-foreground)_9%,transparent)]'
-              : 'cursor-default'
-          "
-        >
-          <div class="flex flex-1 min-w-0 items-center gap-2">
-            <component
-              v-if="entry.icon"
-              :is="entry.icon"
-              class="h-[11px] w-[11px] flex-none text-brand-muted-strong"
-            />
-            <span
-              class="min-w-0 max-w-[300px] flex-[0_1_auto] overflow-hidden truncate text-brand-muted"
-              >{{ entry.title }}</span
-            >
-            <span
-              v-if="entry.fileStats?.additions"
-              class="flex-none font-mono text-[10.5px] text-brand-success"
-              >+{{ entry.fileStats.additions }}</span
-            >
-            <span
-              v-if="entry.fileStats?.deletions"
-              class="flex-none font-mono text-[10.5px] text-brand-danger"
-              >-{{ entry.fileStats.deletions }}</span
-            >
-            <!-- <span -->
-            <!--   v-if="!isItemExpanded(entry.id) && entry.preview" -->
-            <!--   class="min-w-0 flex-1 overflow-hidden truncate text-[11px] text-brand-ghost" -->
-            <!--   >{{ entry.preview }}</span -->
-            <!-- > -->
-          </div>
-          <span class="inline-flex flex-none items-center" aria-hidden="true">
-            <X v-if="entry.status === 'error'" class="h-2.5 w-2.5 text-brand-danger" />
-            <Check v-else-if="entry.status === 'success'" class="h-2.5 w-2.5 text-brand-success" />
-            <span
-              v-else-if="entry.status === 'running'"
-              class="h-1.25 w-1.25 rounded-full bg-brand-accent animate-[activity-pulse_1.6s_ease-in-out_infinite]"
-            ></span>
-            <span v-else class="h-1.25 w-1.25 rounded-full bg-brand-ghost opacity-45"></span>
-          </span>
-        </div>
-
-        <Transition name="activity-collapse">
-          <div
-            v-if="
-              isItemExpanded(entry.id) &&
-              ((entry.kind === 'reasoning' && entry.content) ||
-                entry.fileChanges?.length ||
-                entry.sections?.length)
-            "
-            class="activity-collapse-shell"
-            @click.stop
-          >
-            <div class="activity-collapse-content">
-              <!-- 思考展开：弱化 markdown（位于行下方）；超长思考用纯文本 -->
-              <div
-                v-if="entry.kind === 'reasoning' && entry.content"
-                class="box-border w-full min-w-0 max-w-full overflow-hidden px-1"
-              >
-                <pre
-                  v-if="isReasoningPlainText(entry)"
-                  class="m-0 w-full max-w-full whitespace-pre-wrap break-words text-[12px] leading-[1.6] text-brand-muted-strong"
-                  >{{
-                    entry.id === lastReasoningId ? reasoningDisplayContent : entry.content
-                  }}</pre>
-                <XMarkdown
-                  v-else
-                  :content="entry.id === lastReasoningId ? reasoningDisplayContent : entry.content"
-                  :components="markdownComponents"
-                  :streaming="
-                    entry.id === lastReasoningId
-                      ? reasoningStreaming
-                      : { hasNextChunk: false, enableAnimation: false, tail: false }
-                  "
-                  :class-name="[markdownClassName, 'activity-reasoning-markdown'].join(' ')"
-                  :config="{ breaks: true }"
-                  open-links-in-new-tab
-                />
-              </div>
-
-              <!-- 工具展开：inset 详情卡片（位于行下方） -->
-              <div
-                v-else
-                class="my-0.5 mb-1 flex w-full min-w-0 flex-col gap-2 overflow-hidden rounded-[7px] border border-solid border-brand-border bg-brand-surface p-2 font-mono text-[10.5px] leading-4 text-brand-muted"
-              >
-                <div v-if="entry.fileChanges?.length" class="flex flex-col gap-1">
-                  <div class="flex min-h-5 items-center text-[10.5px] font-medium text-brand-muted">
-                    变更文件
-                  </div>
-                  <div
-                    v-for="change in entry.fileChanges"
-                    :key="change.path"
-                    class="file-change block min-w-0 rounded-[4px] bg-transparent"
-                  >
-                    <div class="flex min-w-0 items-center gap-2 px-1 py-0.5">
-                      <Pencil class="h-3 w-3 flex-none text-brand-muted-strong" />
-                      <span
-                        class="min-w-0 flex-1 truncate font-sans text-[11px] text-brand-muted-strong"
-                      >
-                        {{ change.path }}
-                      </span>
-                      <span v-if="change.additions" class="flex-none text-brand-success"
-                        >+{{ change.additions }}</span
-                      >
-                      <span v-if="change.deletions" class="flex-none text-brand-danger"
-                        >-{{ change.deletions }}</span
-                      >
-                    </div>
-                    <!-- 路径下方：统一 diff（由 X CodeHighlighter 以 diff 语言高亮） -->
-                    <div
-                      v-if="change.patch"
-                      class="file-change-diff mt-1 min-w-0 overflow-hidden rounded-[6px]"
-                    >
-                      <UnifiedDiff :patch="change.patch" :path="change.path" :theme="theme" />
-                    </div>
-                  </div>
-                </div>
-                <div
-                  v-for="(section, index) in entry.sections"
-                  :key="index"
-                  class="relative flex w-full min-w-0 flex-col gap-0.75"
-                >
-                  <div class="flex min-h-5 items-start pr-6">
-                    <span class="text-[10.5px] font-medium text-brand-muted">
-                      {{ section.label }}
-                    </span>
-                    <button
-                      v-if="section.copyable"
-                      type="button"
-                      class="absolute -top-0.5 -right-0.5 grid h-[22px] w-[22px] place-items-center rounded-[5px] border-0 bg-transparent p-0 hover:bg-[color-mix(in_srgb,var(--brand-foreground)_9%,transparent)]"
-                      :title="copiedSection === entry.id ? '已复制' : '复制全部内容'"
-                      @click="copyEntry(entry)"
-                    >
-                      <Check
-                        v-if="copiedSection === entry.id"
-                        class="h-[11px] w-[11px] text-brand-ghost"
-                      />
-                      <Copy v-else class="h-[11px] w-[11px] text-brand-ghost" />
-                    </button>
-                  </div>
-                  <pre
-                    class="m-0 w-full min-w-0 whitespace-pre-wrap break-words font-inherit text-brand-muted"
-                    >{{ section.content }}</pre>
-                </div>
-              </div>
-            </div>
-          </div>
-        </Transition>
-      </div>
+        :entry="entry"
+        :expanded="isItemExpanded(entry.id)"
+        :streaming="streaming"
+        :reasoning-content="reasoningContentOf(entry)"
+        :reasoning-live="entry.id === lastReasoningId"
+        :reasoning-streaming="reasoningStreamingOf(entry)"
+        :theme="theme"
+        :copied-section="copiedSection"
+        @toggle="toggleItem(entry)"
+        @copy="copyEntry(entry)"
+      />
     </div>
   </div>
 </template>
@@ -573,62 +159,5 @@ onBeforeUnmount(() => {
   50% {
     opacity: 1;
   }
-}
-
-:deep(.chat-markdown a) {
-  color: var(--brand-accent);
-}
-
-:deep(.activity-reasoning-markdown) {
-  width: 100%;
-  max-width: 100%;
-  --text-color: var(--brand-muted-strong);
-  --heading-color: var(--brand-muted-strong);
-  --line-color: color-mix(in srgb, var(--brand-muted-strong) 30%, transparent);
-  color: var(--brand-muted-strong);
-  font-size: 12px;
-  white-space: normal;
-  padding: 4px 0 16px 8px;
-}
-:deep(.activity-reasoning-markdown p),
-:deep(.activity-reasoning-markdown li) {
-  color: var(--brand-muted-strong);
-  white-space: normal;
-}
-:deep(.activity-reasoning-markdown h1),
-:deep(.activity-reasoning-markdown h2),
-:deep(.activity-reasoning-markdown h3),
-:deep(.activity-reasoning-markdown h4) {
-  color: var(--brand-muted-strong);
-  font-size: 14px;
-  line-height: 20px;
-}
-:deep(.activity-reasoning-markdown a),
-:deep(.activity-reasoning-markdown code:not(pre code)) {
-  color: var(--brand-muted);
-}
-
-.activity-collapse-shell {
-  display: grid;
-  grid-template-rows: 1fr;
-  min-height: 0;
-  opacity: 1;
-  transition:
-    grid-template-rows 180ms cubic-bezier(0.2, 0, 0, 1),
-    opacity 140ms ease;
-}
-.activity-collapse-content {
-  min-height: 0;
-  overflow: hidden;
-}
-.activity-collapse-enter-from,
-.activity-collapse-leave-to {
-  grid-template-rows: 0fr;
-  opacity: 0;
-}
-.activity-collapse-enter-to,
-.activity-collapse-leave-from {
-  grid-template-rows: 1fr;
-  opacity: 1;
 }
 </style>

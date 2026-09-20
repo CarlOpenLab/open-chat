@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import type { BubbleItemType, ItemType } from "@antdv-next/x";
-import { Actions, Bubble } from "@antdv-next/x";
-import { Copy, RotateCcw } from "@lucide/vue";
-import { computed, h, onBeforeUnmount, provide, ref, toRef, watch } from "vue";
+import type { BubbleItemType } from "@antdv-next/x";
+import { computed, provide } from "vue";
 import type { WebSearchSourceItem, UploadedAttachment } from "../../services/ai";
 import { attachmentUrl } from "../../services/ai";
-import { useNow } from "../../composables/useNow";
-import { formatWorkingElapsed } from "../../utils/chatDuration";
 import type { TranscriptMessage } from "@cc-heart/open-chat-types";
-import AssistantMessageContent from "./AssistantMessageContent.vue";
+import AssistantBubble from "./AssistantBubble.vue";
 import ActivityList from "./ActivityList.vue";
 import EmptyState from "./EmptyState.vue";
+import UserMessageBubble from "./UserMessageBubble.vue";
+import WorkingIndicator from "./WorkingIndicator.vue";
+import {
+  activityMessages,
+  isStreamingStatus,
+  useMessageActivityState,
+} from "../../composables/useMessageActivityState";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
-import { Image } from "antdv-next";
 
 interface Props {
   showWelcome: boolean;
@@ -63,31 +65,10 @@ function userMessageAttachments(item: {
 const markdownTheme = computed<MarkdownTheme>(() => (props.dark ? "dark" : "light"));
 const markdownClassName = computed(() => `chat-markdown x-markdown-${markdownTheme.value}`);
 provide(markdownThemeKey, markdownTheme);
-/** 活动摘要、条目展开、耗时统计。 */
-const summaryExpandedMap = ref<Record<string, boolean>>({});
-const itemExpandedMap = ref<Record<string, string[]>>({});
-/** 用户在流式中手动折叠过思考条目（显式点击优先于自动展开）。 */
-const reasoningCollapsedMap = ref<Record<string, boolean>>({});
-const messageStartMap = ref<Record<string, number>>({});
-const turnDurationMap = ref<Record<string, number>>({});
-const reasoningStartMap = ref<Record<string, number>>({});
-const reasoningDurationMap = ref<Record<string, number>>({});
-const lastStreamingMap = ref<Record<string, boolean>>({});
-
-/** useXChat 中 "loading"（占位等待）和 "updating"（流式接收中）都表示消息仍在进行中 */
-const isStreamingStatus = (status: unknown): boolean =>
-  status === "loading" || status === "updating";
 
 /** 气泡对应的扁平消息片段（assistant）。 */
 const messageFragment = (item: BubbleItemType): TranscriptMessage | undefined =>
   item.extraInfo?.message as TranscriptMessage | undefined;
-
-/** 取气泡携带的活动消息：合并组携带多条，普通气泡携带单条。 */
-const activityMessages = (item: BubbleItemType): TranscriptMessage[] => {
-  const extra = item.extraInfo as { messages?: unknown; message?: unknown } | undefined;
-  if (Array.isArray(extra?.messages)) return extra.messages as TranscriptMessage[];
-  return extra?.message ? [extra.message as TranscriptMessage] : [];
-};
 
 /** 活动气泡（思考/工具/计划/文件修改/工作区），不含正文。 */
 const isActivityItem = (item: BubbleItemType): boolean =>
@@ -160,145 +141,33 @@ const lastAssistantMessageKey = computed(
       .find((item) => item.role === "assistant" && item.extraInfo?.messageRole === "content")?.key,
 );
 
-const getThinkKey = (messageId: string | number) =>
-  `${props.conversationKey || "__draft__"}::${String(messageId)}`;
+/** 用户气泡的图片附件缩略图：过滤图片附件并解析渲染 URL（气泡组件只收成品 src）。 */
+const userAttachmentsByItemKey = computed<
+  Record<string, Array<{ reference: string; name: string; src: string }>>
+>(() => {
+  const byKey: Record<string, Array<{ reference: string; name: string; src: string }>> = {};
+  displayItems.value.forEach((item) => {
+    if (item.role !== "user") return;
+    byKey[String(item.key)] = userMessageAttachments(item).map((att) => ({
+      reference: att.reference,
+      name: att.name,
+      src: attachmentUrl(att.reference, att.name),
+    }));
+  });
+  return byKey;
+});
 
-const persistedTurnDuration = (item: BubbleItemType): number | undefined => {
-  const value = (item.extraInfo as { turnDurationMs?: unknown } | undefined)?.turnDurationMs;
-  return typeof value === "number" && value > 0 ? value : undefined;
-};
-
-/** 历史消息（本次会话未观测到耗时）默认展开活动列表；本次会话中结束的回合默认折叠为分割线。 */
-const isSummaryExpanded = (messageId: string | number, streaming: boolean): boolean => {
-  const key = getThinkKey(messageId);
-  const saved = summaryExpandedMap.value[key];
-  return saved !== undefined ? saved : streaming;
-};
-
-/** 流式中思考自动展开；其余条目跟随用户手动展开状态。用户手动折叠思考后不再自动展开。 */
-const isItemExpandedIds = (item: BubbleItemType): string[] => {
-  const key = getThinkKey(item.key);
-  const saved = itemExpandedMap.value[key] ?? [];
-  const hasReasoning = activityMessages(item).some((message) => message.role === "reasoning");
-  const reasoningLive =
-    isStreamingStatus(item.status) &&
-    hasReasoning &&
-    item.extraInfo?.reasoningDone !== true &&
-    !reasoningCollapsedMap.value[key];
-  if (!reasoningLive) return saved;
-  return saved.includes("reasoning") ? saved : [...saved, "reasoning"];
-};
-
-const setSummaryExpanded = (messageId: string | number, expanded: boolean) => {
-  summaryExpandedMap.value = { ...summaryExpandedMap.value, [getThinkKey(messageId)]: expanded };
-};
-const setItemExpandedIds = (messageId: string | number, ids: string[]) => {
-  const key = getThinkKey(messageId);
-  itemExpandedMap.value = { ...itemExpandedMap.value, [key]: ids };
-  const collapsed = !ids.includes("reasoning");
-  reasoningCollapsedMap.value = collapsed
-    ? { ...reasoningCollapsedMap.value, [key]: true }
-    : (() => {
-        const next = { ...reasoningCollapsedMap.value };
-        delete next[key];
-        return next;
-      })();
-};
-
-/** 气泡下方操作栏：复制 + 重新生成（x Actions 原生样式）。 */
-const buildMessageActions = (item: BubbleItemType): ItemType[] => {
-  const content =
-    typeof item.content === "string"
-      ? item.content.replace(/<\/?think(?:\s+[^>]*)?\s*>/gi, "")
-      : "";
-  return [
-    {
-      key: "copy",
-      label: "复制",
-      icon: h(Copy, { class: "h-3.5 w-3.5" }),
-      onItemClick: () => {
-        if (!content) return;
-        navigator.clipboard?.writeText(content).catch(() => {});
-      },
-    },
-    {
-      key: "reload",
-      label: "重新生成",
-      icon: h(RotateCcw, { class: "h-3.5 w-3.5" }),
-      onItemClick: () => emit("reload", item.key),
-    },
-  ];
-};
-
-/** 列尾"工作中 · Xs"跳动计时：跟随 busy 状态，会话运行中每秒刷新。 */
-const workingNow = useNow(toRef(props, "working"));
-const workingElapsed = computed(() =>
-  props.workingStartedAtMs
-    ? formatWorkingElapsed(Math.max(0, workingNow.value - props.workingStartedAtMs))
-    : "",
-);
-
-watch(
-  [displayItems, () => props.workingStartedAtMs],
-  ([items]) => {
-    const now = Date.now();
-    const nextSummary = { ...summaryExpandedMap.value };
-
-    items.forEach((item) => {
-      if (item.role !== "assistant") return;
-
-      const key = getThinkKey(item.key);
-      const streaming = isStreamingStatus(item.status);
-      const prevStreaming = lastStreamingMap.value[key] ?? false;
-      const storedDuration = persistedTurnDuration(item);
-      if (storedDuration && !turnDurationMap.value[key]) {
-        turnDurationMap.value[key] = storedDuration;
-      }
-
-      // 回合计时：首次出现 / 重新生成时记录起点；结束时记录耗时。
-      if (streaming) {
-        if (!prevStreaming) {
-          messageStartMap.value[key] = props.workingStartedAtMs ?? now;
-        } else if (props.workingStartedAtMs) {
-          // 运行态可能在消息快照之后才从服务端返回，及时纠正刷新时的临时起点。
-          messageStartMap.value[key] = props.workingStartedAtMs;
-        }
-        if (turnDurationMap.value[key]) {
-          delete turnDurationMap.value[key];
-          delete reasoningDurationMap.value[key];
-          delete reasoningStartMap.value[key];
-        }
-      } else if (messageStartMap.value[key] && !turnDurationMap.value[key]) {
-        turnDurationMap.value[key] = Math.max(1, now - messageStartMap.value[key]);
-      }
-
-      // 思考计时（合并组内任一成员是思考，即按组计时）。
-      const hasReasoning = activityMessages(item).some((message) => message.role === "reasoning");
-      if (hasReasoning) {
-        if (!reasoningStartMap.value[key]) reasoningStartMap.value[key] = now;
-        if (item.extraInfo?.reasoningDone === true && !reasoningDurationMap.value[key]) {
-          reasoningDurationMap.value[key] = Math.max(1, now - reasoningStartMap.value[key]);
-        }
-      }
-
-      // 活动摘要：流式中默认展开（实时看进度），回合结束默认折叠为"已执行：…"。
-      // 流式中的默认展开由 isSummaryExpanded 的 fallback (saved ?? streaming) 提供，
-      // 此处不再在 streaming 时写入 true，以允许用户在流式中手动折叠后保持折叠态。
-      if (prevStreaming && !streaming) {
-        // 回合结束自动收敛为折叠，用户之后可手动再展开
-        nextSummary[key] = false;
-      }
-
-      lastStreamingMap.value[key] = streaming;
-    });
-
-    summaryExpandedMap.value = nextSummary;
-  },
-  { immediate: true },
-);
-
-onBeforeUnmount(() => {
-  if (workingTickTimer) clearInterval(workingTickTimer);
+/** 活动摘要展开态、条目展开态、回合/思考耗时统计（详见 useMessageActivityState）。 */
+const {
+  isSummaryExpanded,
+  isItemExpandedIds,
+  setSummaryExpanded,
+  setItemExpandedIds,
+  getReasoningDurationMs,
+} = useMessageActivityState({
+  displayItems,
+  conversationKey: () => props.conversationKey,
+  workingStartedAtMs: () => props.workingStartedAtMs,
 });
 </script>
 
@@ -324,54 +193,23 @@ onBeforeUnmount(() => {
       >
         <template v-for="item in displayItems" :key="item.key">
           <!-- 用户消息气泡（Bubble 组件） -->
-          <div v-if="item.role === 'user'" class="flex w-full justify-end">
-            <Bubble
-              class="user-bubble"
-              placement="end"
-              variant="filled"
-              shape="round"
-              :content="String(item.content ?? '')"
-            >
-              <template #contentRender="{ content }">
-                <div v-if="userMessageAttachments(item).length" class="user-attachments">
-                  <div
-                    v-for="att in userMessageAttachments(item)"
-                    :key="att.reference"
-                    class="user-attachment-link"
-                  >
-                    <Image
-                      :src="attachmentUrl(att.reference, att.name)"
-                      :alt="att.name"
-                      class="user-attachment-image"
-                    />
-                  </div>
-                </div>
-                <span class="whitespace-pre-wrap break-words">{{ content }}</span>
-              </template>
-            </Bubble>
-          </div>
+          <UserMessageBubble
+            v-if="item.role === 'user'"
+            :content="String(item.content ?? '')"
+            :attachments="userAttachmentsByItemKey[String(item.key)]"
+          />
 
           <!-- 正文气泡（assistant content → markdown） -->
-          <div
+          <AssistantBubble
             v-else-if="item.extraInfo?.messageRole === 'content'"
-            class="flex w-full justify-start"
-          >
-            <div class="assistant-bubble w-full min-w-0 max-w-full">
-              <AssistantMessageContent
-                :item="item"
-                :content="String(item.content ?? '')"
-                :markdown-class-name="markdownClassName"
-                :streaming="isStreamingStatus(item.status)"
-                :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
-              />
-              <div
-                v-if="item.status === 'success' && item.key === lastAssistantMessageKey"
-                class="message-actions"
-              >
-                <Actions :items="buildMessageActions(item)" />
-              </div>
-            </div>
-          </div>
+            :item="item"
+            :content="String(item.content ?? '')"
+            :markdown-class-name="markdownClassName"
+            :streaming="isStreamingStatus(item.status)"
+            :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
+            :show-actions="item.status === 'success' && item.key === lastAssistantMessageKey"
+            @reload="emit('reload', $event)"
+          />
 
           <!-- 活动行（思考/工具/计划/文件/工作区）：非气泡，平铺展示 -->
           <div v-else class="activity-row w-full min-w-0 max-w-full">
@@ -381,7 +219,7 @@ onBeforeUnmount(() => {
               :reasoning-done="item.extraInfo?.reasoningDone !== false"
               :summary-expanded="isSummaryExpanded(item.key, isStreamingStatus(item.status))"
               :item-expanded-ids="isItemExpandedIds(item)"
-              :reasoning-duration-ms="reasoningDurationMap[getThinkKey(item.key)]"
+              :reasoning-duration-ms="getReasoningDurationMs(item.key)"
               @update:summary-expanded="setSummaryExpanded(item.key, $event)"
               @update:item-expanded-ids="setItemExpandedIds(item.key, $event)"
             />
@@ -389,24 +227,7 @@ onBeforeUnmount(() => {
         </template>
 
         <!-- 进行中指示：会话运行中（与侧栏 busy 状态同源），列尾常驻显示 -->
-        <div v-if="working" class="flex w-full justify-start" role="status" aria-live="polite">
-          <div
-            class="inline-flex min-h-[22px] items-center gap-2 text-[11.5px] leading-4 font-medium text-brand-muted-strong animate-[working-status-in_220ms_ease-out_both]"
-          >
-            <span class="inline-flex items-center gap-[3.5px]" aria-hidden="true">
-              <i
-                class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite]"
-              />
-              <i
-                class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.12s]"
-              />
-              <i
-                class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.24s]"
-              />
-            </span>
-            <span>工作中{{ workingElapsed ? ` · ${workingElapsed}` : "" }}</span>
-          </div>
-        </div>
+        <WorkingIndicator :working="working" :working-started-at-ms="workingStartedAtMs" />
       </div>
     </div>
   </main>
@@ -426,56 +247,8 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.user-bubble {
-  max-width: 50%;
-  word-break: break-all;
-  animation: message-in 260ms cubic-bezier(0.2, 0, 0, 1) both;
-}
-
-.assistant-bubble {
-  animation: message-in 260ms cubic-bezier(0.2, 0, 0, 1) both;
-}
-.assistant-bubble :deep(.assistant-message) {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-}
-
 .activity-row {
   animation: activity-in 220ms ease-out both;
-}
-
-.message-actions {
-  display: flex;
-  margin-top: 4px;
-}
-.message-actions :deep(.antd-actions) {
-  justify-content: flex-end;
-}
-
-.user-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-.user-attachment-link {
-  display: block;
-  width: 160px;
-  max-width: 100%;
-  overflow: hidden;
-  border: 1px solid var(--brand-border);
-  border-radius: 10px;
-}
-.user-attachment-image {
-  display: block;
-  width: 100%;
-  height: 112px;
-  object-fit: cover;
-  transition: transform 160ms ease;
-}
-.user-attachment-link:hover .user-attachment-image {
-  transform: scale(1.02);
 }
 
 .messages-wrapper :deep(.chat-markdown) {
@@ -514,42 +287,10 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes message-in {
-  from {
-    opacity: 0;
-    transform: translateY(7px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @keyframes activity-in {
   from {
     opacity: 0;
     transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes working-wave {
-  0%,
-  100% {
-    opacity: 0.25;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@keyframes working-status-in {
-  from {
-    opacity: 0;
-    transform: translateY(3px);
   }
   to {
     opacity: 1;

@@ -52,11 +52,6 @@ type Story = StoryObj<typeof meta>;
 /** 默认：输入 / 唤起全部指令与 skills。 */
 export const Default: Story = {};
 
-/** 过滤：斜杠后输入过滤词。 */
-export const Filtered: Story = {
-  args: { modelValue: "/rev" },
-};
-
 /** Oh My Pi：Goal / Review 置顶并带专属徽标。 */
 export const OhMyPi: Story = {
   args: { isOhMyPi: true, skillSyntax: "namespaced" },

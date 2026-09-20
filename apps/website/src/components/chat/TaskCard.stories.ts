@@ -42,14 +42,6 @@ type Story = StoryObj<typeof meta>;
 /** 默认卡片。 */
 export const Default: Story = {};
 
-/** 会话运行中：展示忙碌徽标与耗时。 */
-export const SessionBusy: Story = {
-  args: {
-    sessionStatus: "running",
-    sessionBusyDuration: "12m",
-  },
-};
-
 /** 会话出错（已终止）：徽标带错误提示。 */
 export const SessionError: Story = {
   args: {

@@ -1,30 +1,12 @@
 <script setup lang="ts">
 import type { SkillType } from "@antdv-next/x";
-import {
-  BrainCircuit,
-  Check,
-  ChevronDown,
-  Cpu,
-  FolderOpen,
-  GitBranch,
-  Hammer,
-  ImagePlus,
-  ListTodo,
-  ShieldCheck,
-  Square,
-  Trash2,
-  X,
-} from "@lucide/vue";
-import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
-import { computed, h, onBeforeUnmount, ref, watch, type Component } from "vue";
+import { BrainCircuit, FolderOpen } from "@lucide/vue";
+import { computed, onBeforeUnmount, ref, watch, type Component } from "vue";
 import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import type { StagedAttachment } from "../../composables/useComposerData";
 import type { PermissionRequest } from "../../services/OpenChatProvider";
 import type { GitWorkspaceInfo, SkillsIndex, UploadedAttachment } from "../../services/ai";
 import type { QueuedChatMessage } from "../../services/chatStorage";
-import { createStyles } from "../../theme/antdvStyle";
-import type { AccentGlobalToken } from "../../theme/shadcnTheme";
-import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../../utils/projectPath";
 import {
   filterSuggestionGroups,
   formatCommandForModel,
@@ -33,8 +15,9 @@ import {
   skillCommandSyntax,
 } from "../../utils/senderCommands";
 import type { QuickCommandMeta, SenderSuggestion } from "../../utils/senderCommands";
-import ModelIcon from "../Icons/ModelIcon.vue";
+import SenderBottomBar from "../sender/SenderBottomBar.vue";
 import SenderLayout from "../sender/SenderLayout.vue";
+import SenderToolbar from "../sender/SenderToolbar.vue";
 import AttachmentPanel from "./AttachmentPanel.vue";
 import PermissionRequestPanel from "./PermissionRequestPanel.vue";
 import QueuePanel from "./QueuePanel.vue";
@@ -145,498 +128,12 @@ const props = withDefaults(defineProps<Props>(), {
 });
 const emit = defineEmits<Emits>();
 
-// 壳层（布局 / 浮层 / 底部卡片 / 拖拽遮罩 / antdv-x Sender 覆写）在 SenderLayout；
-// 这里只留业务样式：footer chips、下拉弹层与辅助文字色。
-const useStyles = createStyles(({ token, css }) => {
-  const accent = (token as AccentGlobalToken).colorAccent;
-  return {
-    // Sender footer slot 最外层容器
-    footerCol: css`
-      display: flex;
-      width: 100%;
-      flex-direction: column;
-      gap: 8px;
-    `,
-    // footer chip（原 chipClass Tailwind 组合）
-    chip: css`
-      display: flex;
-      height: 26px;
-      flex: none;
-      align-items: center;
-      gap: 6px;
-      border-radius: 6px;
-      border: 0;
-      padding: 0 8px;
-      font-size: 11.5px;
-      line-height: 14px;
-      background: transparent;
-      color: ${token.colorTextTertiary};
-      cursor: pointer;
-      transition:
-        background ${token.motionDurationMid} ${token.motionEaseInOut},
-        color ${token.motionDurationMid} ${token.motionEaseInOut};
-
-      &:hover {
-        background: ${token.colorFillTertiary};
-        color: ${token.colorText};
-      }
-    `,
-    chipActive: css`
-      background: ${token.colorFillTertiary};
-      color: ${token.colorText};
-    `,
-    chipDisabled: css`
-      color: ${token.colorTextQuaternary};
-      opacity: 0.55;
-      cursor: not-allowed;
-
-      &:hover {
-        background: transparent;
-        color: ${token.colorTextQuaternary};
-      }
-    `,
-    textAccent: css`
-      color: ${accent};
-    `,
-    textMutedStrong: css`
-      color: ${token.colorTextTertiary};
-    `,
-    runState: css`
-      margin-left: 6px;
-      flex: none;
-      font-size: 11px;
-      line-height: 14px;
-      color: ${token.colorTextTertiary};
-    `,
-    /* ===== 下拉弹层：弹层挂 body，样式以各自 rootClass（含本哈希类）为锚 ===== */
-    chatModelMenu: css`
-      min-width: 240px;
-      max-width: min(320px, calc(100vw - 32px));
-      max-height: min(360px, 60vh);
-      overflow-y: auto;
-      padding: 6px;
-
-      .ant-dropdown-menu-item {
-        padding: 5px 8px;
-      }
-      .ant-dropdown-menu-item-selected {
-        background-color: transparent;
-      }
-      .ant-dropdown-menu-item-divider {
-        margin: 4px 0;
-      }
-      .model-menu-row {
-        display: flex;
-        min-width: 0;
-        align-items: center;
-        gap: 8px;
-      }
-      .model-menu-copy {
-        display: flex;
-        min-width: 0;
-        flex: 1;
-        flex-direction: column;
-        gap: 1px;
-      }
-      .model-menu-name {
-        min-width: 0;
-        overflow: hidden;
-        color: ${token.colorTextSecondary};
-        font-size: 12px;
-        font-weight: 400;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .model-menu-provider {
-        overflow: hidden;
-        color: ${token.colorTextQuaternary};
-        font-size: 10px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .model-menu-name.is-selected {
-        color: ${token.colorText};
-        font-weight: 600;
-      }
-      .model-menu-ctx {
-        flex: none;
-        color: ${token.colorTextQuaternary};
-        font-size: 10px;
-        font-variant-numeric: tabular-nums;
-      }
-      .model-menu-check {
-        width: 12px;
-        height: 12px;
-        flex: none;
-        color: ${accent};
-        opacity: 0;
-        transition: opacity ${token.motionDurationMid} ${token.motionEaseInOut};
-      }
-      .model-menu-check.is-visible {
-        opacity: 1;
-      }
-    `,
-    projectPathMenu: css`
-      min-width: 260px;
-      max-width: min(380px, calc(100vw - 32px));
-      max-height: min(360px, 60vh);
-      overflow-y: auto;
-      padding: 6px;
-
-      .ant-dropdown-menu-item-content {
-        min-width: 0;
-      }
-      .ant-dropdown-menu-item-divider {
-        margin: 4px 0;
-      }
-      .project-path-menu-row {
-        display: flex;
-        min-width: 0;
-        align-items: center;
-        gap: 8px;
-        padding-left: 4px;
-      }
-      .project-path-menu-copy {
-        display: flex;
-        min-width: 0;
-        flex: 1;
-        flex-direction: column;
-        gap: 1px;
-      }
-      .project-path-menu-name,
-      .project-path-menu-location {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .project-path-menu-name {
-        color: ${token.colorText};
-        font-size: 12px;
-        line-height: 16px;
-      }
-      .project-path-menu-location {
-        color: ${token.colorTextTertiary};
-        font-size: 10.5px;
-        line-height: 14px;
-      }
-      .project-path-menu-remove {
-        display: grid;
-        width: 26px;
-        height: 26px;
-        flex: none;
-        place-items: center;
-        border: 0;
-        border-radius: 5px;
-        padding: 0;
-        background: transparent;
-        color: ${token.colorTextTertiary};
-        cursor: pointer;
-      }
-      .project-path-menu-remove:hover,
-      .project-path-menu-remove:focus-visible {
-        background: ${token.colorErrorBg};
-        color: ${token.colorError};
-        outline: none;
-      }
-      .project-path-menu-name.is-selected {
-        color: ${token.colorText};
-        font-weight: 600;
-      }
-      .project-path-menu-check {
-        width: 12px;
-        height: 12px;
-        flex: none;
-        color: ${accent};
-        opacity: 0;
-        transition: opacity ${token.motionDurationMid} ${token.motionEaseInOut};
-      }
-      .project-path-menu-check.is-visible {
-        opacity: 1;
-      }
-      .project-path-menu-empty {
-        display: block;
-        padding: 4px 8px;
-        color: ${token.colorTextQuaternary};
-        font-size: 12px;
-      }
-    `,
-    gitBranchMenu: css`
-      min-width: 180px;
-      max-width: min(320px, calc(100vw - 32px));
-      max-height: min(360px, 60vh);
-      overflow-y: auto;
-      padding: 6px;
-
-      .ant-dropdown-menu-item-content {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-    `,
-    senderOptionMenu: css`
-      min-width: 132px;
-      padding: 4px;
-
-      .ant-dropdown-menu-item {
-        padding: 5px 8px;
-      }
-      .permission-menu-copy {
-        display: flex;
-        min-width: 0;
-        flex-direction: column;
-        gap: 2px;
-      }
-      .permission-menu-label {
-        color: ${token.colorText};
-        font-size: 12px;
-        font-weight: 500;
-        line-height: 15px;
-      }
-      .permission-menu-description {
-        max-width: 240px;
-        color: ${token.colorTextTertiary};
-        font-size: 10px;
-        line-height: 14px;
-        white-space: normal;
-      }
-    `,
-    reasoningLevelMenu: css`
-      min-width: 120px;
-      padding: 4px;
-
-      .ant-dropdown-menu-item {
-        padding: 4px 8px;
-      }
-      .reasoning-level-row {
-        display: flex;
-        min-width: 0;
-        align-items: center;
-        gap: 10px;
-      }
-      .reasoning-level-name {
-        min-width: 0;
-        flex: 1;
-        color: ${token.colorText};
-        font-size: 12px;
-      }
-      .reasoning-level-check {
-        width: 12px;
-        height: 12px;
-        flex: none;
-        color: ${accent};
-      }
-      .reasoning-level-check-blank {
-        opacity: 0;
-      }
-    `,
-  };
-});
-
-const { styles, cx } = useStyles();
-
-const pathName = (path: string): string => {
-  const normalized = normalizeDirectoryPath(path);
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || normalized;
-};
-
-const projectPathName = computed(() => pathName(String(props.projectPath || "")));
-
-const projectPathMenu = computed<MenuProps>(() => {
-  const paths = uniqueDirectoryPaths(props.projectPathOptions);
-  const currentPath = normalizeDirectoryPath(props.projectPath);
-  const currentIndex = paths.indexOf(currentPath);
-  const hasSelection = currentIndex >= 0;
-
-  const pathItems: NonNullable<MenuProps["items"]> = paths.map((path, index) => ({
-    key: `__path_${index}__`,
-    label: path,
-    // store raw path for labelRender
-    path,
-  }));
-
-  const emptyHint: NonNullable<MenuProps["items"]> =
-    paths.length === 0 ? [{ key: "__empty__", label: "暂无历史目录", disabled: true }] : [];
-
-  const clearItem: NonNullable<MenuProps["items"]> = hasSelection
-    ? [{ key: "__none__", label: "清除已选目录", icon: h(X) }]
-    : [];
-
-  const items: NonNullable<MenuProps["items"]> = [
-    ...pathItems,
-    ...emptyHint,
-    ...(pathItems.length > 0 || emptyHint.length > 0 ? [{ type: "divider" as const }] : []),
-    ...clearItem,
-    { key: "__pick__", label: "选择其他目录", icon: h(FolderOpen) },
-  ];
-
-  return {
-    rootClass: cx("project-path-menu", styles.projectPathMenu),
-    items,
-    selectable: true,
-    selectedKeys: hasSelection ? [`__path_${currentIndex}__`] : [],
-    labelRender: (item) => {
-      if (item.type === "divider") return null;
-      if (String(item.key).startsWith("__path_")) {
-        const match = String(item.key).match(/^__path_(\d+)__$/);
-        const idx = match ? Number(match[1]) : -1;
-        const path = idx >= 0 ? paths[idx] : "";
-        if (!path) return h("span", null, String(item.label ?? ""));
-        const selected = idx === currentIndex;
-        return h("div", { class: "project-path-menu-row", title: path }, [
-          h(Check, {
-            class: ["project-path-menu-check", { "is-visible": selected }],
-            size: 14,
-            "aria-hidden": "true",
-          }),
-          h("span", { class: "project-path-menu-copy" }, [
-            h(
-              "span",
-              { class: ["project-path-menu-name", { "is-selected": selected }] },
-              pathName(path) || "未命名目录",
-            ),
-            h("span", { class: "project-path-menu-location" }, path),
-          ]),
-          h(
-            "button",
-            {
-              type: "button",
-              class: "project-path-menu-remove",
-              title: "从列表移除",
-              "aria-label": `从列表移除 ${path}`,
-              onClick: (event: MouseEvent) => {
-                event.preventDefault();
-                event.stopPropagation();
-                emit("projectPathRemove", path);
-              },
-            },
-            [h(Trash2, { size: 14, "aria-hidden": "true" })],
-          ),
-        ]);
-      }
-      if (item.key === "__empty__") {
-        return h("span", { class: "project-path-menu-empty" }, String(item.label));
-      }
-      return null;
-    },
-    onClick: ({ key }) => {
-      if (key === "__none__") {
-        emit("projectPathChange", "");
-        return;
-      }
-      if (key === "__pick__") {
-        void pickProjectPath();
-        return;
-      }
-      const match = String(key).match(/^__path_(\d+)__$/);
-      const selected = match ? paths[Number(match[1])] : undefined;
-      if (selected) emit("projectPathChange", selected);
-    },
-  };
-});
-
-const clearProjectPath = () => {
-  emit("projectPathChange", "");
-};
-
-/** 目录选择器：副作用在业务侧（useComposerData.handlePickProjectPath）。 */
-const pickProjectPath = () => emit("pickProjectPath");
-
-const gitBranchLabel = computed(() => {
-  if (props.gitBusy) return "切换中...";
-  if (props.gitWorkspace?.currentBranch) {
-    return `${props.gitWorkspace.currentBranch}${props.gitWorkspace.dirty ? " *" : ""}`;
-  }
-  return props.gitWorkspace?.detached ? "detached HEAD" : "Git 分支";
-});
-
-const gitBranchMenu = computed<MenuProps>(() => ({
-  rootClass: cx("git-branch-menu", styles.gitBranchMenu),
-  items: (props.gitWorkspace?.branches ?? []).map((branch) => ({
-    key: branch,
-    label: branch,
-    icon: branch === props.gitWorkspace?.currentBranch ? h(Check) : undefined,
-  })),
-  selectable: true,
-  selectedKeys: props.gitWorkspace?.currentBranch ? [props.gitWorkspace.currentBranch] : [],
-  onClick: ({ key }) => emit("gitBranchSwitch", String(key)),
-}));
-
-/** Git 菜单展开时请求刷新工作区（watch 驱动的刷新在业务侧）。 */
-const handleGitMenuOpen = (open: boolean) => {
-  if (open && !props.loading && props.projectPath.trim()) emit("gitWorkspaceRefresh");
-};
-
-// ============ 模型选择（直接选择模型） ============
-
-const modelMenuOpen = ref(false);
-
-/** 模型上下文窗口的展示文案：128000 → 128K，1000000 → 1M */
-const formatContextLength = (length: number): string => {
-  if (length >= 1_000_000) return `${(length / 1_000_000).toFixed(length % 1_000_000 ? 1 : 0)}M`;
-  if (length >= 1_000) return `${Math.round(length / 1_000)}K`;
-  return String(length);
-};
-
-const modelMenu = computed<MenuProps>(() => {
-  const items: NonNullable<MenuProps["items"]> = props.modelCatalog.flatMap((entry) =>
-    entry.models.map((model) => ({
-      key: model.id,
-      kind: "model",
-      label: model.name || model.id,
-      providerName: entry.providerName,
-      contextLength: model.contextLength,
-    })),
-  );
-
-  return {
-    rootClass: cx("chat-model-menu", styles.chatModelMenu),
-    items,
-    selectable: true,
-    selectedKeys: [props.currentModel],
-    labelRender: (item) => {
-      if (item.type === "divider") return null;
-      const selected = String(item.key) === props.currentModel;
-      const contextLength =
-        typeof item.contextLength === "number" && item.contextLength > 0
-          ? formatContextLength(item.contextLength)
-          : "";
-      return h("span", { class: "model-menu-row" }, [
-        h("span", { class: "model-menu-copy" }, [
-          h("span", { class: ["model-menu-name", { "is-selected": selected }] }, [
-            String(item.label),
-          ]),
-          h("span", { class: "model-menu-provider" }, String(item.providerName ?? "")),
-        ]),
-        contextLength ? h("span", { class: "model-menu-ctx" }, contextLength) : null,
-        h(Check, { class: ["model-menu-check", { "is-visible": selected }] }),
-      ]);
-    },
-    onClick: ({ key }) => {
-      const value = String(key);
-      modelMenuOpen.value = false;
-      emit("modelChange", value);
-    },
-  };
-});
-
-/** 模型图标：只有确实认得的模型才用品牌图标，其余用通用字形，避免张冠李戴。 */
-const brandedModel = computed(() => (/qwen/i.test(props.currentModel) ? "qwen" : ""));
-const modelSelectionAvailable = computed(() =>
-  props.modelCatalog.some((provider) => provider.models.length > 0),
-);
 /** 输入区底部卡片：有项目目录 / Git 分支上下文时展示（与上方输入卡片连成一张卡片）。 */
 const showBottomCard = computed(() => props.projectPathEnabled);
 
-// ============ 推理强度 / 工作模式 / 权限 ============
+// ============ 推理强度 ============
 
 type ReasoningLevel = "lowest" | "low" | "medium" | "high";
-
-const REASONING_LABEL: Record<ReasoningLevel, string> = {
-  lowest: "最低",
-  high: "高",
-  medium: "中",
-  low: "低",
-};
 
 const reasoningLevel = ref<ReasoningLevel>(props.thinkingEnabled ? "high" : "lowest");
 
@@ -651,72 +148,11 @@ watch(
   },
 );
 
-const reasoningMenu = computed<MenuProps>(() => ({
-  rootClass: cx("reasoning-level-menu", styles.reasoningLevelMenu),
-  items: (["lowest", "low", "medium", "high"] as ReasoningLevel[]).map((level) => ({
-    key: level,
-    label: REASONING_LABEL[level],
-  })),
-  selectedKeys: [reasoningLevel.value],
-  labelRender: (item) =>
-    h("span", { class: "reasoning-level-row" }, [
-      h("span", { class: "reasoning-level-name" }, [String(item.label)]),
-      item.key === reasoningLevel.value
-        ? h(Check, { class: "reasoning-level-check" })
-        : h("span", { class: "reasoning-level-check reasoning-level-check-blank" }),
-    ]),
-  onClick: ({ key }) => {
-    const level = String(key) as ReasoningLevel;
-    reasoningLevel.value = level;
-    emit("thinkingChange", level !== "lowest");
-  },
-}));
-
-const modeMenu = computed<MenuProps>(() => ({
-  rootClass: cx("sender-option-menu", styles.senderOptionMenu),
-  items: [
-    { key: "build", label: "构建模式", icon: h(Hammer) },
-    { key: "plan", label: "Plan 模式", icon: h(ListTodo) },
-  ],
-  selectedKeys: [props.mode],
-  onClick: ({ key }) => emit("modeChange", String(key) as "build" | "plan"),
-}));
-
-const PERMISSION_OPTIONS = [
-  {
-    key: "supervised",
-    label: "有监督",
-    description: "执行命令或修改文件前先征求许可",
-    icon: ShieldCheck,
-  },
-  {
-    key: "auto",
-    label: "自动",
-    description: "常规操作自动处理，高风险操作仍会询问",
-    icon: BrainCircuit,
-  },
-  {
-    key: "full",
-    label: "完全访问",
-    description: "允许 Agent 直接执行操作",
-    icon: ShieldCheck,
-  },
-] as const;
-
-const permissionMenu = computed<MenuProps>(() => ({
-  rootClass: cx("sender-option-menu", styles.senderOptionMenu),
-  items: PERMISSION_OPTIONS.map((option) => ({
-    key: option.key,
-    disabled: props.permissionLocked && option.key !== "full",
-    icon: h(option.icon),
-    label: h("span", { class: "permission-menu-copy" }, [
-      h("span", { class: "permission-menu-label" }, option.label),
-      h("span", { class: "permission-menu-description" }, option.description),
-    ]),
-  })),
-  selectedKeys: [props.permission],
-  onClick: ({ key }) => emit("permissionChange", String(key) as "supervised" | "auto" | "full"),
-}));
+/** 推理难度档位选择（chip / 菜单在 SenderToolbar）：只有「最低」代表关闭深度思考。 */
+const handleReasoningLevelChange = (level: ReasoningLevel) => {
+  reasoningLevel.value = level;
+  emit("thinkingChange", level !== "lowest");
+};
 
 // ============ Skill：Goal / Review 由 Sender 原生 skill 承载，凸显为 tag 且随消息透传 ============
 const activeSkill = ref<SkillType | undefined>(undefined);
@@ -818,20 +254,6 @@ const handleSuggestionSelect = (item: SenderSuggestion, remaining: string) => {
     (senderLayoutRef.value as unknown as { focus?: () => void })?.focus?.();
   }, 0);
 };
-
-/** ACP 运行状态标签；idle 表示回合已结束（流即将关闭），无需提示。 */
-const runStateLabel = computed(() => {
-  switch (props.runState) {
-    case "running":
-      return "运行中…";
-    case "requires_action":
-      return "等待你的操作…";
-    case "idle":
-      return "";
-    default:
-      return props.runState ?? "";
-  }
-});
 
 const handleChange = (
   value: string,
@@ -1048,11 +470,6 @@ const toggleAttachmentsPanel = () => {
   attachmentsPanelOpen.value = !attachmentsPanelOpen.value;
   if (attachmentsPanelOpen.value) activeHeaderPanel.value = "attachments";
 };
-
-const chipClass = (active: boolean, disabled = false) => {
-  if (disabled) return cx(styles.chip, styles.chipDisabled);
-  return cx(styles.chip, active ? styles.chipActive : undefined);
-};
 </script>
 
 <template>
@@ -1117,212 +534,53 @@ const chipClass = (active: boolean, disabled = false) => {
       />
     </template>
 
-    <!-- Sender footer：chips 工具行 + 模型选择 + 发送（defaultNode）+ 停止 -->
+    <!-- Sender footer：工具行（chips / 模型选择 / 发送 / 停止）在 SenderToolbar，
+         defaultNode 是 Sender 提供的发送按钮 -->
     <template #footer="{ defaultNode }">
-      <div :class="styles.footerCol">
-        <div class="sender-footer-row">
-          <!-- composer 左排：附件、推理、工作模式和文件工作区 -->
-          <div class="sender-footer-primary">
-            <Tooltip title="添加图片（支持粘贴 / 拖拽）">
-              <button
-                type="button"
-                :class="chipClass(false)"
-                aria-label="添加图片"
-                :aria-expanded="attachmentsPanelOpen"
-                @click="toggleAttachmentsPanel"
-              >
-                <ImagePlus
-                  class="!h-[12px] !w-[12px] flex-none"
-                  :class="stagedAttachments.length ? styles.textAccent : ''"
-                />
-              </button>
-            </Tooltip>
-            <Dropdown :menu="reasoningMenu" :trigger="['click']" placement="topLeft">
-              <button
-                type="button"
-                :class="chipClass(thinkingEnabled)"
-                aria-label="推理难度"
-                title="推理难度"
-              >
-                <component
-                  :is="props.thinkingIcon"
-                  class="!h-[12px] !w-[12px] flex-none"
-                  :class="thinkingEnabled ? styles.textAccent : styles.textMutedStrong"
-                />
-                <span>{{ REASONING_LABEL[reasoningLevel] }}</span>
-                <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
-              </button>
-            </Dropdown>
-            <Dropdown
-              :menu="permissionMenu"
-              :trigger="['click']"
-              placement="topLeft"
-              :disabled="permissionLocked"
-            >
-              <button
-                type="button"
-                :class="chipClass(true, permissionLocked)"
-                aria-label="权限策略"
-                :title="permissionLocked ? '该供应商固定为完全访问' : '权限策略'"
-              >
-                <ShieldCheck class="!h-[12px] !w-[12px] flex-none" :class="styles.textAccent" />
-                <span>{{
-                  { supervised: "有监督", auto: "自动", full: "完全访问" }[props.permission]
-                }}</span>
-                <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
-              </button>
-            </Dropdown>
-            <Dropdown :menu="modeMenu" :trigger="['click']" placement="topLeft">
-              <button type="button" :class="chipClass(props.mode === 'plan')" aria-label="工作模式">
-                <ListTodo v-if="props.mode === 'plan'" class="!h-[12px] !w-[12px] flex-none" />
-                <Hammer v-else class="!h-[12px] !w-[12px] flex-none" />
-                <span>{{ props.mode === "plan" ? "Plan 模式" : "构建模式" }}</span>
-                <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
-              </button>
-            </Dropdown>
-            <Tooltip v-if="fileModeEnabled" title="文件工作区">
-              <button
-                type="button"
-                :class="chipClass(fileModeEnabled)"
-                :aria-pressed="fileModeEnabled"
-                aria-label="文件工作区"
-                @click="emit('fileModeChange', !fileModeEnabled)"
-              >
-                <component
-                  :is="props.fileIcon"
-                  class="!h-[12px] !w-[12px] flex-none"
-                  :class="fileModeEnabled ? styles.textAccent : ''"
-                />
-                <span>文件</span>
-              </button>
-            </Tooltip>
-            <span v-if="runStateLabel" :class="styles.runState">{{ runStateLabel }}</span>
-          </div>
-
-          <!-- composer 右排：模型选择（扁平按钮）+ 发送 + 独立停止会话 -->
-          <div class="sender-footer-secondary">
-            <Dropdown
-              :menu="modelMenu"
-              v-model:open="modelMenuOpen"
-              :trigger="['click']"
-              :disabled="!modelSelectionAvailable || agentConfiguring"
-              placement="topRight"
-            >
-              <button
-                type="button"
-                class="sender-flat-btn sender-flat-btn-model"
-                :class="{ 'is-disabled': !modelSelectionAvailable || agentConfiguring }"
-                :disabled="!modelSelectionAvailable || agentConfiguring"
-                :aria-disabled="!modelSelectionAvailable || agentConfiguring"
-                :aria-label="
-                  modelSelectionAvailable
-                    ? '选择模型'
-                    : agentMode
-                      ? currentModelLabel
-                      : '未配置模型'
-                "
-                :title="
-                  !modelSelectionAvailable
-                    ? agentMode
-                      ? currentModelLabel
-                      : '请先配置模型供应商'
-                    : undefined
-                "
-              >
-                <ModelIcon v-if="brandedModel" :model="brandedModel" :size="13" />
-                <Cpu v-else class="!h-[13px] !w-[13px] flex-none" :class="styles.textMutedStrong" />
-                <span class="sender-flat-model-label">{{ currentModelLabel || "选择模型" }}</span>
-                <ChevronDown
-                  v-if="modelSelectionAvailable"
-                  class="!h-3 !w-3 flex-none"
-                  :class="styles.textMutedStrong"
-                />
-              </button>
-            </Dropdown>
-            <component :is="defaultNode" />
-            <Tooltip v-if="loading" title="停止会话">
-              <button
-                type="button"
-                class="sender-stop-button"
-                aria-label="停止会话"
-                title="停止会话，保留待发送队列"
-                @click="emit('cancel')"
-              >
-                <Square class="!h-[11px] !w-[11px] fill-current" />
-              </button>
-            </Tooltip>
-          </div>
-        </div>
-      </div>
+      <SenderToolbar
+        :default-node="defaultNode"
+        :has-attachments="stagedAttachments.length > 0"
+        :attachments-panel-open="attachmentsPanelOpen"
+        :thinking-enabled="thinkingEnabled"
+        :reasoning-level="reasoningLevel"
+        :thinking-icon="props.thinkingIcon"
+        :permission="permission"
+        :permission-locked="permissionLocked"
+        :mode="mode"
+        :file-mode-enabled="fileModeEnabled"
+        :file-icon="props.fileIcon"
+        :run-state="runState"
+        :loading="loading"
+        :model="currentModel"
+        :model-label="currentModelLabel"
+        :model-catalog="modelCatalog"
+        :agent-mode="agentMode"
+        :agent-configuring="agentConfiguring"
+        @toggle-attachments="toggleAttachmentsPanel"
+        @reasoning-level-change="handleReasoningLevelChange"
+        @permission-change="(value) => emit('permissionChange', value)"
+        @mode-change="(value) => emit('modeChange', value)"
+        @file-mode-change="(value) => emit('fileModeChange', value)"
+        @model-change="(key) => emit('modelChange', key)"
+        @cancel="emit('cancel')"
+      />
     </template>
 
-    <!-- 底部卡片：项目目录 / Git 分支（与上方输入卡片连成一张卡片） -->
+    <!-- 底部卡片：项目目录 / Git 分支（与上方输入卡片连成一张卡片）在 SenderBottomBar -->
     <template v-if="showBottomCard" #bottom>
-      <div class="sender-bottom-row">
-        <div class="sender-flat-project" :class="{ 'is-selected': Boolean(projectPath) }">
-          <Dropdown
-            :menu="projectPathMenu"
-            :trigger="['click']"
-            placement="topLeft"
-            :disabled="loading || projectPathPicking"
-          >
-            <button
-              type="button"
-              class="sender-flat-btn"
-              :class="{ 'is-disabled': loading || projectPathPicking }"
-              :aria-pressed="Boolean(projectPath)"
-              aria-label="项目工作目录"
-              :title="projectPathPicking ? '等待系统目录选择器' : projectPathName || '无文件目录'"
-              :disabled="loading || projectPathPicking"
-            >
-              <FolderOpen
-                class="!h-[13px] !w-[13px] flex-none"
-                :class="projectPath ? styles.textAccent : styles.textMutedStrong"
-              />
-              <span class="sender-flat-label">
-                {{ projectPathName || "无文件目录" }}
-              </span>
-              <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
-            </button>
-          </Dropdown>
-          <Tooltip v-if="projectPath" title="清除项目目录">
-            <button
-              type="button"
-              class="sender-flat-clear"
-              aria-label="清除项目目录"
-              :disabled="loading || projectPathPicking"
-              @click="clearProjectPath"
-            >
-              <X class="!h-[11px] !w-[11px]" />
-            </button>
-          </Tooltip>
-        </div>
-
-        <span v-if="gitWorkspace?.isRepository" class="sender-flat-sep" />
-        <Dropdown
-          v-if="gitWorkspace?.isRepository"
-          :menu="gitBranchMenu"
-          :trigger="['click']"
-          placement="topLeft"
-          :disabled="loading || props.gitBusy"
-          @open-change="handleGitMenuOpen"
-        >
-          <button
-            type="button"
-            class="sender-flat-btn"
-            :class="{ 'is-disabled': loading || props.gitBusy }"
-            aria-label="Git 分支"
-            :title="gitBranchLabel"
-            :disabled="loading || props.gitBusy"
-          >
-            <GitBranch class="!h-[13px] !w-[13px] flex-none" :class="styles.textAccent" />
-            <span class="sender-flat-label">{{ gitBranchLabel }}</span>
-            <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
-          </button>
-        </Dropdown>
-
-        <div class="min-w-0 flex-1" />
-      </div>
+      <SenderBottomBar
+        :project-path="projectPath"
+        :project-path-options="projectPathOptions"
+        :project-path-picking="projectPathPicking"
+        :loading="loading"
+        :git-workspace="gitWorkspace"
+        :git-busy="gitBusy"
+        @project-path-change="(value) => emit('projectPathChange', value)"
+        @project-path-remove="(value) => emit('projectPathRemove', value)"
+        @pick-project-path="emit('pickProjectPath')"
+        @git-workspace-refresh="emit('gitWorkspaceRefresh')"
+        @git-branch-switch="(branch) => emit('gitBranchSwitch', branch)"
+      />
     </template>
   </SenderLayout>
 </template>

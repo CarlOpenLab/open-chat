@@ -1,17 +1,5 @@
 <script setup lang="ts">
-import { computed, h, ref, watch } from "vue";
-import { Button, Dropdown, Input, Modal, Select, Tooltip } from "antdv-next";
-import {
-  Archive,
-  FolderOpen,
-  Layers,
-  Moon,
-  Plus,
-  RotateCcw,
-  Search,
-  Settings,
-  Sun,
-} from "@lucide/vue";
+import { computed, ref } from "vue";
 import { useNow } from "../../composables/useNow";
 import type { AgentView } from "../../services/acp";
 import type { Task } from "../../services/taskStorage";
@@ -29,7 +17,10 @@ import {
   type SessionStatus,
   type SessionStatusSignals,
 } from "../../utils/sessionStatus";
-import TaskCard from "./TaskCard.vue";
+import BoardColumn from "./BoardColumn.vue";
+import BoardSkeleton from "./BoardSkeleton.vue";
+import BoardToolbar from "./BoardToolbar.vue";
+import TaskCreateModal from "./TaskCreateModal.vue";
 
 interface Props {
   tasks?: Task[];
@@ -76,49 +67,9 @@ const emit = defineEmits<{
   (e: "toggleTheme"): void;
 }>();
 
-const useStyles = createStyles(({ token, css }) => ({
+const useStyles = createStyles(({ css }) => ({
   boardWrap: css`
     background: var(--subtle, #f8f9fa);
-  `,
-  column: css`
-    background: var(--fill-faint);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    width: 300px;
-    transition: all ${token.motionDurationMid} ${token.motionEaseInOut};
-
-    &.is-drag-over {
-      background: var(--primary-subtle-hover);
-      border-color: var(--brand-accent);
-      box-shadow:
-        0 0 0 1px var(--brand-accent),
-        inset 0 0 24px hsla(14, 62%, 62%, 0.08);
-    }
-  `,
-  colDot: {
-    todo: css`
-      background: #94a3b8;
-    `,
-    doing: css`
-      background: #3b82f6;
-      box-shadow: 0 0 8px rgba(59, 130, 246, 0.6);
-    `,
-    review: css`
-      background: #f59e0b;
-      box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
-    `,
-    done: css`
-      background: #10b981;
-    `,
-    archived: css`
-      background: #94a3b8;
-    `,
-  },
-  inlineCard: css`
-    background: var(--card, #ffffff);
-    border: 1px solid var(--border-strong);
-    border-radius: 12px;
-    box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.08);
   `,
 }));
 
@@ -234,10 +185,6 @@ const countsMap = computed(() => {
   return map;
 });
 
-const countsSummary = computed(() => {
-  return `进行中 ${countsMap.value.doing ?? 0} · 待验收 ${countsMap.value.review ?? 0} · 已完成 ${countsMap.value.done ?? 0}`;
-});
-
 const hasActiveFilter = computed(() =>
   Boolean(search.value.trim() || selectedPriority.value || selectedProject.value),
 );
@@ -313,6 +260,18 @@ const handleCreateFromModal = () => {
   showCreateModal.value = false;
 };
 
+/** 模板菜单：空标题 + 模板 id 交给业务层预填 */
+const handleTemplateCreate = (templateId: string) => {
+  emit("createTask", { title: "", projectPath: null, templateId });
+};
+
+/** 标题编辑提交：先退出编辑态，再把新标题上抛给业务层 */
+const confirmTitleEdit = (id: string, title: string) => {
+  editingTaskId.value = "";
+  emit("updateTaskTitle", id, title);
+};
+
+/** 浏览工作目录：动态加载 aiService 选择目录（唯一服务依赖，留在容器层） */
 const pickCreateProjectPath = async () => {
   try {
     const { aiService } = await import("../../services/ai");
@@ -322,344 +281,78 @@ const pickCreateProjectPath = async () => {
     // ignore
   }
 };
-
-const templateMenu = computed(() => ({
-  items: [
-    { key: "blank", label: "空白任务" },
-    { key: "bug", label: "修 Bug 模板" },
-    { key: "feature", label: "新功能模板" },
-    { key: "refactor", label: "重构模板" },
-  ],
-  onClick: ({ key }: { key: string | number }) => {
-    emit("createTask", { title: "", projectPath: null, templateId: String(key) });
-  },
-}));
 </script>
 
 <template>
   <div :class="['flex min-h-0 flex-1 flex-col overflow-hidden', styles.boardWrap]">
     <!-- 现代两段式工具栏 -->
-    <header
-      class="sticky top-0 z-10 flex flex-col border-b border-border/80 bg-background/85 backdrop-blur-md shrink-0"
-    >
-      <!-- 首行：标题 + 核心指标胶囊 + 主操作 -->
-      <div class="flex items-center justify-between gap-3 px-5 py-3">
-        <div class="flex items-center gap-3">
-          <div class="flex items-center gap-2">
-            <h1 class="text-[16px] font-bold tracking-tight text-foreground m-0">任务看板</h1>
-            <span
-              class="text-[12px] font-medium text-muted-foreground bg-muted/70 px-2 py-0.5 rounded-full border border-border/40"
-            >
-              {{ (tasks ?? []).length }}
-            </span>
-          </div>
-
-          <!-- 核心状态指标胶囊 -->
-          <div
-            class="hidden md:flex items-center gap-1.5 pl-3 border-l border-border/60 text-[12px]"
-          >
-            <span
-              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium"
-            >
-              <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-              进行中 {{ countsMap.doing ?? 0 }}
-            </span>
-            <span
-              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium"
-            >
-              <span class="w-1.5 h-1.5 rounded-full bg-amber-500" />
-              待验收 {{ countsMap.review ?? 0 }}
-            </span>
-            <span
-              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium"
-            >
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              已完成 {{ countsMap.done ?? 0 }}
-            </span>
-          </div>
-        </div>
-
-        <!-- 右侧主按钮组 -->
-        <div class="flex items-center gap-2">
-          <!-- 显示/隐藏已归档开关 -->
-          <Button
-            size="middle"
-            :type="showArchived ? 'primary' : 'default'"
-            :ghost="showArchived"
-            :icon="h(Archive)"
-            class="!text-xs"
-            @click="showArchived = !showArchived"
-          >
-            {{ showArchived ? "隐藏归档" : `显示归档 (${archivedCount})` }}
-          </Button>
-
-          <!-- 模板下拉 -->
-          <Dropdown :menu="templateMenu" :trigger="['click']">
-            <Button :icon="h(Layers)" class="!text-xs">模板 ▾</Button>
-          </Dropdown>
-
-          <!-- 主操作：新建任务 -->
-          <Button
-            type="primary"
-            :icon="h(Plus)"
-            class="!font-medium !shadow-xs"
-            @click="openCreateModal()"
-          >
-            新建任务
-          </Button>
-
-          <!-- 浅色/深色主题切换 -->
-          <Tooltip :title="dark ? '切换为浅色模式' : '切换为深色模式'">
-            <Button
-              type="text"
-              :icon="dark ? h(Sun) : h(Moon)"
-              class="!w-8 !h-8 !p-0 !text-muted-foreground hover:!text-foreground hover:!bg-muted"
-              @click="emit('toggleTheme')"
-            />
-          </Tooltip>
-
-          <!-- 设置 -->
-          <Tooltip title="设置">
-            <Button
-              type="text"
-              :icon="h(Settings)"
-              class="!w-8 !h-8 !p-0 !text-muted-foreground hover:!text-foreground hover:!bg-muted"
-              @click="emit('openSettings')"
-            />
-          </Tooltip>
-        </div>
-      </div>
-
-      <!-- 次行：检索与筛选条 -->
-      <div
-        class="flex items-center justify-between gap-3 px-5 py-2 bg-muted/20 border-t border-border/40 text-xs"
-      >
-        <div class="flex flex-wrap items-center gap-2.5">
-          <Input
-            v-model:value="search"
-            placeholder="搜索标题、备注、标签..."
-            allow-clear
-            class="!w-56 !rounded-md !text-xs"
-          >
-            <template #prefix><Search class="!h-3.5 !w-3.5 text-muted-foreground mr-1" /></template>
-          </Input>
-
-          <Select
-            v-model:value="selectedProject"
-            placeholder="全部项目"
-            allow-clear
-            class="!min-w-32 !text-xs"
-            :options="[{ value: '', label: '全部项目' }, ...projectOptions]"
-          />
-
-          <Select
-            v-model:value="selectedPriority"
-            placeholder="全部优先级"
-            allow-clear
-            class="!min-w-28 !text-xs"
-            :options="[
-              { value: '', label: '全部优先级' },
-              { value: 'P0', label: 'P0 紧急' },
-              { value: 'P1', label: 'P1 高' },
-              { value: 'P2', label: 'P2 中' },
-              { value: 'P3', label: 'P3 低' },
-            ]"
-          />
-
-          <Select
-            v-model:value="sortBy"
-            class="!min-w-28 !text-xs"
-            :options="[
-              { value: 'updatedAt', label: '按更新时间' },
-              { value: 'dueAt', label: '按截止时间' },
-              { value: 'priority', label: '按优先级' },
-              { value: 'createdAt', label: '按创建时间' },
-            ]"
-          />
-
-          <Button
-            v-if="hasActiveFilter"
-            size="small"
-            type="link"
-            :icon="h(RotateCcw)"
-            class="!text-xs !p-0 !text-muted-foreground hover:!text-foreground"
-            @click="resetFilters"
-          >
-            重置筛选
-          </Button>
-        </div>
-
-        <div v-if="hasActiveFilter" class="text-xs text-muted-foreground flex-none">
-          找到 {{ filteredTasks.length }} 个任务
-        </div>
-      </div>
-    </header>
+    <BoardToolbar
+      :total-count="(tasks ?? []).length"
+      :counts="countsMap"
+      :archived-count="archivedCount"
+      :show-archived="showArchived"
+      :dark="dark"
+      v-model:search="search"
+      v-model:priority="selectedPriority"
+      v-model:project="selectedProject"
+      v-model:sort-by="sortBy"
+      :project-options="projectOptions"
+      :has-active-filter="hasActiveFilter"
+      :filtered-count="filteredTasks.length"
+      @reset="resetFilters"
+      @toggle-archived="showArchived = !showArchived"
+      @create="openCreateModal()"
+      @template="handleTemplateCreate"
+      @toggle-theme="emit('toggleTheme')"
+      @open-settings="emit('openSettings')"
+    />
 
     <!-- 泳道看板主体区域 -->
     <div class="flex-1 overflow-x-auto overflow-y-hidden p-5">
       <!-- 骨架屏：本地状态水合中 -->
-      <div
-        v-if="loading"
-        class="flex gap-4.5 h-full min-w-max items-start"
-        role="status"
-        aria-label="看板加载中"
-      >
-        <section
-          v-for="n in 4"
-          :key="n"
-          class="flex flex-col max-h-full p-3 rounded-2xl flex-none w-[310px] gap-3 animate-pulse"
-          :style="{ background: 'var(--fill-faint)', border: '1px solid var(--border)' }"
-        >
-          <div class="flex items-center gap-2 pb-1">
-            <div class="w-2 h-2 rounded-full" style="background: var(--border-strong)" />
-            <div class="h-3.5 w-16 rounded" style="background: var(--border-strong)" />
-            <div class="h-4 w-5 rounded-full ml-auto" style="background: var(--border-strong)" />
-          </div>
-          <div class="h-20 rounded-xl" style="background: var(--card)" />
-          <div class="h-20 rounded-xl" style="background: var(--card)" />
-          <div class="h-14 rounded-xl" style="background: var(--card)" />
-        </section>
-      </div>
+      <BoardSkeleton v-if="loading" />
 
       <div v-else class="flex gap-4.5 h-full min-w-max items-start">
-        <section
+        <BoardColumn
           v-for="column in columns"
           :key="column.status"
-          :class="[
-            'flex flex-col max-h-full p-3 rounded-2xl flex-none shadow-xs',
-            styles.column,
-            { 'is-drag-over': dragOverColumn === column.status },
-          ]"
-          :style="{ width: '310px' }"
-          :aria-label="`${column.meta.name}列，${column.items.length}个任务`"
-          @dragover="handleDragOver(column.status, $event)"
+          :status="column.status"
+          :name="column.meta.name"
+          :hint="column.meta.hint"
+          :items="column.items"
+          :now-tick="nowTick"
+          :open-task-id="openTaskId"
+          :editing-task-id="editingTaskId"
+          :dragging="Boolean(dragId)"
+          :drag-over="dragOverColumn === column.status"
+          :resolve-session="sessionStatusOfTask"
+          @open="emit('openTask', $event)"
+          @drag-start="handleDragStart"
+          @drag-end="handleDragEnd"
+          @start-title-edit="editingTaskId = $event"
+          @confirm-title-edit="confirmTitleEdit"
+          @cancel-title-edit="editingTaskId = ''"
+          @move-status="(id, status) => emit('moveTask', id, status)"
+          @archive="emit('archiveTask', $event)"
+          @duplicate="emit('duplicateTask', $event)"
+          @delete="emit('deleteTask', $event)"
+          @create="openCreateModal($event)"
+          @dragover="handleDragOver"
           @dragleave="handleDragLeave"
-          @drop="handleDrop(column.status, $event)"
-        >
-          <!-- 列头部 -->
-          <header class="flex items-center justify-between pb-2.5 mb-2.5 border-b border-border/50">
-            <div class="flex items-center gap-2 min-w-0">
-              <span
-                :class="[
-                  'w-2 h-2 rounded-full flex-none',
-                  (styles.colDot as Record<string, string>)[column.status],
-                ]"
-              />
-              <span class="font-semibold text-[13px] tracking-tight text-foreground">{{
-                column.meta.name
-              }}</span>
-              <span
-                class="bg-background/90 border border-border/80 rounded-full px-2 py-0.2 text-[11px] font-semibold text-muted-foreground"
-              >
-                {{ column.items.length }}
-              </span>
-            </div>
-
-            <div class="flex items-center gap-1">
-              <span class="text-muted-foreground/70 text-[11px] mr-1 hidden sm:inline">{{
-                column.meta.hint
-              }}</span>
-            </div>
-          </header>
-
-          <!-- 任务卡片列表（独立纵向滚动区） -->
-          <div class="flex-1 overflow-y-auto p-1 pr-1.5 flex flex-col gap-2.5 min-h-32">
-            <!-- 空状态：提示 + 快捷创建入口 -->
-            <div
-              v-if="column.items.length === 0"
-              class="flex flex-col items-center justify-center p-6 border border-dashed border-border/70 rounded-xl text-center bg-background/30 transition-colors"
-            >
-              <span v-if="dragId" class="text-[12px] text-brand-accent font-medium"
-                >松开移动到这里</span
-              >
-              <template v-else>
-                <p class="text-[12px] text-muted-foreground/80">暂无{{ column.meta.name }}任务</p>
-                <Button
-                  size="small"
-                  type="link"
-                  :icon="h(Plus)"
-                  class="!text-xs !p-0 mt-1 !text-brand-accent"
-                  @click="openCreateModal(column.status)"
-                >
-                  添加任务
-                </Button>
-              </template>
-            </div>
-
-            <!-- 卡片项 -->
-            <TaskCard
-              v-for="task in column.items"
-              :key="task.id"
-              :task="task"
-              :now-tick="nowTick"
-              :session-status="sessionStatusOfTask(task).status"
-              :session-busy-duration="sessionStatusOfTask(task).busyDuration"
-              :session-queued-count="sessionStatusOfTask(task).queued"
-              :session-error="sessionStatusOfTask(task).error"
-              :is-open="task.id === openTaskId"
-              :editing-title="editingTaskId === task.id"
-              @open="emit('openTask', $event)"
-              @drag-start="handleDragStart"
-              @drag-end="handleDragEnd"
-              @start-title-edit="editingTaskId = $event"
-              @confirm-title-edit="
-                (id: string, title: string) => {
-                  editingTaskId = '';
-                  emit('updateTaskTitle', id, title);
-                }
-              "
-              @cancel-title-edit="editingTaskId = ''"
-              @move-status="(id: string, status: TaskStatus) => emit('moveTask', id, status)"
-              @archive="emit('archiveTask', $event)"
-              @duplicate="emit('duplicateTask', $event)"
-              @delete="emit('deleteTask', $event)"
-            />
-          </div>
-        </section>
+          @drop="handleDrop"
+        />
       </div>
     </div>
 
     <!-- 弹窗式完整创建 -->
-    <Modal
+    <TaskCreateModal
       v-model:open="showCreateModal"
-      title="新建任务"
-      :ok-button-props="{ disabled: !createTitle.trim() }"
-      ok-text="创建"
-      cancel-text="取消"
-      destroy-on-close
-      @ok="handleCreateFromModal"
-    >
-      <div class="flex flex-col gap-4 py-2">
-        <div class="flex flex-col gap-1.5">
-          <span class="text-12px font-medium">任务标题</span>
-          <Input
-            v-model:value="createTitle"
-            placeholder="输入任务标题"
-            allow-clear
-            autofocus
-            @press-enter="handleCreateFromModal"
-          />
-        </div>
-        <div class="flex flex-col gap-1.5">
-          <span class="text-12px font-medium">工作目录</span>
-          <div class="flex gap-2">
-            <Select
-              v-model:value="createProjectPath"
-              :options="createProjectOptions"
-              allowClear
-              showSearch
-              placeholder="未关联（可选）"
-              class="flex-1"
-            />
-            <Button @click="pickCreateProjectPath">
-              <template #icon><FolderOpen class="h-3.5 w-3.5" /></template>浏览
-            </Button>
-          </div>
-          <span class="text-11px text-muted-foreground"
-            >将创建到：{{ TASK_STATUS_META[createStatus].name }}</span
-          >
-        </div>
-      </div>
-    </Modal>
+      v-model:title="createTitle"
+      :status="createStatus"
+      v-model:project-path="createProjectPath"
+      :project-options="createProjectOptions"
+      @submit="handleCreateFromModal"
+      @browse="pickCreateProjectPath"
+    />
   </div>
 </template>
