@@ -62,6 +62,11 @@ interface AcpSessionEntry {
   conversationId: string;
   /** ACP 侧 sessionId（provider session id）。 */
   sessionId: string;
+  /**
+   * 路由恢复后 agent 实际使用的会话 id（resume 重定向别名）。
+   * 客户端应以此为准持久化为 providerSessionId，下次 resume 才能命中。
+   */
+  resolvedSessionId?: string;
   acpSession: AgentSession;
   response: AcpSessionResponse;
   history: TranscriptMessage[];
@@ -73,7 +78,12 @@ interface ActiveRun {
   agentId: string;
   conversationId: string;
   response: ServerResponse;
+  /** 本回合的权限模式（前端随请求携带）：full / auto 时服务端自动批准，不再转前端审批。 */
+  permissionMode: AcpPermissionMode;
 }
+
+/** 权限模式：与前端 ChatInput 权限 chip 的取值一致。 */
+export type AcpPermissionMode = "supervised" | "auto" | "full";
 
 interface PendingPermission {
   id: string;
@@ -223,6 +233,7 @@ export class AcpManager {
     providerSessionId: string | undefined,
     res: ServerResponse,
     signal: AbortSignal,
+    permissionMode: AcpPermissionMode = "supervised",
   ): Promise<void> {
     const runtime = this.getAvailableRuntime(agentId);
 
@@ -240,6 +251,7 @@ export class AcpManager {
       agentId,
       conversationId,
       response: res,
+      permissionMode,
     };
     this.activeRuns.set(session.sessionId, run);
     session.lastUsed = Date.now();
@@ -449,31 +461,40 @@ export class AcpManager {
         this.sessions.set(key, loaded);
         return loaded;
       }
-      if (!this.supportsSessionLoad(runtime)) {
-        throw GatewayError.invalidRequest(`${runtime.config.name} 不支持恢复历史 ACP 会话`);
-      }
-
-      const acpSession = await adapter.createSession({
-        cwd,
-        resumeSessionId: normalizedProviderSessionId,
-      });
-      const entry = this.registerSession(runtime, conversationId, acpSession, key);
-      // 内置 CLI 持久化在原生格式里的历史（终端直开的会话）播种进 collector，
-      // 让深链/恢复的会话立即有完整可渲染的历史。
-      const history = await readProviderFileHistory(
-        runtime.config,
-        normalizedProviderSessionId,
-        cwd,
-        runtime.config.transport !== "acp",
-      );
-      if (history.length > 0) {
-        const collector = this.historyCollectors.get(normalizedProviderSessionId);
-        if (collector) {
-          collector.messages.push(...history);
-          collector.activeRole = "content";
+      if (loaded && loaded.agentId !== runtime.config.id) {
+        // 会话 id 属于另一个 Agent：跨 agent 恢复会让对方静默新建内部会话并
+        // 丢弃全部 update（正文无输出）。忽略该 id，按新会话开始。
+        console.warn(
+          `[acp:${runtime.config.id}] providerSessionId ${normalizedProviderSessionId} belongs to ` +
+            `agent ${loaded.agentId}; starting a fresh session instead of cross-agent resume`,
+        );
+      } else {
+        if (!this.supportsSessionLoad(runtime)) {
+          throw GatewayError.invalidRequest(`${runtime.config.name} 不支持恢复历史 ACP 会话`);
         }
+
+        const acpSession = await adapter.createSession({
+          cwd,
+          resumeSessionId: normalizedProviderSessionId,
+        });
+        const entry = this.registerSession(runtime, conversationId, acpSession, key);
+        // 内置 CLI 持久化在原生格式里的历史（终端直开的会话）播种进 collector，
+        // 让深链/恢复的会话立即有完整可渲染的历史。
+        const history = await readProviderFileHistory(
+          runtime.config,
+          normalizedProviderSessionId,
+          cwd,
+          runtime.config.transport !== "acp",
+        );
+        if (history.length > 0) {
+          const collector = this.historyCollectors.get(normalizedProviderSessionId);
+          if (collector) {
+            collector.messages.push(...history);
+            collector.activeRole = "content";
+          }
+        }
+        return entry;
       }
-      return entry;
     }
     const acpSession = await adapter.createSession({ cwd });
     return this.registerSession(runtime, conversationId, acpSession, key);
@@ -505,8 +526,35 @@ export class AcpManager {
     };
     this.sessions.set(key, entry);
     this.sessionsByAcpId.set(acpSession.id, entry);
+    // resume 重定向恢复：agent 用另一个 id 推 update 时，连接层会认领别名，
+    // 这里把真实 id 广播给订阅者，让客户端持久化为新的 providerSessionId。
+    acpSession.onAlias = (alias) => this.handleSessionAlias(entry, alias);
     void this.pumpEvents(entry);
     return entry;
+  }
+
+  /** 会话别名被认领：登记索引、更新解析 id、通知订阅者更新 providerSessionId。 */
+  private handleSessionAlias(entry: AcpSessionEntry, alias: string): void {
+    if (this.sessionsByAcpId.get(alias) && this.sessionsByAcpId.get(alias) !== entry) {
+      console.warn(
+        `[acp:${entry.agentId}] session alias ${alias} already belongs to another session; ignored`,
+      );
+      return;
+    }
+    this.sessionsByAcpId.set(alias, entry);
+    entry.resolvedSessionId = alias;
+    entry.lastUsed = Date.now();
+    console.log(
+      `[acp:${entry.agentId}] session resumed as ${alias} (reassigned by agent); ` +
+        `conversation ${entry.conversationId} should adopt the new providerSessionId`,
+    );
+    // 走 provider_session 通道：前端 onProviderSession 会把它持久化为新的
+    // providerSessionId，下次 resume 直接命中真实 id，不再触发重定向。
+    const run = this.activeRuns.get(entry.sessionId);
+    this.emitCustom(entry.sessionId, run?.response, "provider_session", {
+      agentId: entry.agentId,
+      sessionId: alias,
+    });
   }
 
   /** 会话事件泵：把 acp-hub 统一事件流翻译成 native_event / 自定义帧并累积历史。 */
@@ -601,6 +649,19 @@ export class AcpManager {
     if (!run) {
       await entry.acpSession.cancelPermission(event.requestId).catch(() => {});
       return;
+    }
+    // full / auto 模式：服务端直接代批准，不再打扰前端。
+    // full 优先永久允许（allow_always）；auto 逐次允许（allow_once，不沉淀白名单）。
+    // Agent 未提供任何 allow 选项时回落到前端人工审批。
+    if (run.permissionMode !== "supervised") {
+      const preferredKind = run.permissionMode === "full" ? "allow_always" : "allow_once";
+      const option =
+        event.options.find((item) => item.kind === preferredKind) ??
+        event.options.find((item) => item.kind.startsWith("allow_"));
+      if (option) {
+        await entry.acpSession.respondPermission(event.requestId, option.optionId).catch(() => {});
+        return;
+      }
     }
     const id = randomUUID();
     const patterns =
@@ -790,7 +851,8 @@ function sessionStateView(
   return {
     agentId: session.agentId,
     conversationId: session.conversationId,
-    sessionId: session.sessionId,
+    // 有 resume 重定向别名时返回真实 id，客户端据此持久化 providerSessionId
+    sessionId: session.resolvedSessionId ?? session.sessionId,
     configOptions,
     modes: session.response.modes ?? null,
     messages: session.history,

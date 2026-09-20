@@ -1,7 +1,12 @@
 import type { ServerResponse } from "node:http";
 import type { AcpConfig } from "./config";
 import type { LocalChatManager } from "./localProvider";
-import { AcpManager, type AcpAgentView, type AcpSessionStateView } from "./acpManager";
+import {
+  AcpManager,
+  type AcpAgentView,
+  type AcpPermissionMode,
+  type AcpSessionStateView,
+} from "./acpManager";
 import {
   OpenCodeManager,
   type OpenCodeAgentView,
@@ -92,6 +97,7 @@ export class AgentManager {
     projectPath: string | undefined,
     providerSessionId: string | undefined,
     res: ServerResponse,
+    permissionMode: AcpPermissionMode = "supervised",
   ): Promise<void> {
     const state = await this.getSessionState(
       agentId,
@@ -127,6 +133,7 @@ export class AgentManager {
           providerSessionId,
           tracked.response,
           tracked.signal,
+          permissionMode,
         );
       } else if (this.openCode?.hasAgent(agentId)) {
         await this.openCode.runTurn(

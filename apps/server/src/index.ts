@@ -8,7 +8,8 @@
  * 可选参数：
  *   --port <port>  监听端口（默认 8082，0 = 自动分配）
  *   --host <host>  监听地址（默认 0.0.0.0，可从局域网访问）
- *   --dev          开发模式：不生成访问密码，Web 界面直接放行
+ *   --dev          开发模式（NODE_ENV=development 同样生效）。任何模式都会生成
+ *                  一次性访问密码，Web 界面打开 `?token=<pwd>` URL 自动登录
  */
 import { startGateway } from "./app";
 
@@ -19,7 +20,6 @@ function parseArg(name: string): string | undefined {
 
 const portRaw = parseArg("--port");
 const host = parseArg("--host") ?? "0.0.0.0";
-const dev = process.argv.includes("--dev") || process.env.NODE_ENV === "development";
 const port = portRaw !== undefined ? Number(portRaw) : undefined;
 if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) {
   console.error(`无效端口: ${portRaw}`);
@@ -27,7 +27,7 @@ if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535))
 }
 
 async function main(): Promise<void> {
-  const gateway = await startGateway({ host, port, dev });
+  const gateway = await startGateway({ host, port });
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
     if (shuttingDown) return;

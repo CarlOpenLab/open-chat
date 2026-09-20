@@ -39,6 +39,7 @@ import {
   type LocalModelInfo,
 } from "./localProvider";
 import { AgentManager } from "./agentManager";
+import type { AcpPermissionMode } from "./acpManager";
 import { resolveExecutable } from "./commandEnv";
 import { pickProjectDirectory } from "./projectPicker";
 import { writeNativeEvent } from "./nativeEvents";
@@ -752,7 +753,15 @@ async function handleAgentChat(
     "X-Accel-Buffering": "no",
   });
   try {
-    await agentManager.runTurn(agentId, conversationId, text, projectPath, providerSessionId, res);
+    await agentManager.runTurn(
+      agentId,
+      conversationId,
+      text,
+      projectPath,
+      providerSessionId,
+      res,
+      parsePermissionMode(body.permission),
+    );
   } catch (err) {
     // A page refresh only disconnects this response; the tracked run continues
     // and can be re-subscribed through /api/acp/session/stream. AbortError here
@@ -1024,6 +1033,11 @@ function parseProjectPath(value: unknown): string | undefined {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** 解析请求体携带的权限模式；缺省/非法值回落到 supervised（人工审批）。 */
+function parsePermissionMode(value: unknown): AcpPermissionMode {
+  return value === "full" || value === "auto" ? value : "supervised";
 }
 
 // ============ 附件 → 发送分派 ============
