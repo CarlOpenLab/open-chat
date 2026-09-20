@@ -29,15 +29,9 @@ const workingElapsed = computed(() =>
       class="inline-flex min-h-[22px] items-center gap-2 text-[11.5px] leading-4 font-medium text-brand-muted-strong animate-[working-status-in_220ms_ease-out_both]"
     >
       <span class="inline-flex items-center gap-[3.5px]" aria-hidden="true">
-        <i
-          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite]"
-        />
-        <i
-          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.12s]"
-        />
-        <i
-          class="h-[4.5px] w-[4.5px] rounded-full bg-current animate-[working-wave_1.4s_linear_infinite] [animation-delay:0.24s]"
-        />
+        <i class="working-dot" />
+        <i class="working-dot" />
+        <i class="working-dot" />
       </span>
       <span>工作中{{ workingElapsed ? ` · ${workingElapsed}` : "" }}</span>
     </div>
@@ -45,13 +39,35 @@ const workingElapsed = computed(() =>
 </template>
 
 <style scoped>
-@keyframes working-wave {
+/* 从左到右依次放大脉冲：升到峰顶后完整回到原状并保持到周期结束，
+   靠 0.28s 的相位差形成清晰的顺序感。 */
+.working-dot {
+  height: 4.5px;
+  width: 4.5px;
+  border-radius: 9999px;
+  background: currentcolor;
+  animation: working-pulse 1.4s ease-in-out infinite;
+}
+
+/* 相位差必须写在这里：.working-dot 的 animation 简写会重置 delay，
+   若在 Tailwind 任意属性里写 animation-delay 会被简写覆盖回 0。 */
+.working-dot:nth-child(2) {
+  animation-delay: 0.28s;
+}
+.working-dot:nth-child(3) {
+  animation-delay: 0.56s;
+}
+
+@keyframes working-pulse {
   0%,
+  70%,
   100% {
-    opacity: 0.25;
+    transform: scale(1);
+    box-shadow: none;
   }
-  50% {
-    opacity: 1;
+  35% {
+    transform: scale(1.8);
+    box-shadow: 0 0 5px 0 currentcolor;
   }
 }
 
