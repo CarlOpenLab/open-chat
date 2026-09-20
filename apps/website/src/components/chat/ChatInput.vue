@@ -1,12 +1,9 @@
 <script setup lang="ts">
-import { Sender } from "@antdv-next/x";
 import type { SkillType } from "@antdv-next/x";
 import {
   BrainCircuit,
   Check,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Cpu,
   FolderOpen,
   GitBranch,
@@ -35,6 +32,7 @@ import {
 } from "../../utils/senderCommands";
 import type { QuickCommandMeta, SenderSuggestion } from "../../utils/senderCommands";
 import ModelIcon from "../Icons/ModelIcon.vue";
+import SenderLayout from "../sender/SenderLayout.vue";
 import AttachmentPanel from "./AttachmentPanel.vue";
 import PermissionRequestPanel from "./PermissionRequestPanel.vue";
 import QueuePanel from "./QueuePanel.vue";
@@ -142,406 +140,12 @@ const props = withDefaults(defineProps<Props>(), {
 });
 const emit = defineEmits<Emits>();
 
+// 壳层（布局 / 浮层 / 底部卡片 / 拖拽遮罩 / antdv-x Sender 覆写）在 SenderLayout；
+// 这里只留业务样式：footer chips、下拉弹层与辅助文字色。
 const useStyles = createStyles(({ token, css }) => {
   const accent = (token as AccentGlobalToken).colorAccent;
   return {
-    // composer 外壳：原 Tailwind 类（z-12 / px max 内边距 / 底部渐变） + 全部壳层样式。
-    // 子元素沿用字面量类名作为选择器锚点，antdv / antdv-x 内部类同理（替代 :deep）。
-    chatFooter: css`
-      position: relative;
-      z-index: 12;
-      padding: 20px max(20px, calc((100% - 760px) / 2)) max(16px, env(safe-area-inset-bottom));
-      background: linear-gradient(
-        to bottom,
-        transparent 0,
-        ${token.colorBgLayout} 32px,
-        ${token.colorBgLayout} 100%
-      );
-
-      /* 对齐 uno.config.ts 的自定义断点：lt-md => max-width 820px，lt-sm => max-width 560px */
-      @media (max-width: 820px) {
-        padding-left: 18px;
-        padding-right: 18px;
-      }
-      @media (max-width: 560px) {
-        padding-left: 10px;
-        padding-right: 10px;
-      }
-
-      /* wrapper：浮层、Sender、底部卡片的共同定位锚点（max-width 760px 与 chat-footer 横向 padding 对齐） */
-      .sender-stack {
-        position: relative;
-        z-index: 3;
-        width: 100%;
-        max-width: 760px;
-        margin: 0 auto;
-      }
-      /* 浮层：绝对定位锚定 wrapper 顶部（= Sender 顶），底部 28px 探入 Sender，
-       * 被 z-index 更高的 .antd-sender-main 盖住一点，形成悬浮叠压感。
-       * 偏移量只跟 wrapper 走，外层布局调整不会改变悬浮位置。 */
-      .sender-header-card {
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 100%;
-        margin-bottom: -28px;
-        z-index: 2;
-        max-height: 360px;
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-        border: 1px solid ${token.colorBorderSecondary};
-        border-radius: 16px;
-        background: ${token.colorBgContainer};
-        padding: 8px 8px 36px;
-        box-shadow: ${token.boxShadowSecondary};
-      }
-      .sender-header-enter-active,
-      .sender-header-leave-active {
-        max-height: 360px;
-        overflow: hidden;
-        transition:
-          max-height ${token.motionDurationMid} ${token.motionEaseInOut},
-          margin-bottom ${token.motionDurationMid} ${token.motionEaseInOut},
-          opacity ${token.motionDurationMid} ${token.motionEaseInOut},
-          transform ${token.motionDurationMid} ${token.motionEaseInOut},
-          padding ${token.motionDurationMid} ${token.motionEaseInOut};
-        transform-origin: bottom center;
-      }
-      .sender-header-enter-from,
-      .sender-header-leave-to {
-        max-height: 0;
-        margin-bottom: 0;
-        border-color: transparent;
-        opacity: 0;
-        padding-top: 0;
-        padding-bottom: 0;
-      }
-      .sender-header-card.has-permission {
-        border-color: ${token.colorWarningBorder};
-      }
-      .sender-header-card.has-suggestion {
-        background: transparent;
-        border: none;
-        box-shadow: none;
-        padding: 0;
-        overflow: visible;
-        max-height: none;
-        /* 指令候选列表要完整浮在输入框上方，不能被 Sender 盖住 */
-        z-index: 4;
-      }
-      .sender-header-card.has-suggestion .sender-header-panel {
-        overflow: visible;
-      }
-      .sender-header-panel {
-        flex: 1;
-        min-width: 0;
-        min-height: 0;
-        overflow-y: auto;
-      }
-      .sender-header-card.has-navigation {
-        /* 基础卡是 column，多面板导航时左右箭头必须切成 row，
-         * 否则箭头会堆叠在内容上下并把卡片撑成三倍高 */
-        flex-direction: row;
-        align-items: center;
-        gap: 4px;
-      }
-      .sender-header-nav {
-        display: grid;
-        width: 26px;
-        height: 34px;
-        flex: none;
-        place-items: center;
-        border: 0;
-        border-radius: 6px;
-        background: transparent;
-        color: ${token.colorTextTertiary};
-        cursor: pointer;
-      }
-      .sender-header-nav:hover {
-        background: ${token.colorFillTertiary};
-        color: ${token.colorText};
-      }
-      .sender-header-nav-icon {
-        width: 16px;
-        height: 16px;
-      }
-      .sender-header-card:not(.has-navigation) .sender-header-panel {
-        width: 100%;
-      }
-      .sender-header-card.has-navigation .sender-header-panel {
-        flex: 1;
-        min-width: 0;
-      }
-
-      /* ===== Sender（antdv-x）内部结构覆写（原 scoped :deep 规则） ===== */
-      .antd-sender {
-        position: relative;
-        z-index: 3;
-        width: 100%;
-        max-width: 760px;
-        margin: 0 auto;
-      }
-      .antd-sender-main {
-        position: relative;
-        z-index: 3;
-        min-height: 96px;
-        padding: 0;
-        /* composer 卡片：圆角 13px，border，composer 底色，无重阴影 */
-        border: 1px solid ${token.colorBorderSecondary};
-        border-radius: 13px;
-        background: ${token.colorBgContainer};
-        /* composer 卡片没有投影，只有 1px border */
-        box-shadow: none;
-        transition: border-color ${token.motionDurationMid} ${token.motionEaseInOut};
-      }
-      /* 有底部卡片时，输入卡片去掉下边框和下圆角，两段视觉连成一张卡片 */
-      &.has-bottom-card .antd-sender-main {
-        border-radius: 13px;
-      }
-      .antd-sender-main:focus-within {
-        border-color: ${token.colorBorder};
-      }
-      .antd-sender-content {
-        min-height: 50px;
-        align-items: flex-start;
-        padding: 10px 10px 2px;
-      }
-      .antd-sender-footer {
-        min-height: 32px;
-        padding: 0 10px 10px;
-      }
-      textarea {
-        max-height: 152px;
-        min-height: 36px;
-        color: ${token.colorText};
-        caret-color: ${accent};
-        font-size: 13.5px;
-        line-height: 21px;
-      }
-      textarea::placeholder {
-        color: ${token.colorTextTertiary};
-        opacity: 1;
-      }
-      /* 发送按钮：圆形 26px，inverse 底色，无阴影 */
-      .antd-sender-actions-btn {
-        width: 26px;
-        min-width: 26px;
-        height: 26px;
-        border-radius: 50%;
-        background: ${token.colorText};
-        color: ${token.colorBgContainer};
-        box-shadow: none;
-      }
-      .antd-sender-actions-btn:disabled {
-        background: ${token.colorFill};
-        color: ${token.colorTextDisabled};
-        opacity: 1;
-      }
-
-      /* sender 底部卡片：与上方输入卡片同背景（header slot 背景），底部圆角 */
-      .sender-bottom-card {
-        position: relative;
-        z-index: 2;
-        width: 100%;
-        max-width: 760px;
-        min-height: 42px;
-        margin: 0 auto;
-        border: 1px solid ${token.colorBorderSecondary};
-        border-top: 0;
-        border-radius: 0 0 13px 13px;
-        background: ${token.colorBgContainer};
-        padding: 12px 8px 8px;
-        box-shadow: none;
-        margin-top: -8px;
-      }
-      .sender-bottom-row {
-        display: flex;
-        min-height: 24px;
-        align-items: center;
-        gap: 2px;
-      }
-      /* 扁平按钮（去 tag）：模型 / 项目目录 / Git 分支共用 */
-      .sender-flat-btn {
-        display: flex;
-        height: 24px;
-        min-width: 0;
-        flex: none;
-        align-items: center;
-        gap: 6px;
-        border: 0;
-        border-radius: 7px;
-        padding: 0 8px;
-        background: transparent;
-        color: ${token.colorTextTertiary};
-        font-size: 12.5px;
-        line-height: 16px;
-        cursor: pointer;
-        transition:
-          background ${token.motionDurationMid} ${token.motionEaseInOut},
-          color ${token.motionDurationMid} ${token.motionEaseInOut};
-      }
-      .sender-flat-btn:hover:not(:disabled) {
-        background: ${token.colorFillTertiary};
-        color: ${token.colorText};
-      }
-      .sender-flat-btn:focus-visible {
-        outline: 2px solid ${token.controlOutline};
-        outline-offset: 1px;
-      }
-      .sender-flat-btn.is-disabled,
-      .sender-flat-btn:disabled {
-        cursor: not-allowed;
-        opacity: 0.55;
-      }
-      /* 模型作为主标题，比其余项更醒目 */
-      .sender-flat-btn-model {
-        color: ${token.colorText};
-        font-weight: 500;
-      }
-      .sender-flat-model-label,
-      .sender-flat-label {
-        display: block;
-        min-width: 0;
-        max-width: 200px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .sender-flat-model-label {
-        max-width: 220px;
-      }
-      .sender-flat-sep {
-        width: 1px;
-        height: 16px;
-        flex: none;
-        margin: 0 4px;
-        background: ${token.colorBorderSecondary};
-      }
-      .sender-flat-project {
-        display: flex;
-        min-width: 0;
-        align-items: center;
-        gap: 1px;
-      }
-      .sender-flat-clear {
-        display: grid;
-        width: 26px;
-        height: 26px;
-        flex: none;
-        place-items: center;
-        border: 0;
-        border-radius: 6px;
-        padding: 0;
-        background: transparent;
-        color: ${token.colorTextTertiary};
-        cursor: pointer;
-      }
-      .sender-flat-clear:hover:not(:disabled) {
-        background: ${token.colorFillTertiary};
-        color: ${token.colorText};
-      }
-      .sender-flat-clear:disabled {
-        cursor: not-allowed;
-        opacity: 0.5;
-      }
-
-      .sender-footer-row {
-        display: flex;
-        width: 100%;
-        min-height: 26px;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-      }
-      .sender-footer-primary,
-      .sender-footer-secondary {
-        display: flex;
-        min-width: 0;
-        align-items: center;
-      }
-      .sender-footer-primary {
-        gap: 3px;
-      }
-      .sender-footer-secondary {
-        flex: none;
-        gap: 6px;
-      }
-      .sender-stop-button {
-        display: grid;
-        width: 28px;
-        height: 28px;
-        flex: none;
-        place-items: center;
-        border: 1px solid ${token.colorError};
-        border-radius: 7px;
-        padding: 0;
-        background: color-mix(in srgb, ${token.colorError} 10%, transparent);
-        color: ${token.colorError};
-        cursor: pointer;
-        transition:
-          background ${token.motionDurationMid} ${token.motionEaseInOut},
-          color ${token.motionDurationMid} ${token.motionEaseInOut};
-      }
-      .sender-stop-button:hover {
-        background: ${token.colorError};
-        color: ${token.colorBgLayout};
-      }
-
-      .drop-overlay {
-        position: absolute;
-        inset: 0;
-        z-index: 20;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 13px;
-        font-weight: 600;
-        color: ${accent};
-        background: color-mix(in srgb, ${token.colorBgLayout} 82%, transparent);
-        border: 1.5px dashed ${accent};
-        border-radius: 13px;
-        pointer-events: none;
-      }
-
-      @media (max-width: 560px) {
-        .antd-sender-main {
-          min-height: 102px;
-          border-radius: 13px;
-        }
-        &.has-bottom-card .antd-sender-main {
-          border-radius: 13px 13px 0 0;
-        }
-        .sender-bottom-card {
-          min-height: auto;
-        }
-        .sender-bottom-row {
-          flex-wrap: wrap;
-          gap: 2px 4px;
-          padding: 2px 0;
-        }
-        .antd-sender-content {
-          padding-inline: 12px;
-        }
-        .antd-sender-footer {
-          padding-inline: 8px;
-        }
-        textarea {
-          font-size: 16px;
-        }
-        .sender-footer-row {
-          flex-wrap: wrap;
-          gap: 4px 8px;
-        }
-        .sender-footer-primary {
-          width: 100%;
-        }
-        .sender-footer-secondary {
-          margin-left: auto;
-        }
-      }
-    `,
-    // Sender footer slot 最外层容器（原 Tailwind flex w-full flex-col gap-2）
+    // Sender footer slot 最外层容器
     footerCol: css`
       display: flex;
       width: 100%;
@@ -1170,7 +774,7 @@ const hasSuggestion = computed(() => {
 
 // ============ 快捷指令组件（斜杠触发，含项目 / 全局 skills） ============
 const quickCommandsRef = ref<InstanceType<typeof QuickCommands> | null>(null);
-const senderRef = ref<InstanceType<typeof Sender> | null>(null);
+const senderLayoutRef = ref<InstanceType<typeof SenderLayout> | null>(null);
 
 const COMMAND_TITLES: Record<QuickCommandMeta["command"], string> = {
   goal: "🎯 Goal",
@@ -1203,7 +807,7 @@ const handleSuggestionSelect = (item: SenderSuggestion, remaining: string) => {
   }
   suggestionDismissedAtQuery.value = null;
   setTimeout(() => {
-    (senderRef.value as unknown as { focus?: () => void })?.focus?.();
+    (senderLayoutRef.value as unknown as { focus?: () => void })?.focus?.();
   }, 0);
 };
 
@@ -1268,7 +872,6 @@ const handleChange = (
 
 const stagedAttachments = computed(() => props.attachments);
 const setAttachments = (next: StagedAttachment[]) => emit("update:attachments", next);
-const dragActive = ref(false);
 const attachmentsPanelOpen = ref(false);
 type SenderHeaderPanel = "queue" | "attachments" | "permission";
 const activeHeaderPanel = ref<SenderHeaderPanel>("attachments");
@@ -1309,7 +912,7 @@ watch(hasPendingPermission, (pending) => {
   if (pending) activeHeaderPanel.value = "permission";
 });
 
-/** 打开附件面板并把文件交给业务侧上传（useComposerData.handleAttachmentsUpload）。 */
+/** 打开附件面板并把文件交给业务侧上传（拖拽 / 粘贴 / 选择三入口共用）。 */
 const stageFiles = (files: File[]) => {
   attachmentsPanelOpen.value = true;
   activeHeaderPanel.value = "attachments";
@@ -1319,24 +922,6 @@ const stageFiles = (files: File[]) => {
 /** Sender 的 onPasteFile：粘贴文件（含截图）时加入附件。 */
 const handlePasteFile = (files: FileList) => {
   stageFiles(Array.from(files));
-};
-
-const handleDragOver = (event: DragEvent) => {
-  event.preventDefault();
-  if (event.dataTransfer?.types.includes("Files")) dragActive.value = true;
-};
-
-const handleDragLeave = (event: DragEvent) => {
-  if (event.target === event.currentTarget) dragActive.value = false;
-};
-
-const handleDrop = (event: DragEvent) => {
-  dragActive.value = false;
-  const files = event.dataTransfer?.files;
-  if (files?.length) {
-    event.preventDefault();
-    stageFiles(Array.from(files));
-  }
 };
 
 const removeAttachment = (index: number) => {
@@ -1461,319 +1046,272 @@ const chipClass = (active: boolean, disabled = false) => {
 </script>
 
 <template>
-  <section
-    class="chat-footer"
-    :class="[styles.chatFooter, { 'has-bottom-card': showBottomCard }]"
-    aria-label="消息输入区"
-    @dragover.prevent="handleDragOver"
-    @dragleave="handleDragLeave"
-    @drop="handleDrop"
+  <!-- 壳层布局（浮层 / 底部卡片 / 拖拽遮罩 / Sender 覆写）在 SenderLayout，
+       业务面板与工具行经 slots 组合进去；副作用全部经事件上抛。 -->
+  <SenderLayout
+    ref="senderLayoutRef"
+    :value="modelValue"
+    :slot-config="senderSlotConfig"
+    :loading="false"
+    :skill="activeSkill"
+    placeholder="做什么都可以... 输入 / 唤起指令与技能"
+    :disabled="disabled || (agentMode && !agentAvailable)"
+    :has-bottom-card="showBottomCard"
+    :header-variant="hasSuggestion ? 'float' : 'card'"
+    :header-navigable="hasHeaderNavigation"
+    :on-change="handleChange"
+    :on-submit="handleSubmit"
+    :on-key-down="handleSenderKeyDown"
+    :on-cancel="() => emit('cancel')"
+    :on-paste-file="handlePasteFile"
+    @compositionstart="handleCompositionStart"
+    @compositionend="handleCompositionEnd"
+    @header-nav="switchHeaderPanel"
+    @drop-files="stageFiles"
   >
-    <!-- 定位锚点：header 浮层 / Sender / 底部卡片共用一个 wrapper，
-         浮层偏移量相对 wrapper 计算，外层布局变化不影响悬浮位置。 -->
-    <div class="sender-stack">
-      <!-- 由 Sender 外部承载，避免附件上传状态被 Sender slot 的渲染节奏延迟。 -->
-      <Transition name="sender-header">
-        <div
-          v-if="hasSuggestion || hasQueuedMessages || hasAttachmentPanel || pendingPermission"
-          class="sender-header-card"
-          :class="[
-            {
-              'has-permission': Boolean(pendingPermission),
-              'has-suggestion': hasSuggestion,
-              'has-navigation': hasHeaderNavigation,
-            },
-          ]"
-        >
-          <button
-            v-if="hasHeaderNavigation"
-            type="button"
-            class="sender-header-nav sender-header-nav-left"
-            aria-label="切换到上一个面板"
-            title="上一个面板"
-            @click="switchHeaderPanel(-1)"
-          >
-            <ChevronLeft class="sender-header-nav-icon" />
-          </button>
-          <div :class="['sender-header-panel']">
-            <div v-if="hasSuggestion" class="quick-commands-inline">
-              <QuickCommands
-                ref="quickCommandsRef"
-                :model-value="modelValue"
-                :is-oh-my-pi="isOhMyPi"
-                :skills="props.skills"
-                @select="handleSuggestionSelect"
-                @close="dismissSuggestion"
-              />
-            </div>
-            <QueuePanel
-              v-else-if="visibleHeaderPanel === 'queue'"
-              :queued-messages="queuedMessages"
-              :queue-paused="queuePaused"
-              :loading="loading"
-              @change="(id, content) => emit('queuedMessageChange', id, content)"
-              @remove="(id) => emit('queuedMessageRemove', id)"
-              @clear="emit('queuedMessageClear')"
-              @send="emit('queuedMessageSend')"
-            />
-            <AttachmentPanel
-              v-else-if="visibleHeaderPanel === 'attachments'"
-              :attachments="stagedAttachments"
-              @remove="removeAttachment"
-              @upload="stageFiles"
-            />
-            <PermissionRequestPanel
-              v-else-if="pendingPermission"
-              :request="pendingPermission"
-              @response="emit('permissionResponse', $event)"
-            />
-          </div>
-          <button
-            v-if="hasHeaderNavigation"
-            type="button"
-            class="sender-header-nav sender-header-nav-right"
-            aria-label="切换到下一个面板"
-            title="下一个面板"
-            @click="switchHeaderPanel(1)"
-          >
-            <ChevronRight class="sender-header-nav-icon" />
-          </button>
-        </div>
-      </Transition>
-      <Sender
-        ref="senderRef"
-        :value="modelValue"
-        :slot-config="senderSlotConfig"
-        :loading="false"
-        :skill="activeSkill"
-        placeholder="做什么都可以... 输入 / 唤起指令与技能"
-        :on-cancel="() => emit('cancel')"
-        :on-change="handleChange"
-        :on-submit="handleSubmit"
-        :on-key-down="handleSenderKeyDown"
-        :on-paste-file="handlePasteFile"
-        @compositionstart="handleCompositionStart"
-        @compositionend="handleCompositionEnd"
-        :suffix="false"
-        :disabled="disabled || (agentMode && !agentAvailable)"
-      >
-        <template #footer="{ defaultNode }">
-          <div :class="styles.footerCol">
-            <div class="sender-footer-row">
-              <!-- composer 左排：附件、推理、工作模式和文件工作区 -->
-              <div class="sender-footer-primary">
-                <Tooltip title="添加图片（支持粘贴 / 拖拽）">
-                  <button
-                    type="button"
-                    :class="chipClass(false)"
-                    aria-label="添加图片"
-                    :aria-expanded="attachmentsPanelOpen"
-                    @click="toggleAttachmentsPanel"
-                  >
-                    <ImagePlus
-                      class="!h-[12px] !w-[12px] flex-none"
-                      :class="stagedAttachments.length ? styles.textAccent : ''"
-                    />
-                  </button>
-                </Tooltip>
-                <Dropdown :menu="reasoningMenu" :trigger="['click']" placement="topLeft">
-                  <button
-                    type="button"
-                    :class="chipClass(thinkingEnabled)"
-                    aria-label="推理难度"
-                    title="推理难度"
-                  >
-                    <component
-                      :is="props.thinkingIcon"
-                      class="!h-[12px] !w-[12px] flex-none"
-                      :class="thinkingEnabled ? styles.textAccent : styles.textMutedStrong"
-                    />
-                    <span>{{ REASONING_LABEL[reasoningLevel] }}</span>
-                    <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
-                  </button>
-                </Dropdown>
-                <Dropdown
-                  :menu="permissionMenu"
-                  :trigger="['click']"
-                  placement="topLeft"
-                  :disabled="permissionLocked"
-                >
-                  <button
-                    type="button"
-                    :class="chipClass(true, permissionLocked)"
-                    aria-label="权限策略"
-                    :title="permissionLocked ? '该供应商固定为完全访问' : '权限策略'"
-                  >
-                    <ShieldCheck class="!h-[12px] !w-[12px] flex-none" :class="styles.textAccent" />
-                    <span>{{
-                      { supervised: "有监督", auto: "自动", full: "完全访问" }[props.permission]
-                    }}</span>
-                    <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
-                  </button>
-                </Dropdown>
-                <Dropdown :menu="modeMenu" :trigger="['click']" placement="topLeft">
-                  <button
-                    type="button"
-                    :class="chipClass(props.mode === 'plan')"
-                    aria-label="工作模式"
-                  >
-                    <ListTodo v-if="props.mode === 'plan'" class="!h-[12px] !w-[12px] flex-none" />
-                    <Hammer v-else class="!h-[12px] !w-[12px] flex-none" />
-                    <span>{{ props.mode === "plan" ? "Plan 模式" : "构建模式" }}</span>
-                    <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
-                  </button>
-                </Dropdown>
-                <Tooltip v-if="fileModeEnabled" title="文件工作区">
-                  <button
-                    type="button"
-                    :class="chipClass(fileModeEnabled)"
-                    :aria-pressed="fileModeEnabled"
-                    aria-label="文件工作区"
-                    @click="emit('fileModeChange', !fileModeEnabled)"
-                  >
-                    <component
-                      :is="props.fileIcon"
-                      class="!h-[12px] !w-[12px] flex-none"
-                      :class="fileModeEnabled ? styles.textAccent : ''"
-                    />
-                    <span>文件</span>
-                  </button>
-                </Tooltip>
-                <span v-if="runStateLabel" :class="styles.runState">{{ runStateLabel }}</span>
-              </div>
+    <!-- header 浮层：斜杠建议（float）或 队列 / 附件 / 权限 面板（card） -->
+    <template
+      v-if="hasSuggestion || hasQueuedMessages || hasAttachmentPanel || pendingPermission"
+      #header
+    >
+      <QuickCommands
+        v-if="hasSuggestion"
+        ref="quickCommandsRef"
+        :model-value="modelValue"
+        :is-oh-my-pi="isOhMyPi"
+        :skills="props.skills"
+        @select="handleSuggestionSelect"
+        @close="dismissSuggestion"
+      />
+      <QueuePanel
+        v-else-if="visibleHeaderPanel === 'queue'"
+        :queued-messages="queuedMessages"
+        :queue-paused="queuePaused"
+        :loading="loading"
+        @change="(id, content) => emit('queuedMessageChange', id, content)"
+        @remove="(id) => emit('queuedMessageRemove', id)"
+        @clear="emit('queuedMessageClear')"
+        @send="emit('queuedMessageSend')"
+      />
+      <AttachmentPanel
+        v-else-if="visibleHeaderPanel === 'attachments'"
+        :attachments="stagedAttachments"
+        @remove="removeAttachment"
+        @upload="stageFiles"
+      />
+      <PermissionRequestPanel
+        v-else-if="pendingPermission"
+        :request="pendingPermission"
+        @response="emit('permissionResponse', $event)"
+      />
+    </template>
 
-              <!-- composer 右排：模型选择（扁平按钮）+ 发送 + 独立停止会话 -->
-              <div class="sender-footer-secondary">
-                <Dropdown
-                  :menu="modelMenu"
-                  v-model:open="modelMenuOpen"
-                  :trigger="['click']"
-                  :disabled="!modelSelectionAvailable || agentConfiguring"
-                  placement="topRight"
-                >
-                  <button
-                    type="button"
-                    class="sender-flat-btn sender-flat-btn-model"
-                    :class="{ 'is-disabled': !modelSelectionAvailable || agentConfiguring }"
-                    :disabled="!modelSelectionAvailable || agentConfiguring"
-                    :aria-disabled="!modelSelectionAvailable || agentConfiguring"
-                    :aria-label="
-                      modelSelectionAvailable
-                        ? '选择模型'
-                        : agentMode
-                          ? currentModelLabel
-                          : '未配置模型'
-                    "
-                    :title="
-                      !modelSelectionAvailable
-                        ? agentMode
-                          ? currentModelLabel
-                          : '请先配置模型供应商'
-                        : undefined
-                    "
-                  >
-                    <ModelIcon v-if="brandedModel" :model="brandedModel" :size="13" />
-                    <Cpu
-                      v-else
-                      class="!h-[13px] !w-[13px] flex-none"
-                      :class="styles.textMutedStrong"
-                    />
-                    <span class="sender-flat-model-label">{{
-                      currentModelLabel || "选择模型"
-                    }}</span>
-                    <ChevronDown
-                      v-if="modelSelectionAvailable"
-                      class="!h-3 !w-3 flex-none"
-                      :class="styles.textMutedStrong"
-                    />
-                  </button>
-                </Dropdown>
-                <component :is="defaultNode" />
-                <Tooltip v-if="loading" title="停止会话">
-                  <button
-                    type="button"
-                    class="sender-stop-button"
-                    aria-label="停止会话"
-                    title="停止会话，保留待发送队列"
-                    @click="emit('cancel')"
-                  >
-                    <Square class="!h-[11px] !w-[11px] fill-current" />
-                  </button>
-                </Tooltip>
-              </div>
-            </div>
-          </div>
-        </template>
-      </Sender>
-      <!-- sender 底部卡片：项目目录 / Git 分支，去 pill 化后由卡片包裹，底部圆角与上方输入卡片连成一张 -->
-      <div v-if="showBottomCard" class="sender-bottom-card">
-        <div class="sender-bottom-row">
-          <div class="sender-flat-project" :class="{ 'is-selected': Boolean(projectPath) }">
-            <Dropdown
-              :menu="projectPathMenu"
-              :trigger="['click']"
-              placement="topLeft"
-              :disabled="loading || projectPathPicking"
-            >
+    <!-- Sender footer：chips 工具行 + 模型选择 + 发送（defaultNode）+ 停止 -->
+    <template #footer="{ defaultNode }">
+      <div :class="styles.footerCol">
+        <div class="sender-footer-row">
+          <!-- composer 左排：附件、推理、工作模式和文件工作区 -->
+          <div class="sender-footer-primary">
+            <Tooltip title="添加图片（支持粘贴 / 拖拽）">
               <button
                 type="button"
-                class="sender-flat-btn"
-                :class="{ 'is-disabled': loading || projectPathPicking }"
-                :aria-pressed="Boolean(projectPath)"
-                aria-label="项目工作目录"
-                :title="projectPathPicking ? '等待系统目录选择器' : projectPathName || '无文件目录'"
-                :disabled="loading || projectPathPicking"
+                :class="chipClass(false)"
+                aria-label="添加图片"
+                :aria-expanded="attachmentsPanelOpen"
+                @click="toggleAttachmentsPanel"
               >
-                <FolderOpen
-                  class="!h-[13px] !w-[13px] flex-none"
-                  :class="projectPath ? styles.textAccent : styles.textMutedStrong"
+                <ImagePlus
+                  class="!h-[12px] !w-[12px] flex-none"
+                  :class="stagedAttachments.length ? styles.textAccent : ''"
                 />
-                <span class="sender-flat-label">
-                  {{ projectPathName || "无文件目录" }}
-                </span>
+              </button>
+            </Tooltip>
+            <Dropdown :menu="reasoningMenu" :trigger="['click']" placement="topLeft">
+              <button
+                type="button"
+                :class="chipClass(thinkingEnabled)"
+                aria-label="推理难度"
+                title="推理难度"
+              >
+                <component
+                  :is="props.thinkingIcon"
+                  class="!h-[12px] !w-[12px] flex-none"
+                  :class="thinkingEnabled ? styles.textAccent : styles.textMutedStrong"
+                />
+                <span>{{ REASONING_LABEL[reasoningLevel] }}</span>
                 <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
               </button>
             </Dropdown>
-            <Tooltip v-if="projectPath" title="清除项目目录">
+            <Dropdown
+              :menu="permissionMenu"
+              :trigger="['click']"
+              placement="topLeft"
+              :disabled="permissionLocked"
+            >
               <button
                 type="button"
-                class="sender-flat-clear"
-                aria-label="清除项目目录"
-                :disabled="loading || projectPathPicking"
-                @click="clearProjectPath"
+                :class="chipClass(true, permissionLocked)"
+                aria-label="权限策略"
+                :title="permissionLocked ? '该供应商固定为完全访问' : '权限策略'"
               >
-                <X class="!h-[11px] !w-[11px]" />
+                <ShieldCheck class="!h-[12px] !w-[12px] flex-none" :class="styles.textAccent" />
+                <span>{{
+                  { supervised: "有监督", auto: "自动", full: "完全访问" }[props.permission]
+                }}</span>
+                <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
+              </button>
+            </Dropdown>
+            <Dropdown :menu="modeMenu" :trigger="['click']" placement="topLeft">
+              <button type="button" :class="chipClass(props.mode === 'plan')" aria-label="工作模式">
+                <ListTodo v-if="props.mode === 'plan'" class="!h-[12px] !w-[12px] flex-none" />
+                <Hammer v-else class="!h-[12px] !w-[12px] flex-none" />
+                <span>{{ props.mode === "plan" ? "Plan 模式" : "构建模式" }}</span>
+                <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
+              </button>
+            </Dropdown>
+            <Tooltip v-if="fileModeEnabled" title="文件工作区">
+              <button
+                type="button"
+                :class="chipClass(fileModeEnabled)"
+                :aria-pressed="fileModeEnabled"
+                aria-label="文件工作区"
+                @click="emit('fileModeChange', !fileModeEnabled)"
+              >
+                <component
+                  :is="props.fileIcon"
+                  class="!h-[12px] !w-[12px] flex-none"
+                  :class="fileModeEnabled ? styles.textAccent : ''"
+                />
+                <span>文件</span>
+              </button>
+            </Tooltip>
+            <span v-if="runStateLabel" :class="styles.runState">{{ runStateLabel }}</span>
+          </div>
+
+          <!-- composer 右排：模型选择（扁平按钮）+ 发送 + 独立停止会话 -->
+          <div class="sender-footer-secondary">
+            <Dropdown
+              :menu="modelMenu"
+              v-model:open="modelMenuOpen"
+              :trigger="['click']"
+              :disabled="!modelSelectionAvailable || agentConfiguring"
+              placement="topRight"
+            >
+              <button
+                type="button"
+                class="sender-flat-btn sender-flat-btn-model"
+                :class="{ 'is-disabled': !modelSelectionAvailable || agentConfiguring }"
+                :disabled="!modelSelectionAvailable || agentConfiguring"
+                :aria-disabled="!modelSelectionAvailable || agentConfiguring"
+                :aria-label="
+                  modelSelectionAvailable
+                    ? '选择模型'
+                    : agentMode
+                      ? currentModelLabel
+                      : '未配置模型'
+                "
+                :title="
+                  !modelSelectionAvailable
+                    ? agentMode
+                      ? currentModelLabel
+                      : '请先配置模型供应商'
+                    : undefined
+                "
+              >
+                <ModelIcon v-if="brandedModel" :model="brandedModel" :size="13" />
+                <Cpu v-else class="!h-[13px] !w-[13px] flex-none" :class="styles.textMutedStrong" />
+                <span class="sender-flat-model-label">{{ currentModelLabel || "选择模型" }}</span>
+                <ChevronDown
+                  v-if="modelSelectionAvailable"
+                  class="!h-3 !w-3 flex-none"
+                  :class="styles.textMutedStrong"
+                />
+              </button>
+            </Dropdown>
+            <component :is="defaultNode" />
+            <Tooltip v-if="loading" title="停止会话">
+              <button
+                type="button"
+                class="sender-stop-button"
+                aria-label="停止会话"
+                title="停止会话，保留待发送队列"
+                @click="emit('cancel')"
+              >
+                <Square class="!h-[11px] !w-[11px] fill-current" />
               </button>
             </Tooltip>
           </div>
+        </div>
+      </div>
+    </template>
 
-          <span v-if="gitWorkspace?.isRepository" class="sender-flat-sep" />
+    <!-- 底部卡片：项目目录 / Git 分支（与上方输入卡片连成一张卡片） -->
+    <template v-if="showBottomCard" #bottom>
+      <div class="sender-bottom-row">
+        <div class="sender-flat-project" :class="{ 'is-selected': Boolean(projectPath) }">
           <Dropdown
-            v-if="gitWorkspace?.isRepository"
-            :menu="gitBranchMenu"
+            :menu="projectPathMenu"
             :trigger="['click']"
             placement="topLeft"
-            :disabled="loading || props.gitBusy"
-            @open-change="handleGitMenuOpen"
+            :disabled="loading || projectPathPicking"
           >
             <button
               type="button"
               class="sender-flat-btn"
-              :class="{ 'is-disabled': loading || props.gitBusy }"
-              aria-label="Git 分支"
-              :title="gitBranchLabel"
-              :disabled="loading || props.gitBusy"
+              :class="{ 'is-disabled': loading || projectPathPicking }"
+              :aria-pressed="Boolean(projectPath)"
+              aria-label="项目工作目录"
+              :title="projectPathPicking ? '等待系统目录选择器' : projectPathName || '无文件目录'"
+              :disabled="loading || projectPathPicking"
             >
-              <GitBranch class="!h-[13px] !w-[13px] flex-none" :class="styles.textAccent" />
-              <span class="sender-flat-label">{{ gitBranchLabel }}</span>
+              <FolderOpen
+                class="!h-[13px] !w-[13px] flex-none"
+                :class="projectPath ? styles.textAccent : styles.textMutedStrong"
+              />
+              <span class="sender-flat-label">
+                {{ projectPathName || "无文件目录" }}
+              </span>
               <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
             </button>
           </Dropdown>
-
-          <div class="min-w-0 flex-1" />
+          <Tooltip v-if="projectPath" title="清除项目目录">
+            <button
+              type="button"
+              class="sender-flat-clear"
+              aria-label="清除项目目录"
+              :disabled="loading || projectPathPicking"
+              @click="clearProjectPath"
+            >
+              <X class="!h-[11px] !w-[11px]" />
+            </button>
+          </Tooltip>
         </div>
+
+        <span v-if="gitWorkspace?.isRepository" class="sender-flat-sep" />
+        <Dropdown
+          v-if="gitWorkspace?.isRepository"
+          :menu="gitBranchMenu"
+          :trigger="['click']"
+          placement="topLeft"
+          :disabled="loading || props.gitBusy"
+          @open-change="handleGitMenuOpen"
+        >
+          <button
+            type="button"
+            class="sender-flat-btn"
+            :class="{ 'is-disabled': loading || props.gitBusy }"
+            aria-label="Git 分支"
+            :title="gitBranchLabel"
+            :disabled="loading || props.gitBusy"
+          >
+            <GitBranch class="!h-[13px] !w-[13px] flex-none" :class="styles.textAccent" />
+            <span class="sender-flat-label">{{ gitBranchLabel }}</span>
+            <ChevronDown class="!h-3 !w-3 flex-none" :class="styles.textMutedStrong" />
+          </button>
+        </Dropdown>
+
+        <div class="min-w-0 flex-1" />
       </div>
-    </div>
-    <div v-if="dragActive" class="drop-overlay">松开以添加图片</div>
-  </section>
+    </template>
+  </SenderLayout>
 </template>
