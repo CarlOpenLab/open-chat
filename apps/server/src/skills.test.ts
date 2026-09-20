@@ -1,6 +1,6 @@
 /// <reference types="vite-plus/test/globals" />
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -73,6 +73,29 @@ describe("skills scanner", () => {
     expect(project[0].description).toBe("回退标题");
     expect(project[0].scope).toBe(".agents/skills");
     expect(global).toEqual([]);
+  });
+
+  it("scans skills installed as symlinks and skips links that are not skill directories", async () => {
+    // cc-switch 的安装方式：真实内容留在自己的库目录，CLI skills 目录里放 symlink
+    writeSkill(join(directory, "store", "brainstorming"), {
+      description: "发散讨论",
+    });
+    mkdirSync(join(directory, "home", ".claude/skills"), { recursive: true });
+    writeFileSync(join(directory, "store", "loose.md"), "# 只是个文件\n");
+    const root = join(directory, "home", ".claude/skills");
+    symlinkSync(join(directory, "store", "brainstorming"), join(root, "brainstorming"));
+    symlinkSync(join(directory, "store", "loose.md"), join(root, "loose-link"));
+    symlinkSync(join(directory, "store", "gone"), join(root, "stale"));
+
+    const { global } = await readSkillsFromRoots([
+      { base: join(directory, "home"), source: "global" },
+    ]);
+
+    expect(global.map((skill) => skill.name)).toEqual(["brainstorming"]);
+    expect(global[0]).toMatchObject({
+      description: "发散讨论",
+      scope: ".claude/skills",
+    });
   });
 
   it("ignores hidden directories and plain files inside skill roots", async () => {

@@ -117,6 +117,28 @@ export function getQuickCommandsForAgent(isOhMyPi: boolean): QuickCommandMeta[] 
   return QUICK_COMMANDS;
 }
 
+// ============ Skill 唤起语法（各 CLI 不同，展示与提交都必须按目标 CLI 还原） ============
+
+/**
+ * skill 唤起写法：claude / opencode 注册成 `/name`；codex 只认 `$name` mention
+ * （斜杠开头会被当成它自己的 TUI 指令，回 "Unknown command"）；pi / omp 的命令表里
+ * 是 `/skill:name`（pi 的 _expandSkillCommand 只展开该前缀）。
+ */
+export type SkillCommandSyntax = "slash" | "namespaced" | "mention";
+
+export function skillCommandSyntax(agentId: string, isOhMyPi: boolean): SkillCommandSyntax {
+  const id = agentId.trim().toLowerCase();
+  if (isOhMyPi || id === "pi" || id === "omp") return "namespaced";
+  if (id === "codex") return "mention";
+  return "slash";
+}
+
+export function formatSkillCommand(syntax: SkillCommandSyntax, name: string): string {
+  if (syntax === "mention") return `$${name}`;
+  if (syntax === "namespaced") return `/skill:${name}`;
+  return `/${name}`;
+}
+
 // ============ "/" suggestion：内置指令 + 项目 / 全局 Skills ============
 
 export type SenderSuggestion =

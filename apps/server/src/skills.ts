@@ -90,8 +90,14 @@ async function scanSkillRoot(
   } catch {
     return [];
   }
+  // 符号链接也算候选目录：cc-switch 这类安装器把 skill 以 symlink 挂进各 CLI 的
+  // skills 目录（~/.claude/skills/<name> -> ~/.cc-switch/skills/<name>），dirent 只标记
+  // isSymbolicLink，按 isDirectory 过滤会整片漏掉。指向文件 / 断链的条目由
+  // readSkillSummary 的读取失败兜底，不影响其余条目。
   const dirs = entries
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .filter(
+      (entry) => (entry.isDirectory() || entry.isSymbolicLink()) && !entry.name.startsWith("."),
+    )
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right))
     .slice(0, MAX_SKILLS_PER_ROOT);

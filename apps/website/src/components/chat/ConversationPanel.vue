@@ -72,6 +72,7 @@ const ws = useWorkspace();
       :agent-mode="ws.isAcpAgent"
       :agent-available="ws.activeAgent.available"
       :agent-configuring="ws.acpSessionLoading"
+      :agent-id="ws.activeAgent.id"
       :is-oh-my-pi="ws.isPiAgent"
       :git-workspace="ws.gitWorkspace"
       :git-busy="ws.gitWorkspaceBusy"

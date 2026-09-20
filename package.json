@@ -14,7 +14,7 @@
     "build": "pnpm open-chat --build",
     "build:cli": "vp run @cc-heart/open-chat#build",
     "build:package": "vp run website#build && vp run @cc-heart/open-chat#build && node tools/open-chat/scripts/stage-package.mjs",
-    "prepare": "vp config && pnpm run build:vendor",
+    "prepare": "vp config && node tools/ensure-vendor.mjs && pnpm run build:vendor",
     "build:vendor": "pnpm --filter 'acp-hub-*' run build",
     "kill": "lsof -ti :3000 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :8082 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :4311 -sTCP:LISTEN | xargs kill -9 2>/dev/null; echo \"ports 3000/8082/4311 cleaned\"",
     "kill:all": "lsof -ti :3000 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :8082 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :5173 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :4311 -sTCP:LISTEN | xargs kill -9 2>/dev/null; echo \"all dev ports cleaned\""

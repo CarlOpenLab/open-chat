@@ -3,12 +3,19 @@ import { computed, ref, watch, onBeforeUnmount } from "vue";
 import type { SkillsIndex } from "../../services/ai";
 import { createStyles } from "../../theme/antdvStyle";
 import type { AccentGlobalToken } from "../../theme/shadcnTheme";
-import { filterSuggestionGroups, type SenderSuggestion } from "../../utils/senderCommands";
+import {
+  filterSuggestionGroups,
+  formatSkillCommand,
+  type SenderSuggestion,
+  type SkillCommandSyntax,
+} from "../../utils/senderCommands";
 
 interface Props {
   modelValue: string;
   visible?: boolean;
   isOhMyPi?: boolean;
+  /** 当前 CLI 的 skill 唤起语法（codex `$name` / pi、omp `/skill:name` / 其余 `/name`）。 */
+  skillSyntax?: SkillCommandSyntax;
   /** 项目 / 全局 skills（Agent 会话才由 ChatInput 拉取）；空列表时对应分组隐藏。 */
   skills?: SkillsIndex | null;
 }
@@ -21,6 +28,7 @@ interface Emits {
 const props = withDefaults(defineProps<Props>(), {
   visible: true,
   isOhMyPi: false,
+  skillSyntax: "slash",
   skills: null,
 });
 
@@ -291,7 +299,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleGlobalKeydown)
               item.kind === "command" ? item.icon : "🧩"
             }}</span>
             <span class="quick-commands-label">
-              /{{ item.name }}
+              {{
+                item.kind === "command"
+                  ? `/${item.name}`
+                  : formatSkillCommand(skillSyntax, item.name)
+              }}
               <span
                 v-if="item.kind === 'skill'"
                 class="quick-commands-scope"

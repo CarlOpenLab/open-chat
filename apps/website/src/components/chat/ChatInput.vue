@@ -31,7 +31,9 @@ import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../../utils/projec
 import {
   filterSuggestionGroups,
   formatCommandForModel,
+  formatSkillCommand,
   parseSenderCommand,
+  skillCommandSyntax,
 } from "../../utils/senderCommands";
 import type { QuickCommandMeta, SenderSuggestion } from "../../utils/senderCommands";
 import ModelIcon from "../Icons/ModelIcon.vue";
@@ -66,6 +68,8 @@ interface Props {
   pendingPermission?: PermissionRequest | null;
   /** 是否为 Oh My Pi（pi/omp）会话，快捷指令优先展示 Goal/Review */
   isOhMyPi?: boolean;
+  /** 当前 CLI agent id：决定 skill 唤起写法（codex `$name` / pi、omp `/skill:name` / 其余 `/name`） */
+  agentId?: string;
   /** 深度思考 chip 的图标，可配置（默认 BrainCircuit） */
   thinkingIcon?: Component;
   /** 文件工作区 chip 的图标，可配置（默认 FolderOpen） */
@@ -134,6 +138,7 @@ const props = withDefaults(defineProps<Props>(), {
   projectPathOptions: () => [],
   projectPathEnabled: false,
   isOhMyPi: false,
+  agentId: "",
   gitWorkspace: null,
   gitBusy: false,
   projectPathPicking: false,
@@ -1117,6 +1122,9 @@ const activeSkill = ref<SkillType | undefined>(undefined);
  */
 const activeSkillName = ref<string | null>(null);
 
+/** 当前 CLI 的 skill 唤起语法：选中 tag 与提交文本都按它还原，避免 codex 收到 "/name"。 */
+const skillSyntax = computed(() => skillCommandSyntax(props.agentId, Boolean(props.isOhMyPi)));
+
 /** 同步 Sender 的 slot 文本与外部 modelValue，避免 ProseMirror 侧残留 "/"（tag + / 问题）。 */
 const senderSlotConfig = computed(() => {
   if (!activeSkill.value) return undefined;
@@ -1190,10 +1198,10 @@ const handleSuggestionSelect = (item: SenderSuggestion, remaining: string) => {
     emit("update:modelValue", nextValue);
     emit("change", nextValue);
   } else {
-    // skill 选中后凸显为可关闭的 Sender tag，正文只留参数；提交时还原为 "/name 参数"
+    // skill 选中后凸显为可关闭的 Sender tag，正文只留参数；提交时还原为当前 CLI 的唤起写法
     activeSkill.value = {
       value: `skill:${item.name}`,
-      title: `🧩 /${item.name}`,
+      title: `🧩 ${formatSkillCommand(skillSyntax.value, item.name)}`,
       closable: { disabled: false },
     };
     activeSkillName.value = item.name;
@@ -1360,8 +1368,10 @@ const handleSubmit = (value: string, _slotConfig?: unknown[], submittedSkill?: S
       skillCommand = { command: "review", rawGoal: prompt };
       submitText = `🔍 复审指令：${prompt}`;
     } else if (activeSkillName.value) {
-      // skill tag：还原为 "/name 参数" 原样发送，由 Agent CLI 自行解析执行
-      submitText = `/${activeSkillName.value}${prompt ? ` ${prompt}` : ""}`;
+      // skill tag：还原为当前 CLI 认的唤起文本（claude/opencode "/name"、codex "$name"、
+      // pi/omp "/skill:name"），由 Agent CLI 自行解析执行
+      const token = formatSkillCommand(skillSyntax.value, activeSkillName.value);
+      submitText = `${token}${prompt ? ` ${prompt}` : ""}`;
     }
   } else if (parsed) {
     submitText = formatCommandForModel(parsed);
@@ -1501,6 +1511,7 @@ const chipClass = (active: boolean, disabled = false) => {
                 ref="quickCommandsRef"
                 :model-value="modelValue"
                 :is-oh-my-pi="isOhMyPi"
+                :skill-syntax="skillSyntax"
                 :skills="props.skills"
                 @select="handleSuggestionSelect"
                 @close="dismissSuggestion"

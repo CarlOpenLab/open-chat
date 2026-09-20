@@ -314,12 +314,9 @@ const cancelEditSession = () => {
                   :value="task.dueAt ? localDateOf(task.dueAt) : null"
                   value-format="YYYY-MM-DD"
                   format="YYYY-MM-DD"
-                  allow-clear
                   placeholder="选择日期"
                   class="w-full"
                   allow-clear
-                  placeholder="无截止日期"
-                  format="YYYY-MM-DD"
                   @change="
                     (v: string | null) =>
                       emit('updateTask', task!.id, { dueAt: v ? dueAtFromPicker(v) : null })

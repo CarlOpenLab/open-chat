@@ -79,6 +79,9 @@ port, opens your browser at `http://127.0.0.1:8082`, and stops cleanly on
 
 First run notes:
 
+- **Plain `git clone` is enough.** `vp install` initializes the vendored
+  `vendor/acp-hub` submodule and compiles its `acp-hub-*` workspace packages
+  before the server starts; skipping that step leaves them unresolvable.
 - **No configuration file — nothing to set up.** The gateway runs on built-in
   defaults and auto-discovers the CLI agents installed on your machine: codex /
   claude / pi / opencode / omp (Oh My Pi). Base CLI commands are found on

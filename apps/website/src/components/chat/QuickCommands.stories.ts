@@ -42,6 +42,7 @@ const meta: Meta<typeof QuickCommands> = {
       description: "输入区内容；以 / 开头时展示建议面板",
     },
     isOhMyPi: { control: "boolean" },
+    skillSyntax: { control: "select", options: ["slash", "namespaced", "mention"] },
   },
 };
 
@@ -58,5 +59,10 @@ export const Filtered: Story = {
 
 /** Oh My Pi：Goal / Review 置顶并带专属徽标。 */
 export const OhMyPi: Story = {
-  args: { isOhMyPi: true },
+  args: { isOhMyPi: true, skillSyntax: "namespaced" },
+};
+
+/** Codex：skill 以 `$name` mention 展示（提交时同样发 `$name`）。 */
+export const CodexSkills: Story = {
+  args: { skillSyntax: "mention" },
 };

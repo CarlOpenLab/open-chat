@@ -46,6 +46,7 @@ const meta: Meta<typeof ChatInput> = {
     permissionLocked: false,
     pendingPermission: null,
     isOhMyPi: false,
+    agentId: "claude",
     // ===== 受控业务数据（Phase 1 起由 useComposerData 承载，stories 直接 mock） =====
     gitWorkspace: null,
     gitBusy: false,
