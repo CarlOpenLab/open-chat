@@ -39,6 +39,9 @@ const useStyles = createStyles(({ token, css }) => {
   return {
     card: css`
       width: 100%;
+      background: ${token.colorBgContainer};
+      box-shadow: ${token.boxShadowSecondary};
+      padding: 6px;
 
       .quick-commands-list {
         overflow-y: auto;
