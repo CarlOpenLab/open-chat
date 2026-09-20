@@ -1502,9 +1502,15 @@ const startAcpLiveStream = () => {
   if (!conversation) return;
   if (acpRunState.value?.state !== "running") return;
   if (activeSessionRuns.has(conversationId)) return;
+  // acpSession 由 refreshAcpSession 异步写入：切换/新建会话后的一小段时间里它仍然
+  // 指向上一个会话（acpRunState 同理）。此时用它的 conversationId 订阅会把上一个
+  // 会话的流快照（整段历史消息）灌进当前会话——新建的会话直接显示上一个会话的内容。
+  // 因此只订阅「已确认属于当前会话」的那条流；等刷新回来后 watcher 会再次触发。
+  const loaded = acpSession.value;
+  if (!loaded || loaded.conversationId !== conversationId) return;
   // 实时流注册表按网关会话 id 索引；UI key 与其一致（refreshAcpSession 返回的
   // conversationId），仅消息更新与队列状态继续使用 UI key。
-  const streamConversationId = acpSession.value?.conversationId || conversationId;
+  const streamConversationId = loaded.conversationId;
   const streamKey = `${activeAgentId.value}:${streamConversationId}`;
   if (acpStreamController.value && acpStreamConversationKey === streamKey) return;
   stopAcpLiveStream();

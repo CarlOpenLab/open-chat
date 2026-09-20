@@ -35,12 +35,12 @@ export async function readProviderFileHistory(
   try {
     switch (agent.transport) {
       case "codex":
-        return readCodexSessionHistory(agent, sessionId, cwd);
+        return await readCodexSessionHistory(agent, sessionId, cwd);
       case "claude":
-        return readClaudeSessionHistory(sessionId);
+        return await readClaudeSessionHistory(sessionId);
       case "pi":
       case "omp":
-        return readPiSessionHistory(sessionId, cwd, agent.transport);
+        return await readPiSessionHistory(sessionId, cwd, agent.transport);
       default:
         return [];
     }
@@ -151,7 +151,7 @@ async function readCodexSessionHistory(
 ): Promise<TranscriptMessage[]> {
   const executable = resolveExecutable(agent.cliCommand || agent.command);
   if (!executable || !threadId) return [];
-  const turns = await readCodexTurns(executable, threadId, cwd, agent.args);
+  const turns = await readCodexTurns(executable, threadId, cwd);
   return convertCodexThreadHistory(turns, { importImage: importCodexImageAttachment });
 }
 
@@ -181,35 +181,35 @@ function importCodexImageAttachment(name: string, dataBase64: string): Transcrip
  */
 const CODEX_READ_TURNS_TIMEOUT_MS = 6_000;
 
+/**
+ * 读取一个已持久化 thread 的 turns。
+ *
+ * 优先级：`thread/read` → 本地 rollout 文件 → `thread/turns/list` 摘要。
+ * app-server 的启动/握手失败（CLI 缺失、被本机包装脚本改写参数等）与
+ * `thread/read` 阻塞（会话被另一个 Codex 客户端占用）都只降级、不中断：
+ * rollout 是纯文件读取，与 app-server 无关，仍能拿到完整 turns（含图片）。
+ *
+ * 注意：这里只能传 codex CLI 自己的参数——`command`/`args` 是 ACP 桥接
+ * （npx acp-extension-codex）的启动命令，透传给 CLI 会直接 usage 报错退出。
+ */
 async function readCodexTurns(
   executable: string,
   threadId: string,
   cwd: string,
-  extraArgs: string[],
 ): Promise<unknown[]> {
-  let exited: Error | null = null;
-  const rpc = new JsonRpcProcess(
-    executable,
-    ["app-server", "--stdio", ...extraArgs],
-    cwd,
-    () => {},
-    (error) => {
-      exited = error;
-    },
-  );
+  const rpc = new JsonRpcProcess(executable, ["app-server", "--stdio"], cwd, () => {});
   try {
-    await rpc.request("initialize", {
-      clientInfo: { name: "open-chat", title: "Open Chat", version: "0.1.0" },
-      capabilities: { experimentalApi: true },
-    });
-    rpc.notify("initialized", {});
     try {
+      await rpc.request("initialize", {
+        clientInfo: { name: "open-chat", title: "Open Chat", version: "0.1.0" },
+        capabilities: { experimentalApi: true },
+      });
+      rpc.notify("initialized", {});
       const response = await rpc.request(
         "thread/read",
         { threadId, includeTurns: true },
         CODEX_READ_TURNS_TIMEOUT_MS,
       );
-      if (exited) throw exited;
       const thread = asRecord(response.result)?.thread;
       const turns = Array.isArray(asRecord(thread)?.turns)
         ? (asRecord(thread)?.turns as unknown[])
@@ -217,18 +217,19 @@ async function readCodexTurns(
       if (turns.length > 0) return turns;
     } catch (error) {
       console.error(
-        `[codex] thread/read blocked (another Codex client may hold the session), ` +
-          `falling back to local rollout:`,
-        error,
+        `[codex] thread/read unavailable (app-server exited or another Codex client ` +
+          `holds the session), falling back to local rollout: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    // 第二回退：直接读本地 rollout 文件。占用时也能拿到完整 turns（含图片）。
+    // 回退 1：直接读本地 rollout 文件。app-server 不可用/被占用时也能拿到完整 turns。
     const rolloutTurns = await readCodexRolloutTurns(threadId);
     if (rolloutTurns.length > 0) return rolloutTurns;
     console.error(
       `[codex] local rollout read empty for ${threadId}, falling back to thread/turns/list`,
     );
-    const summaryTurns = await listCodexTurns(rpc, threadId);
+    // 回退 2：分页列出 turn 摘要（需要 app-server 仍在线）。
+    const summaryTurns = await listCodexTurns(rpc, threadId).catch(() => []);
     if (summaryTurns.length > 0) return summaryTurns;
     throw new Error(`Codex 会话 ${threadId} 历史读取失败（thread/read 与回退读取均无返回）`);
   } finally {
@@ -284,13 +285,14 @@ class JsonRpcProcess {
     args: string[],
     cwd: string,
     onNotification: (message: Record<string, unknown>) => void,
-    onExit: (error: Error) => void,
   ) {
     this.child = spawn(executable, args, {
       cwd,
       ...cliSpawnOptions(executable),
       stdio: ["pipe", "pipe", "pipe"],
     });
+    // app-server 先退出时后续写入会 EPIPE；请求本身的失败由 failAll 上报。
+    this.child.stdin.on("error", () => {});
     let buffer = "";
     this.child.stdout.on("data", (chunk: Buffer) => {
       buffer += chunk.toString("utf8");
@@ -323,12 +325,9 @@ class JsonRpcProcess {
     });
     this.child.on("error", (error) => {
       this.failAll(error);
-      onExit(error);
     });
     this.child.on("exit", (code, signal) => {
-      const error = new Error(`Codex app-server 进程已退出（${signal || `code ${code}`}）`);
-      this.failAll(error);
-      onExit(error);
+      this.failAll(new Error(`Codex app-server 进程已退出（${signal || `code ${code}`}）`));
     });
   }
 

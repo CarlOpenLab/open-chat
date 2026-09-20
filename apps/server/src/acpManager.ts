@@ -17,6 +17,7 @@ import { cliProcessEnv, resolveExecutable } from "./commandEnv";
 import { GatewayError } from "./error";
 import { collectHubEvent, normalizeHubActivity, normalizeHubPlan } from "./transcript/adapters/hub";
 import { readProviderFileHistory } from "./historyReaders";
+import { findCodexRolloutFile } from "./codexRollout";
 import { defaultWorkspaceDir } from "./attachments";
 import { createTranscriptCollector } from "./transcript/core";
 import { writeTranscriptCustomEvent } from "./transcript/stream";
@@ -454,6 +455,8 @@ export class AcpManager {
     const adapter = await this.adapterFor(runtime);
     const cwd = projectPath || runtime.config.cwd || this.config.cwd || defaultWorkspaceDir();
     const normalizedProviderSessionId = providerSessionId?.trim();
+    /** 恢复不了、但历史仍可从本地文件渲染的 provider 会话 id（降级为新会话时用）。 */
+    let displacedProviderSessionId: string | undefined;
     if (normalizedProviderSessionId) {
       const loaded = this.sessionsByAcpId.get(normalizedProviderSessionId);
       if (loaded && loaded.agentId === runtime.config.id) {
@@ -468,36 +471,84 @@ export class AcpManager {
           `[acp:${runtime.config.id}] providerSessionId ${normalizedProviderSessionId} belongs to ` +
             `agent ${loaded.agentId}; starting a fresh session instead of cross-agent resume`,
         );
-      } else {
-        if (!this.supportsSessionLoad(runtime)) {
-          throw GatewayError.invalidRequest(`${runtime.config.name} 不支持恢复历史 ACP 会话`);
-        }
-
-        const acpSession = await adapter.createSession({
-          cwd,
-          resumeSessionId: normalizedProviderSessionId,
-        });
-        const entry = this.registerSession(runtime, conversationId, acpSession, key);
-        // 内置 CLI 持久化在原生格式里的历史（终端直开的会话）播种进 collector，
-        // 让深链/恢复的会话立即有完整可渲染的历史。
-        const history = await readProviderFileHistory(
-          runtime.config,
-          normalizedProviderSessionId,
-          cwd,
-          runtime.config.transport !== "acp",
+      } else if (!this.supportsSessionLoad(runtime)) {
+        throw GatewayError.invalidRequest(`${runtime.config.name} 不支持恢复历史 ACP 会话`);
+      } else if (!(await this.isResumableProviderSession(runtime, normalizedProviderSessionId))) {
+        // provider 已丢失该会话（见 isResumableProviderSession）：不把恢复失败
+        // 抛给客户端，按新会话开始（客户端会用返回的新 id 覆盖旧的）。
+        displacedProviderSessionId = normalizedProviderSessionId;
+        console.warn(
+          `[acp:${runtime.config.id}] provider session ${normalizedProviderSessionId} 无本地历史，` +
+            `无法恢复；按新会话开始`,
         );
-        if (history.length > 0) {
-          const collector = this.historyCollectors.get(normalizedProviderSessionId);
-          if (collector) {
-            collector.messages.push(...history);
-            collector.activeRole = "content";
-          }
+      } else {
+        try {
+          const acpSession = await adapter.createSession({
+            cwd,
+            resumeSessionId: normalizedProviderSessionId,
+          });
+          const entry = this.registerSession(runtime, conversationId, acpSession, key);
+          await this.seedSessionHistory(runtime, entry, normalizedProviderSessionId, cwd);
+          return entry;
+        } catch (error) {
+          // provider 读不了这个 thread（实测 codex 侧 `paginated_threads is not
+          // supported yet`：桥自带的 codex 版本读不了更新版本写下的历史）。
+          // 整条会话不能因此打不开：降级为新会话，历史仍从本地 rollout 渲染。
+          displacedProviderSessionId = normalizedProviderSessionId;
+          console.warn(
+            `[acp:${runtime.config.id}] session ${normalizedProviderSessionId} 无法恢复，` +
+              `按新会话开始：${error instanceof Error ? error.message : String(error)}`,
+          );
         }
-        return entry;
       }
     }
     const acpSession = await adapter.createSession({ cwd });
-    return this.registerSession(runtime, conversationId, acpSession, key);
+    const entry = this.registerSession(runtime, conversationId, acpSession, key);
+    if (displacedProviderSessionId) {
+      await this.seedSessionHistory(runtime, entry, displacedProviderSessionId, cwd);
+    }
+    return entry;
+  }
+
+  /**
+   * 把内置 CLI 持久化在原生格式里的历史（终端直开的会话 / 无法恢复的会话）播种进
+   * collector，让会话立即有完整可渲染的历史；读取失败或没有历史时保持空历史。
+   */
+  private async seedSessionHistory(
+    runtime: AcpRuntime,
+    entry: AcpSessionEntry,
+    providerSessionId: string,
+    cwd: string,
+  ): Promise<void> {
+    const history = await readProviderFileHistory(
+      runtime.config,
+      providerSessionId,
+      cwd,
+      runtime.config.transport !== "acp",
+    );
+    if (history.length === 0) return;
+    const collector = this.historyCollectors.get(entry.sessionId);
+    if (!collector) return;
+    collector.messages.push(...history);
+    collector.activeRole = "content";
+  }
+
+  /**
+   * provider 侧是否还能 `session/load` 这个 id。
+   *
+   * codex：`session/new` 只生成 thread id，rollout 文件
+   * （`~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<threadId>.jsonl`）要到该线程的
+   * 首个回合才落盘，而 `thread/resume` 恰恰以 rollout 为准。于是「打开过但没发过
+   * 消息」的会话，其 id 恢复必然失败（codex 回 `-32603 no rollout found for
+   * thread id <id>`，网关再包装成 502 弹到前端）。这里本地先判掉，直接开新会话。
+   * 其他 agent 一律按可恢复处理，保留其恢复失败的真实报错。
+   */
+  private async isResumableProviderSession(
+    runtime: AcpRuntime,
+    providerSessionId: string,
+  ): Promise<boolean> {
+    if (runtime.config.transport !== "codex") return true;
+    return (await findCodexRolloutFile(providerSessionId)) !== null;
   }
 
   /** 注册新会话：建 collector、登记索引、启动事件泵。 */
