@@ -1098,7 +1098,6 @@ const startAcpLiveStream = () => {
   const conversation = conversationList.value.find((item) => String(item.key) === conversationId);
   if (!conversation) return;
   if (acpRunState.value?.state !== "running") return;
-  if (activeSessionRuns.has(conversationId)) return;
   // acpSession 由 refreshAcpSession 异步写入：切换/新建会话后的一小段时间里它仍然
   // 指向上一个会话（acpRunState 同理）。此时用它的 conversationId 订阅会把上一个
   // 会话的流快照（整段历史消息）灌进当前会话——新建的会话直接显示上一个会话的内容。
@@ -1126,6 +1125,14 @@ const startAcpLiveStream = () => {
       // 先清运行态再刷新，避免「刷新与订阅之间回合恰好结束」的 204 立即
       // 重开同一条流形成紧绷请求循环。
       acpRunState.value = null;
+      // 副路径流结束时清理运行态，确保「工作中」指示器及时消失。
+      // XRequest 的 onSuccess/onError 可能因 native_event 帧解析问题未触发，
+      // 副路径是 ACP agent 流式传输的可靠完成信号。
+      if (outcome === "completed") {
+        finalizeSessionRun(conversationId, "success");
+      } else if (outcome === "failed") {
+        finalizeSessionRun(conversationId, "error");
+      }
       const manuallyStopped = manuallyStoppedConversationKeys.delete(conversationId);
       if (outcome === "failed") {
         failedHistoryRefreshLocks.add(conversationId);
@@ -1168,10 +1175,6 @@ const startAcpLiveStream = () => {
 };
 
 watch([acpRunState, isRequesting, currentConversationKey, activeAgentId], () => {
-  if (activeSessionRuns.has(currentConversationKey.value)) {
-    stopAcpLiveStream();
-    return;
-  }
   if (acpRunState.value?.state === "running") {
     startAcpLiveStream();
   } else {
@@ -1409,7 +1412,8 @@ const ensureActiveConversation = (systemPrompt = ""): OpenChatConversation | und
 
 const finalizeSessionRun = (convKey: string, outcome: "success" | "error" | "abort") => {
   const run = activeSessionRuns.get(convKey);
-  const startedAt = run?.startedAt ?? Date.now();
+  if (!run) return; // 已 finalize 或从未启动（幂等守卫）
+  const startedAt = run.startedAt;
   const runAgentId = run?.agentId ?? activeAgentId.value;
   const manuallyStopped = manuallyStoppedConversationKeys.delete(convKey) || outcome === "abort";
 
@@ -1532,8 +1536,18 @@ const runSessionRequest = (
   };
   activeSessionRuns.set(convKey, runEntry);
 
+  // ACP agent：乐观设置 running 状态，让 watcher 立即启动副路径流
+  // （/api/acp/session/stream）。否则副路径被 activeSessionRuns 守卫阻塞，
+  // 流式内容无法实时到达客户端，直到 refreshAcpSession 拉取完整历史。
+  if (isAcpAgent.value && usesAcpProtocol.value) {
+    acpRunState.value = { state: "running" };
+  }
+
   sessionProvider.request.options.callbacks = {
     onUpdate: (chunk: XModelResponse, responseHeaders: Headers) => {
+      // ACP agent 的副路径流是主流式机制，跳过此处避免双重处理。
+      // XRequest 可能无法正确解析 native_event 帧（非标准 OpenAI 格式）。
+      if (isAcpAgent.value && usesAcpProtocol.value) return;
       const currentConv = conversationList.value.find((item) => String(item.key) === convKey);
       if (!currentConv || !currentConv.messages) return;
 
@@ -1596,6 +1610,7 @@ const runSessionRequest = (
           updateConversationMessages(convKey, persistMessageTimings(convKey, msgs));
         }
       }
+      stopAcpLiveStream();
       finalizeSessionRun(convKey, "success");
     },
     onError: (error: Error, errorInfo?: unknown) => {
@@ -1633,6 +1648,7 @@ const runSessionRequest = (
           updateConversationMessages(convKey, persistMessageTimings(convKey, msgs));
         }
       }
+      stopAcpLiveStream();
       finalizeSessionRun(convKey, outcome);
     },
   };
