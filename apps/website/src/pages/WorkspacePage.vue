@@ -49,6 +49,12 @@ import {
 } from "../services/transcript";
 import { useChatModels, type ModelCatalogEntry } from "../composables/useChatModels";
 import { useComposerData } from "../composables/useComposerData";
+import {
+  collectStreamingAssistantMessages,
+  mergeStreamingWithHistory,
+  mergeStreamSnapshotWithLocal,
+  shouldReplaceHistoryWithServer,
+} from "../composables/workspace/useAcpHistoryMerge";
 import { useMessageTimings } from "../composables/workspace/useMessageTimings";
 import { useMessageView } from "../composables/workspace/useMessageView";
 import { useNotifications } from "../composables/workspace/useNotifications";
@@ -479,33 +485,37 @@ const refreshAcpSession = async (force = false) => {
         }
       }
       if (Array.isArray(session.messages) && session.messages.length > 0) {
-        const hasLocalError = hasPersistedError(conversation);
-        if (hasLocalError) {
-          const serverMessages = transcriptHistoryToModelMessages(session.messages);
-          const hasServerError = hasPersistedError({
-            messages: serverMessages,
-            lastError: undefined,
-          });
-          if (hasServerError) {
-            conversation.messages = serverMessages;
-            if (String(conversation.key) === currentConversationKey.value && !isRequesting.value) {
-              setMessages(conversation.messages);
-            }
-            showWelcome.value = false;
-          } else if (!conversation.messages?.length) {
-            conversation.messages = serverMessages;
-            if (String(conversation.key) === currentConversationKey.value && !isRequesting.value) {
-              setMessages(conversation.messages);
-            }
-            showWelcome.value = false;
-          }
-        } else {
-          conversation.messages = transcriptHistoryToModelMessages(session.messages);
-          if (String(conversation.key) === currentConversationKey.value && !isRequesting.value) {
+        // 回合进行中时服务端历史是过期的：当前 assistant 气泡还在该会话的消息
+        // 数组上增量累积（streamPendingOrigins + transformMessage），服务端此刻
+        // 尚未落任何输出。整表替换会抽走流式渲染的基底——「工作中」指示失去挂载
+        // 点而消失，本轮输出也永远不再出现。因此合并而非替换：保留服务端已完成的
+        // 历史，并保留正在累积的流式气泡。回合结束后该方法照旧整表替换。
+        const isCurrentConversation = String(conversation.key) === currentConversationKey.value;
+        const streamingMessages = collectStreamingAssistantMessages(
+          conversation.messages ?? [],
+          isConversationRunning,
+          String(conversation.key),
+        );
+        const serverMessages = transcriptHistoryToModelMessages(session.messages);
+        const canReplace = shouldReplaceHistoryWithServer({
+          localMessages: conversation.messages ?? [],
+          serverMessages,
+          hasLocalError: hasPersistedError(conversation),
+          hasServerError: hasPersistedError({ messages: serverMessages }),
+        });
+        if (streamingMessages.length) {
+          if (isCurrentConversation) {
+            conversation.messages = mergeStreamingWithHistory(streamingMessages, serverMessages);
             setMessages(conversation.messages);
           }
-          showWelcome.value = false;
+        } else if (canReplace) {
+          conversation.messages = serverMessages;
+          if (isCurrentConversation && !isRequesting.value) setMessages(conversation.messages);
+        } else if (isCurrentConversation && !isRequesting.value) {
+          // 情形 d：本地已是终止态，不用干净历史覆盖；仅同步一次渲染。
+          setMessages(conversation.messages ?? []);
         }
+        showWelcome.value = false;
       }
       schedulePersistState();
     }
@@ -1021,7 +1031,20 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
     try {
       const parsed = JSON.parse(data) as { messages?: unknown };
       if (Array.isArray(parsed.messages)) {
-        setMessages(transcriptHistoryToModelMessages(parsed.messages as TranscriptMessage[]));
+        // native 流的快照只在回合开始时抓一次，不含当前回合已产出的输出；
+        // 回合进行中整表采用它会抹掉正在累积的气泡（正文倒退、「工作中」失去
+        // 挂载点）。把本地的流式气泡拼回快照之后。
+        const snapshotMessages = transcriptHistoryToModelMessages(
+          parsed.messages as TranscriptMessage[],
+        );
+        setMessages(
+          mergeStreamSnapshotWithLocal(
+            snapshotMessages,
+            currentConversationMessages.value,
+            isConversationRunning,
+            currentConversationKey.value,
+          ),
+        );
         showWelcome.value = false;
       }
     } catch (err) {
