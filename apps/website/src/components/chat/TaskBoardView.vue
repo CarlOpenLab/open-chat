@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import { useNow } from "../../composables/useNow";
 import type { AgentView } from "../../services/acp";
-import type { Task } from "../../services/taskStorage";
+import type { Task } from "@cc-heart/open-chat-types";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
 import { createStyles } from "../../theme/antdvStyle";
 import {
@@ -312,7 +312,7 @@ const pickCreateProjectPath = async () => {
       <!-- 骨架屏：本地状态水合中 -->
       <BoardSkeleton v-if="loading" />
 
-      <div v-else class="flex gap-4.5 h-full min-w-max items-start">
+      <div v-else class="flex gap-4.5 h-full min-w-max items-stretch">
         <BoardColumn
           v-for="column in columns"
           :key="column.status"

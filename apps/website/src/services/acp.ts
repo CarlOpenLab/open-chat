@@ -1,6 +1,5 @@
-import { API_BASE_URL, GATEWAY_API_KEY } from "./ai";
-import { handleGatewayUnauthorized, requireGatewayAccess } from "./access";
 import type { TranscriptMessage } from "@cc-heart/open-chat-types";
+import { apiRequest, gatewayFetch } from "./http";
 
 export interface AcpAgentView {
   id: string;
@@ -76,18 +75,26 @@ export const API_AGENT: AgentView = {
   kind: "api",
 };
 
+/**
+ * @description 读取本地 agent 列表（首项固定为 Model API）。
+ * @returns {Promise<AgentView[]>} agent 列表
+ */
 export async function loadAcpAgents(): Promise<AgentView[]> {
-  requireGatewayAccess();
-  const response = await fetch(`${API_BASE_URL}/api/acp/agents`, {
-    headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
+  const data = await apiRequest<{ agents?: AcpAgentView[] }>("/api/acp/agents", {
+    errorMessage: "本地 Agent 加载失败",
   });
-  handleGatewayUnauthorized(response);
-  if (!response.ok) throw new Error(`本地 Agent 加载失败（HTTP ${response.status}）`);
-  const data = (await response.json()) as { agents?: AcpAgentView[] };
   const agents = Array.isArray(data.agents) ? data.agents : [];
   return [API_AGENT, ...agents.map((agent) => ({ ...agent, kind: "acp" as const }))];
 }
 
+/**
+ * @description 创建或复用 agent 会话，返回模型 / 模式配置、历史与运行状态。
+ * @param {string} agentId - agent id
+ * @param {string} conversationId - 前端会话 key
+ * @param {string} projectPath - 项目目录（空串用网关默认目录）
+ * @param {string} providerSessionId - 供应商真实会话 id（恢复历史用）
+ * @returns {Promise<AcpSessionState>} 会话状态
+ */
 export async function loadAcpSession(
   agentId: string,
   conversationId: string,
@@ -97,9 +104,21 @@ export async function loadAcpSession(
   const query = new URLSearchParams({ agentId, conversationId });
   if (projectPath.trim()) query.set("projectPath", projectPath.trim());
   if (providerSessionId.trim()) query.set("providerSessionId", providerSessionId.trim());
-  return requestAcpSession(`${API_BASE_URL}/api/acp/session?${query}`);
+  return apiRequest<AcpSessionState>(`/api/acp/session?${query}`, {
+    errorMessage: "Agent 会话请求失败",
+  });
 }
 
+/**
+ * @description 修改 agent 会话配置项（如模型）。
+ * @param {string} agentId - agent id
+ * @param {string} conversationId - 前端会话 key
+ * @param {string} configId - 配置项 id
+ * @param {string | boolean} value - 新值
+ * @param {string} projectPath - 项目目录
+ * @param {string} providerSessionId - 供应商真实会话 id
+ * @returns {Promise<AcpSessionState>} 更新后的会话状态
+ */
 export async function setAcpSessionConfig(
   agentId: string,
   conversationId: string,
@@ -108,17 +127,10 @@ export async function setAcpSessionConfig(
   projectPath = "",
   providerSessionId = "",
 ): Promise<AcpSessionState> {
-  return requestAcpSession(`${API_BASE_URL}/api/acp/session/config`, {
+  return apiRequest<AcpSessionState>("/api/acp/session/config", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      agentId,
-      conversationId,
-      configId,
-      value,
-      projectPath,
-      providerSessionId,
-    }),
+    json: { agentId, conversationId, configId, value, projectPath, providerSessionId },
+    errorMessage: "Agent 会话请求失败",
   });
 }
 
@@ -144,12 +156,9 @@ export function subscribeAcpSessionStream(
   void (async () => {
     let outcome: AcpSessionStreamOutcome = "disconnected";
     try {
-      requireGatewayAccess();
-      const response = await fetch(`${API_BASE_URL}/api/acp/session/stream?${query}`, {
-        headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
+      const response = await gatewayFetch(`/api/acp/session/stream?${query}`, {
         signal: controller.signal,
       });
-      handleGatewayUnauthorized(response);
       if (response.status === 204) {
         outcome = "completed";
         return;
@@ -215,43 +224,20 @@ export function subscribeAcpSessionStream(
   return controller;
 }
 
-/** 取消运行中的 ACP 回合（多标签 / 刷新恢复场景下停止孤儿回合）。 */
+/**
+ * @description 取消运行中的回合（多标签 / 刷新恢复场景下停止孤儿回合）；失败只记录日志。
+ * @param {string} agentId - agent id
+ * @param {string} conversationId - 前端会话 key
+ * @returns {Promise<void>}
+ */
 export async function cancelAcpTurn(agentId: string, conversationId: string): Promise<void> {
   try {
-    requireGatewayAccess();
-    const response = await fetch(`${API_BASE_URL}/api/acp/session/cancel`, {
+    await apiRequest("/api/acp/session/cancel", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : {}),
-      },
-      body: JSON.stringify({ agentId, conversationId }),
+      json: { agentId, conversationId },
+      errorMessage: "Agent 回合取消失败",
     });
-    handleGatewayUnauthorized(response);
-    if (!response.ok) {
-      throw new Error(`Agent turn cancellation failed (HTTP ${response.status})`);
-    }
   } catch (error) {
     console.error("Failed to cancel ACP turn:", error);
   }
-}
-
-async function requestAcpSession(url: string, init: RequestInit = {}): Promise<AcpSessionState> {
-  return requestJson<AcpSessionState>(url, init);
-}
-
-async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
-  requireGatewayAccess();
-  const headers = new Headers(init.headers);
-  if (GATEWAY_API_KEY) headers.set("Authorization", `Bearer ${GATEWAY_API_KEY}`);
-  const response = await fetch(url, {
-    ...init,
-    headers,
-  });
-  handleGatewayUnauthorized(response);
-  if (!response.ok) {
-    const data = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
-    throw new Error(data.error?.message || `Agent 会话请求失败（HTTP ${response.status}）`);
-  }
-  return (await response.json()) as T;
 }

@@ -3,16 +3,19 @@
 vi.mock("antdv-next", () => ({
   message: { warning: vi.fn(), error: vi.fn(), success: vi.fn() },
 }));
-vi.mock("../../services/serverState", () => ({
-  loadServerState: vi.fn(async () => undefined),
-  saveServerState: vi.fn(async () => undefined),
+vi.mock("../../services/workspaceApi", () => ({
+  projectPathsApi: {
+    list: vi.fn(async () => []),
+    remember: vi.fn(),
+    forget: vi.fn(),
+  },
 }));
 
 import type { DefaultMessageInfo, XModelMessage } from "@antdv-next/x-sdk";
 import type { ShallowRef } from "vue";
 import { shallowRef } from "vue";
 import { message } from "antdv-next";
-import { loadServerState, saveServerState } from "../../services/serverState";
+import { projectPathsApi } from "../../services/workspaceApi";
 import type { OpenChatConversation } from "../useChatPersistence";
 import { useProjectPath } from "./useProjectPath";
 
@@ -35,14 +38,15 @@ function makeDeps(running = false) {
 const conversation = (key: string, messages: DefaultMessageInfo<XModelMessage>[] = []) =>
   ({ key, label: "会话", messages }) as OpenChatConversation;
 
+/** 网关记住 / 删除目录时永不返回（只验证本地乐观更新）。 */
+const pending = () => new Promise<string[]>(() => {});
+
 describe("useProjectPath", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(loadServerState).mockResolvedValue(undefined);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.mocked(projectPathsApi.list).mockResolvedValue([]);
+    vi.mocked(projectPathsApi.remember).mockImplementation(pending);
+    vi.mocked(projectPathsApi.forget).mockImplementation(pending);
   });
 
   it("归一化路径：去尾部分隔符，等于默认目录时视为未选择", () => {
@@ -56,16 +60,13 @@ describe("useProjectPath", () => {
     expect(project.normalizeProjectPath("/a/c")).toBe("/a/c");
   });
 
-  it("记住路径：最近使用的排最前、去重、上限 20 条，默认目录不入历史", () => {
+  it("记住路径：本地最近使用的排最前、去重、上限 20 条，并写入网关", () => {
     const project = useProjectPath(makeDeps());
     for (let index = 0; index < 25; index += 1) project.rememberProjectPath(`/p/${index}`);
 
     expect(project.projectPathHistory.value).toHaveLength(20);
     expect(project.projectPathHistory.value[0]).toBe("/p/24");
-    expect(saveServerState).toHaveBeenLastCalledWith(
-      "project-paths",
-      project.projectPathHistory.value,
-    );
+    expect(projectPathsApi.remember).toHaveBeenLastCalledWith("/p/24");
 
     project.rememberProjectPath("/p/10/");
     expect(project.projectPathHistory.value[0]).toBe("/p/10");
@@ -74,8 +75,18 @@ describe("useProjectPath", () => {
 
     project.defaultProjectPath.value = "/p/10";
     project.rememberProjectPath("/p/10");
-    expect(project.projectPathHistory.value).toHaveLength(20);
-    expect(project.projectPathHistory.value.filter((item) => item === "/p/10")).toHaveLength(1);
+    expect(projectPathsApi.remember).toHaveBeenLastCalledWith("/p/10");
+    expect(projectPathsApi.remember).toHaveBeenCalledTimes(26);
+  });
+
+  it("网关返回的列表覆盖本地历史，并过滤默认目录", async () => {
+    vi.mocked(projectPathsApi.remember).mockResolvedValue(["/server/x", "/p/1", "/default"]);
+    const project = useProjectPath(makeDeps());
+    project.defaultProjectPath.value = "/default";
+
+    project.rememberProjectPath("/p/1");
+
+    await vi.waitFor(() => expect(project.projectPathHistory.value).toEqual(["/server/x", "/p/1"]));
   });
 
   it("删除路径按归一化结果匹配，当前目录补位到最前", () => {
@@ -86,6 +97,7 @@ describe("useProjectPath", () => {
     expect(project.projectPathOptions.value).toEqual(["/p/2", "/p/1"]);
     project.forgetProjectPath("/p/2/");
     expect(project.projectPathHistory.value).toEqual(["/p/1"]);
+    expect(projectPathsApi.forget).toHaveBeenCalledWith("/p/2");
     expect(project.projectPathOptions.value).toEqual(["/p/2", "/p/1"]);
   });
 
@@ -131,37 +143,12 @@ describe("useProjectPath", () => {
     expect(project.projectPathHistory.value).toEqual([]);
   });
 
-  it("网关返回旧 Record<agentId,string[]> 时合并去重为全局历史", async () => {
-    vi.stubGlobal("window", {});
-    vi.mocked(loadServerState).mockResolvedValue({
-      claude: ["/a/", "/b"],
-      codex: ["/b", ""],
-    });
+  it("从网关加载目录历史", async () => {
+    vi.mocked(projectPathsApi.list).mockResolvedValue(["/a/", "/b", "/a"]);
     const project = useProjectPath(makeDeps());
 
-    project.loadProjectPathHistory();
+    await project.loadProjectPathHistory();
 
-    await vi.waitFor(() => expect(project.projectPathHistory.value.length).toBe(2));
     expect(project.projectPathHistory.value).toEqual(["/a", "/b"]);
-  });
-
-  it("网关无数据时一次性迁移 localStorage 旧副本并清掉本地键", async () => {
-    const store = new Map<string, string>([
-      ["open-chat-project-paths-v1", JSON.stringify(["/legacy/"])],
-    ]);
-    vi.stubGlobal("window", {});
-    vi.stubGlobal("localStorage", {
-      getItem: (key: string) => store.get(key) ?? null,
-      removeItem: (key: string) => store.delete(key),
-    });
-    vi.mocked(loadServerState).mockResolvedValue(null);
-    const project = useProjectPath(makeDeps());
-
-    project.loadProjectPathHistory();
-
-    await vi.waitFor(() => expect(store.size).toBe(0));
-    const payload = vi.mocked(saveServerState).mock.calls[0]?.[1] as string[];
-    expect(saveServerState).toHaveBeenCalledWith("project-paths", ["/legacy/"]);
-    expect(payload.map((item) => item.replace(/\/+$/u, ""))).toEqual(["/legacy"]);
   });
 });

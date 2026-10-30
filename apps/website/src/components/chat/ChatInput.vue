@@ -6,7 +6,7 @@ import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import type { StagedAttachment } from "../../composables/useComposerData";
 import type { PermissionRequest } from "../../services/OpenChatProvider";
 import type { GitWorkspaceInfo, SkillsIndex, UploadedAttachment } from "../../services/ai";
-import type { QueuedChatMessage } from "../../services/chatStorage";
+import type { QueuedMessage as QueuedChatMessage } from "@cc-heart/open-chat-types";
 import {
   filterSuggestionGroups,
   formatCommandForModel,

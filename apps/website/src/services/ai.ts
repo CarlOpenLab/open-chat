@@ -1,3 +1,5 @@
+import { apiRequest, apiUrl } from "./http";
+
 export interface ModelInfo {
   id: string;
   name?: string;
@@ -63,12 +65,29 @@ export interface SkillsIndex {
   global: SkillSummary[];
 }
 
-/** 附件渲染 URL（历史消息图片按引用读取）。 */
-export function attachmentUrl(reference: string, name: string): string {
-  return `${API_BASE_URL}/api/attachments/${encodeURIComponent(reference)}/${encodeURIComponent(name)}`;
+/** Display-ready source item consumed by the `Sources` UI component. */
+export interface WebSearchSourceItem {
+  key: string;
+  title: string;
+  url: string;
+  description: string;
 }
 
-/** 把 File 读成 base64 字符串。 */
+/**
+ * @description 附件渲染 URL（历史消息图片按引用读取，同源 cookie 鉴权）。
+ * @param {string} reference - 附件持久引用
+ * @param {string} name - 文件名
+ * @returns {string} 图片地址
+ */
+export function attachmentUrl(reference: string, name: string): string {
+  return apiUrl(`/api/attachments/${encodeURIComponent(reference)}/${encodeURIComponent(name)}`);
+}
+
+/**
+ * @description 把 File 读成 base64 字符串（不含 data URL 前缀）。
+ * @param {File} file - 浏览器文件
+ * @returns {Promise<string>} base64 内容
+ */
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -82,142 +101,11 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-/** Display-ready source item consumed by the `Sources` UI component. */
-export interface WebSearchSourceItem {
-  key: string;
-  title: string;
-  url: string;
-  description: string;
-}
-
 /**
- * Base URL for gateway requests. Defaults to a relative path so that, in dev,
- * requests go through the Vite proxy (`/api` -> http://localhost:8082) and avoid
- * CORS. Set `VITE_API_URL` to target the gateway directly when needed.
+ * @description 规范化网关返回的 skills 列表。
+ * @param {unknown} value - 原始列表
+ * @returns {SkillSummary[]} 合法条目
  */
-const configuredApiBaseUrl = import.meta.env.VITE_API_URL || "";
-export const API_BASE_URL = configuredApiBaseUrl.replace(/\/+$/, "");
-
-/** Optional gateway bearer token (only required when the gateway enables auth). */
-export const GATEWAY_API_KEY = import.meta.env.VITE_GATEWAY_API_KEY || "";
-
-export const aiService = {
-  /**
-   * 获取服务端能力状态：联网搜索可用性 + 本地 opencode（AI 取本地的）
-   * 发现的模型/供应商。手动配置的服务商模型仍在客户端本地（IndexedDB），
-   * 由 useChatModels 合并展示。
-   */
-  async getModels(): Promise<ModelsResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/models`, {
-      headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
-    });
-    if (!response.ok) {
-      throw new Error("Failed to fetch models");
-    }
-    return response.json();
-  },
-
-  /** Ask a local gateway to open the host OS directory picker. */
-  async pickProjectPath(): Promise<{ path?: string; canceled: boolean }> {
-    const response = await fetch(`${API_BASE_URL}/api/project-path/pick`, {
-      method: "POST",
-      headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
-    });
-    const data = (await response.json().catch(() => ({}))) as {
-      path?: unknown;
-      canceled?: unknown;
-      error?: { message?: string };
-    };
-    if (!response.ok) {
-      throw new Error(data.error?.message || `目录选择失败（HTTP ${response.status}）`);
-    }
-    return {
-      path: typeof data.path === "string" ? data.path : undefined,
-      canceled: data.canceled === true,
-    };
-  },
-
-  async getDefaultProjectPath(): Promise<string> {
-    const response = await fetch(`${API_BASE_URL}/api/project-path/default`, {
-      headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
-    });
-    const data = (await response.json().catch(() => ({}))) as {
-      path?: unknown;
-      error?: { message?: string };
-    };
-    if (!response.ok) {
-      throw new Error(data.error?.message || `默认目录读取失败（HTTP ${response.status}）`);
-    }
-    return typeof data.path === "string" ? data.path.trim() : "";
-  },
-
-  async getGitWorkspace(path: string): Promise<GitWorkspaceInfo> {
-    return requestGitWorkspace(
-      `${API_BASE_URL}/api/project-path/git?${new URLSearchParams({ path })}`,
-    );
-  },
-
-  async switchGitBranch(path: string, branch: string): Promise<GitWorkspaceInfo> {
-    return requestGitWorkspace(`${API_BASE_URL}/api/project-path/git/switch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, branch }),
-    });
-  },
-
-  /** 读取项目 / 全局 skills（输入区 "/" suggestion 用）；projectPath 为空时只返回全局。 */
-  async getSkills(projectPath = ""): Promise<SkillsIndex> {
-    const trimmed = projectPath.trim();
-    const query = trimmed ? `?${new URLSearchParams({ projectPath: trimmed })}` : "";
-    const response = await fetch(`${API_BASE_URL}/api/skills${query}`, {
-      headers: GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : undefined,
-    });
-    const data = (await response.json().catch(() => ({}))) as Partial<SkillsIndex> & {
-      error?: { message?: string };
-    };
-    if (!response.ok) {
-      throw new Error(data.error?.message || `Skills 列表读取失败（HTTP ${response.status}）`);
-    }
-    return { project: readSkillSummaries(data.project), global: readSkillSummaries(data.global) };
-  },
-
-  /**
-   * 上传附件（图片/文件）到网关，落盘 `~/.cc-hearts-open-code/attachments/`。
-   * 返回持久引用，后续发送消息与历史渲染都只用引用，字节不再回传浏览器。
-   */
-  async uploadAttachment(file: File): Promise<UploadedAttachment> {
-    const dataBase64 = await fileToBase64(file);
-    const response = await fetch(`${API_BASE_URL}/api/attachments`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : {}),
-      },
-      body: JSON.stringify({ name: file.name, dataBase64 }),
-    });
-    const data = (await response.json().catch(() => ({}))) as {
-      ok?: boolean;
-      reference?: unknown;
-      name?: unknown;
-      isImage?: unknown;
-      path?: unknown;
-      error?: { message?: string };
-    };
-    if (!response.ok) {
-      throw new Error(data.error?.message || `附件上传失败（HTTP ${response.status}）`);
-    }
-    if (typeof data.reference !== "string" || typeof data.name !== "string") {
-      throw new Error("附件上传返回了无效响应");
-    }
-    return {
-      reference: data.reference,
-      name: data.name,
-      isImage: data.isImage === true,
-      ...(typeof data.path === "string" ? { path: data.path } : {}),
-    };
-  },
-};
-
 function readSkillSummaries(value: unknown): SkillSummary[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
@@ -234,19 +122,12 @@ function readSkillSummaries(value: unknown): SkillSummary[] {
   });
 }
 
-async function requestGitWorkspace(url: string, init: RequestInit = {}): Promise<GitWorkspaceInfo> {
-  const headers = new Headers(init.headers);
-  if (GATEWAY_API_KEY) headers.set("Authorization", `Bearer ${GATEWAY_API_KEY}`);
-  const response = await fetch(url, {
-    ...init,
-    headers,
-  });
-  const data = (await response.json().catch(() => ({}))) as Partial<GitWorkspaceInfo> & {
-    error?: { message?: string };
-  };
-  if (!response.ok) {
-    throw new Error(data.error?.message || `Git 操作失败（HTTP ${response.status}）`);
-  }
+/**
+ * @description 规范化网关返回的 Git 状态。
+ * @param {Partial<GitWorkspaceInfo>} data - 原始响应
+ * @returns {GitWorkspaceInfo} Git 状态
+ */
+function readGitWorkspace(data: Partial<GitWorkspaceInfo>): GitWorkspaceInfo {
   return {
     isRepository: data.isRepository === true,
     root: typeof data.root === "string" ? data.root : undefined,
@@ -258,3 +139,111 @@ async function requestGitWorkspace(url: string, init: RequestInit = {}): Promise
     detached: data.detached === true,
   };
 }
+
+export const aiService = {
+  /**
+   * @description 服务端能力：联网搜索可用性 + 本地 opencode 发现的模型。
+   * 手动配置的服务商模型由 `/api/providers` 提供，useChatModels 合并展示。
+   * @returns {Promise<ModelsResponse>} 能力与模型
+   */
+  async getModels(): Promise<ModelsResponse> {
+    return apiRequest<ModelsResponse>("/api/models", { errorMessage: "模型列表加载失败" });
+  },
+
+  /**
+   * @description 请求网关所在主机弹出系统目录选择器（仅本机访问可用）。
+   * @returns {Promise<{ path?: string; canceled: boolean }>} 选择结果
+   */
+  async pickProjectPath(): Promise<{ path?: string; canceled: boolean }> {
+    const data = await apiRequest<{ path?: unknown; canceled?: unknown }>(
+      "/api/project-path/pick",
+      { method: "POST", errorMessage: "目录选择失败" },
+    );
+    return {
+      path: typeof data.path === "string" ? data.path : undefined,
+      canceled: data.canceled === true,
+    };
+  },
+
+  /**
+   * @description 读取网关的默认工作目录（未选择项目目录时 agent 使用）。
+   * @returns {Promise<string>} 目录路径
+   */
+  async getDefaultProjectPath(): Promise<string> {
+    const data = await apiRequest<{ path?: unknown }>("/api/project-path/default", {
+      errorMessage: "默认目录读取失败",
+    });
+    return typeof data.path === "string" ? data.path.trim() : "";
+  },
+
+  /**
+   * @description 读取项目目录的 Git 状态。
+   * @param {string} path - 项目目录
+   * @returns {Promise<GitWorkspaceInfo>} Git 状态
+   */
+  async getGitWorkspace(path: string): Promise<GitWorkspaceInfo> {
+    return readGitWorkspace(
+      await apiRequest<Partial<GitWorkspaceInfo>>(
+        `/api/project-path/git?${new URLSearchParams({ path })}`,
+        { errorMessage: "Git 状态读取失败" },
+      ),
+    );
+  },
+
+  /**
+   * @description 切换项目目录的 Git 分支。
+   * @param {string} path - 项目目录
+   * @param {string} branch - 目标分支
+   * @returns {Promise<GitWorkspaceInfo>} 切换后的 Git 状态
+   */
+  async switchGitBranch(path: string, branch: string): Promise<GitWorkspaceInfo> {
+    return readGitWorkspace(
+      await apiRequest<Partial<GitWorkspaceInfo>>("/api/project-path/git/switch", {
+        method: "POST",
+        json: { path, branch },
+        errorMessage: "Git 分支切换失败",
+      }),
+    );
+  },
+
+  /**
+   * @description 读取项目 / 全局 skills（输入区 "/" 建议用）；projectPath 为空时只返回全局。
+   * @param {string} projectPath - 项目目录
+   * @returns {Promise<SkillsIndex>} skills 列表
+   */
+  async getSkills(projectPath = ""): Promise<SkillsIndex> {
+    const trimmed = projectPath.trim();
+    const query = trimmed ? `?${new URLSearchParams({ projectPath: trimmed })}` : "";
+    const data = await apiRequest<Partial<SkillsIndex>>(`/api/skills${query}`, {
+      errorMessage: "Skills 列表读取失败",
+    });
+    return { project: readSkillSummaries(data.project), global: readSkillSummaries(data.global) };
+  },
+
+  /**
+   * @description 上传附件到网关（落盘 `<数据根>/attachments/`），之后只用持久引用收发。
+   * @param {File} file - 浏览器文件
+   * @returns {Promise<UploadedAttachment>} 附件元数据
+   */
+  async uploadAttachment(file: File): Promise<UploadedAttachment> {
+    const data = await apiRequest<{
+      reference?: unknown;
+      name?: unknown;
+      isImage?: unknown;
+      path?: unknown;
+    }>("/api/attachments", {
+      method: "POST",
+      json: { name: file.name, dataBase64: await fileToBase64(file) },
+      errorMessage: "附件上传失败",
+    });
+    if (typeof data.reference !== "string" || typeof data.name !== "string") {
+      throw new Error("附件上传返回了无效响应");
+    }
+    return {
+      reference: data.reference,
+      name: data.name,
+      isImage: data.isImage === true,
+      ...(typeof data.path === "string" ? { path: data.path } : {}),
+    };
+  },
+};

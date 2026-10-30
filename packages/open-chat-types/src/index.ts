@@ -4,3 +4,5 @@ export * from "./segments";
 export * from "./settings";
 export * from "./legacy";
 export * from "./history";
+export * from "./workspace";
+export * from "./paths";

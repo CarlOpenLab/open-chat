@@ -1,8 +1,8 @@
 {
   "name": "open-chat",
   "version": "0.0.1",
-  "license": "MIT",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "ready": "./node_modules/.bin/vp fmt && ./node_modules/.bin/vp lint && vp run server#build && vp run website#build && vp run @cc-heart/open-chat#build",

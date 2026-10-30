@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/vue3-vite";
-import type { Task } from "../../services/taskStorage";
+import type { Task } from "@cc-heart/open-chat-types";
 import TaskCard from "./TaskCard.vue";
 
 /** 示例任务实体。 */

@@ -3,38 +3,28 @@
  * 驱动。agent 经 curl 调用网关 /api/board/tasks 读写任务；本模块负责发起回合、
  * 解析 SSE 流、以及助手会话元数据（agentId / providerSessionId）的持久化。
  */
-import { API_BASE_URL, GATEWAY_API_KEY } from "./ai";
-import { handleGatewayUnauthorized, requireGatewayAccess } from "./access";
-import { loadServerState, saveServerState } from "./serverState";
+import type { BoardAssistantSession } from "@cc-heart/open-chat-types";
+import { apiRequest, gatewayFetch, readErrorMessage } from "./http";
+import { preferencesApi } from "./workspaceApi";
 
 export const BOARD_ASSISTANT_CONVERSATION_ID = "board-assistant";
 
-/** 助手会话持久化状态（存网关，局域网共享）。 */
-export interface BoardAssistantState {
-  agentId: string;
-  providerSessionId?: string;
+/**
+ * @description 读取助手会话归属（工作区偏好 boardAssistant）。
+ * @returns {Promise<BoardAssistantSession | null>} 已保存的会话；未使用过助手时为 null
+ */
+export async function loadBoardAssistantState(): Promise<BoardAssistantSession | null> {
+  return (await preferencesApi.get()).boardAssistant;
 }
 
-export async function loadBoardAssistantState(): Promise<BoardAssistantState | null> {
+/**
+ * @description 保存助手会话归属；失败只记录日志（下次回合结束会再次保存）。
+ * @param {BoardAssistantSession} state - agent 与 ACP 会话 id
+ * @returns {Promise<void>}
+ */
+export async function saveBoardAssistantState(state: BoardAssistantSession): Promise<void> {
   try {
-    const raw = await loadServerState("board-assistant");
-    if (!raw || typeof raw !== "object") return null;
-    const state = raw as Partial<BoardAssistantState>;
-    if (typeof state.agentId !== "string" || !state.agentId.trim()) return null;
-    return {
-      agentId: state.agentId.trim(),
-      ...(typeof state.providerSessionId === "string" && state.providerSessionId.trim()
-        ? { providerSessionId: state.providerSessionId.trim() }
-        : {}),
-    };
-  } catch {
-    return null;
-  }
-}
-
-export async function saveBoardAssistantState(state: BoardAssistantState): Promise<void> {
-  try {
-    await saveServerState("board-assistant", state);
+    await preferencesApi.update({ boardAssistant: state });
   } catch (error) {
     console.error("Failed to persist board assistant state:", error);
   }
@@ -109,13 +99,9 @@ export async function runBoardAssistantTurn(options: {
   callbacks: BoardAssistantTurnCallbacks;
   signal: AbortSignal;
 }): Promise<BoardAssistantTurnResult> {
-  requireGatewayAccess();
-  const response = await fetch(`${API_BASE_URL}/api/chat/completions`, {
+  const response = await gatewayFetch("/api/chat/completions", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : {}),
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       acpAgentId: options.agentId,
       conversationId: BOARD_ASSISTANT_CONVERSATION_ID,
@@ -135,12 +121,8 @@ export async function runBoardAssistantTurn(options: {
     }),
     signal: options.signal,
   });
-  handleGatewayUnauthorized(response);
   if (!response.ok || !response.body) {
-    const data = (await response.json().catch(() => ({}))) as {
-      error?: { message?: string };
-    };
-    return { outcome: "failed", errorText: data.error?.message || `HTTP ${response.status}` };
+    return { outcome: "failed", errorText: await readErrorMessage(response, "回合启动失败") };
   }
 
   let outcome: BoardAssistantTurnOutcome = "completed";
@@ -220,29 +202,22 @@ export async function replyBoardAssistantPermission(
   permissionId: string,
   response: "once" | "always" | "reject",
 ): Promise<void> {
-  requireGatewayAccess();
-  const res = await fetch(`${API_BASE_URL}/api/chat/permission`, {
+  await apiRequest("/api/chat/permission", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : {}),
-    },
-    body: JSON.stringify({ agentId, permissionId, response, version: "acp" }),
+    json: { agentId, permissionId, response, version: "acp" },
+    errorMessage: "权限回复失败",
   });
-  handleGatewayUnauthorized(res);
-  if (!res.ok) throw new Error(`权限回复失败（HTTP ${res.status}）`);
 }
 
-/** 取消运行中的助手回合。 */
+/**
+ * @description 取消运行中的助手回合。
+ * @param {string} agentId - 助手使用的 agent id
+ * @returns {Promise<void>}
+ */
 export async function cancelBoardAssistantTurn(agentId: string): Promise<void> {
-  requireGatewayAccess();
-  const res = await fetch(`${API_BASE_URL}/api/acp/session/cancel`, {
+  await apiRequest("/api/acp/session/cancel", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : {}),
-    },
-    body: JSON.stringify({ agentId, conversationId: BOARD_ASSISTANT_CONVERSATION_ID }),
+    json: { agentId, conversationId: BOARD_ASSISTANT_CONVERSATION_ID },
+    errorMessage: "取消失败",
   });
-  handleGatewayUnauthorized(res);
 }

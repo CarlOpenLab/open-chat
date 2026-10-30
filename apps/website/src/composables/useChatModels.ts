@@ -1,3 +1,4 @@
+import type { ProviderView } from "@cc-heart/open-chat-types";
 import { computed, ref, watch } from "vue";
 import {
   aiService,
@@ -5,7 +6,7 @@ import {
   type ModelsProvider,
   type LocalModelsInfo,
 } from "../services/ai";
-import { providerService, type StoredLocalProvider } from "../services/providers";
+import { providersApi } from "../services/workspaceApi";
 
 /** 模型下拉数据：按供应商分组的模型列表。 */
 export interface ModelCatalogEntry {
@@ -17,15 +18,15 @@ export interface ModelCatalogEntry {
 /**
  * 模型加载与选择：
  * - 本地 AI（服务端 opencode 发现的 `provider/model`）优先展示；
- * - 手动配置的服务商数据仍在浏览器本地（IndexedDB）；
- * 两者合并成按供应商分组的模型目录，按当前模型解析转发目标（本地模型无需 baseUrl/apiKey，
- * 直接走服务端本地 provider；手动配置的模型随请求体带 provider 交给代理）。
+ * - 手动配置的服务商保存在网关（SQLite），浏览器只拿到掩码后的视图；
+ * 两者合并成按供应商分组的模型目录。发送请求时只携带 providerId，
+ * 网关据此解析 baseUrl / apiKey，Key 明文不经过浏览器。
  */
 export function useChatModels() {
   const models = ref<ModelsProvider[]>([]);
   const defaultModelId = ref("");
   const currentModel = ref("");
-  const storedProviders = ref<StoredLocalProvider[]>([]);
+  const storedProviders = ref<ProviderView[]>([]);
   const localInfo = ref<LocalModelsInfo | null>(null);
 
   /** 本地模型 id 集合（服务端 opencode 发现）。 */
@@ -90,26 +91,23 @@ export function useChatModels() {
   }
 
   /**
-   * 当前模型对应的转发目标（无状态代理需要每次请求携带）。
-   * 本地模型（opencode/...）返回 undefined（走服务端本地 provider）；
-   * 手动配置的模型从本地服务商数据同步查找，找不到返回 undefined。
+   * @description 当前模型所属服务商的 id（网关按它解析转发目标）。
+   * 本地模型（opencode/...）走服务端本地 provider，返回 undefined。
+   * @param {string} model - 模型 id
+   * @returns {string | undefined} 服务商 id；本地模型或未找到时为 undefined
    */
-  function getForwardProvider(
-    model: string,
-  ): { baseUrl: string; apiKey: string; api: "chat/completions" | "responses" } | undefined {
+  function getForwardProviderId(model: string): string | undefined {
     if (isLocalModel(model)) return undefined;
-    const provider = storedProviders.value.find((item) => item.models.some((m) => m.id === model));
-    if (!provider) return undefined;
-    return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, api: provider.api };
+    return storedProviders.value.find((item) => item.models.some((m) => m.id === model))?.id;
   }
 
   const loadModels = async () => {
     try {
       const [providers, modelsResp] = await Promise.all([
-        providerService.list(),
+        providersApi.list(),
         aiService.getModels().catch(() => null),
       ]);
-      storedProviders.value = await providerService.listStored();
+      storedProviders.value = providers;
       localInfo.value = modelsResp?.local ?? null;
 
       // 本地 opencode 发现的模型（服务端，AI 取本地的）优先展示，按 provider 分组。
@@ -178,7 +176,7 @@ export function useChatModels() {
     modelCatalog,
     currentModelLabel,
     reconcileCurrentModel,
-    getForwardProvider,
+    getForwardProviderId,
     isLocalModel,
     loadModels,
   };

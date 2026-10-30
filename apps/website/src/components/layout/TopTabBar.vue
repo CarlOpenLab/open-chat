@@ -51,12 +51,13 @@ const viewOptions: { label: string; value: WorkspaceViewMode }[] = [
 </template>
 
 <style scoped>
-/* 胶囊化：弱背景 + 细边框 + 浮起阴影，使其在两侧内容之上可读 */
+/* 胶囊化：半透明毛玻璃底 + 细边框 + 浮起阴影，使其在两侧内容之上可读 */
 .top-tabbar-segmented {
-  background: var(--brand-composer);
+  background: color-mix(in srgb, var(--brand-composer) 82%, transparent);
+  backdrop-filter: blur(10px);
   border: 1px solid var(--brand-border);
   border-radius: 999px;
-  box-shadow: var(--brand-shadow-sm);
+  box-shadow: var(--brand-shadow-float);
   padding: 2px;
 }
 </style>

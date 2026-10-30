@@ -101,13 +101,9 @@ export interface OpenChatParams extends XModelParams {
   providerSessionId?: string;
   /** Optional project working directory for local agents. Empty means server default. */
   projectPath?: string;
-  /** 无状态代理的转发目标：随每次请求携带（baseUrl / apiKey / api）。
+  /** OpenAI 兼容转发的服务商 id：网关据此从 SQLite 解析 baseUrl / apiKey（Key 不经过浏览器）。
    * 本地模型（opencode/...）不携带。 */
-  provider?: {
-    baseUrl: string;
-    apiKey: string;
-    api: "chat/completions" | "responses";
-  };
+  providerId?: string;
 }
 
 export class OpenChatProvider extends DeepSeekChatProvider<

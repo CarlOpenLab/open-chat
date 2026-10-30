@@ -245,28 +245,28 @@ a {
 .chat-app {
   color-scheme: dark;
   --chat-content-width: 720px; /* 内容最大宽度 */
-  --brand-background: #1a1a1a; /* canvas */
-  --brand-surface: #232323; /* raised */
-  --brand-surface-muted: #1e1e1e;
-  --brand-surface-subtle: hsla(0, 0%, 94%, 0.06); /* 6% neutral wash */
-  --brand-workspace: #1a1a1a; /* surface：主区与 canvas 同色 */
-  --brand-composer: #212121; /* composer */
+  --brand-background: #1b1917; /* canvas：暖炭色 */
+  --brand-surface: #252320; /* raised */
+  --brand-surface-muted: #201e1b;
+  --brand-surface-subtle: hsla(30, 20%, 94%, 0.06); /* 6% neutral wash */
+  --brand-workspace: #1b1917; /* surface：主区与 canvas 同色 */
+  --brand-composer: #221f1c; /* composer */
   /* 侧栏透明、底下压着系统 sidebar 材质；#181818 是拖拽时用的
      不透明替身，Web 端照搬这个值 */
-  --brand-sidebar: #181818;
-  --brand-sidebar-muted: #7d7d7d; /* text_tertiary */
-  --brand-sidebar-foreground: #e2e2e2; /* text */
-  --brand-sidebar-hover: hsla(0, 0%, 94%, 0.06); /* sidebar_item_background */
-  --brand-sidebar-active: hsla(0, 0%, 94%, 0.06); /* 选中与 hover 同层 */
-  --brand-foreground: #e2e2e2; /* text */
-  --brand-muted: #a3a3a3; /* text_secondary */
-  --brand-muted-strong: #7d7d7d; /* text_tertiary */
-  --brand-ghost: #575757; /* text_ghost */
-  --brand-border: hsla(220, 10%, 90%, 0.07); /* border */
-  --brand-border-strong: hsla(220, 10%, 90%, 0.14); /* border_strong */
-  --brand-primary: #e7e9ec; /* inverse（亮色按钮底） */
+  --brand-sidebar: #1a1816;
+  --brand-sidebar-muted: #807b76; /* text_tertiary */
+  --brand-sidebar-foreground: #e5e2de; /* text */
+  --brand-sidebar-hover: hsla(30, 20%, 94%, 0.06); /* sidebar_item_background */
+  --brand-sidebar-active: hsla(30, 20%, 94%, 0.06); /* 选中与 hover 同层 */
+  --brand-foreground: #e5e2de; /* text */
+  --brand-muted: #a6a19b; /* text_secondary */
+  --brand-muted-strong: #807b76; /* text_tertiary */
+  --brand-ghost: #5b5651; /* text_ghost */
+  --brand-border: hsla(35, 12%, 90%, 0.07); /* border */
+  --brand-border-strong: hsla(35, 12%, 90%, 0.14); /* border_strong */
+  --brand-primary: #e8e6e2; /* inverse（亮色按钮底） */
   --brand-primary-hover: #ffffff;
-  --brand-primary-foreground: #17181c; /* on_inverse */
+  --brand-primary-foreground: #1b1917; /* on_inverse */
   --brand-danger: #e2726a;
   --brand-danger-subtle: hsla(4, 55%, 63%, 0.1);
   --brand-success: #62c987; /* diff 新增行 */
@@ -312,26 +312,26 @@ html[data-theme="dark"] .chat-app {
 
 html[data-theme="light"] .chat-app {
   color-scheme: light;
-  --brand-background: #f6f5f6; /* canvas */
-  --brand-surface: #ececec; /* raised */
-  --brand-surface-muted: #f0f0f0;
-  --brand-surface-subtle: hsla(0, 0%, 8%, 0.06);
-  --brand-workspace: #f6f5f6;
+  --brand-background: #f4f1ec; /* canvas：暖亚麻色，让白色卡片浮起 */
+  --brand-surface: #ffffff; /* raised：卡片与画布形成对比 */
+  --brand-surface-muted: #ece8e2; /* 看板列等弱填充面 */
+  --brand-surface-subtle: hsla(28, 18%, 10%, 0.05);
+  --brand-workspace: #f4f1ec;
   --brand-composer: #ffffff;
-  --brand-sidebar: #f3f3f3; /* sidebar_drag_background */
-  --brand-sidebar-muted: #858585;
-  --brand-sidebar-foreground: #242424;
-  --brand-sidebar-hover: hsla(0, 0%, 8%, 0.06);
-  --brand-sidebar-active: hsla(0, 0%, 8%, 0.06);
-  --brand-foreground: #242424;
-  --brand-muted: #666666;
-  --brand-muted-strong: #858585;
-  --brand-ghost: #a4a4a4; /* text_ghost */
-  --brand-border: hsla(220, 10%, 12%, 0.08);
-  --brand-border-strong: hsla(220, 10%, 12%, 0.15);
-  --brand-primary: #202227;
+  --brand-sidebar: #faf8f5; /* sidebar_drag_background */
+  --brand-sidebar-muted: #8a8580;
+  --brand-sidebar-foreground: #26231f;
+  --brand-sidebar-hover: hsla(28, 18%, 10%, 0.055);
+  --brand-sidebar-active: hsla(28, 18%, 10%, 0.055);
+  --brand-foreground: #26231f;
+  --brand-muted: #6b6660;
+  --brand-muted-strong: #8a8580;
+  --brand-ghost: #aaa49d;
+  --brand-border: hsla(28, 15%, 12%, 0.09);
+  --brand-border-strong: hsla(28, 15%, 12%, 0.17);
+  --brand-primary: #23201c;
   --brand-primary-hover: #000000;
-  --brand-primary-foreground: #f8f8f9;
+  --brand-primary-foreground: #faf9f7;
   --brand-danger: #c64a42;
   --brand-danger-subtle: hsla(4, 55%, 52%, 0.1);
   --brand-success: #2f8f52;
@@ -340,8 +340,30 @@ html[data-theme="light"] .chat-app {
   --brand-resize: #2563eb;
   --brand-gauge: #2563eb;
   --brand-shadow-xs: none;
-  --brand-shadow-sm: 0 1px 2px rgba(20, 20, 24, 0.06);
-  --brand-shadow-float: 0 4px 20px rgba(20, 20, 24, 0.08);
+  --brand-shadow-sm: 0 1px 2px rgba(35, 30, 24, 0.06);
+  --brand-shadow-float: 0 4px 20px rgba(35, 30, 24, 0.08);
+  /* token 收敛（与深色块同一机制）：shadcn 基础变量别名到 brand 令牌，
+     主题切换只改 brand 值；缺了这块，看板/卡片会退回 :root 的冷灰 */
+  --background: var(--brand-background);
+  --foreground: var(--brand-foreground);
+  --card: var(--brand-surface);
+  --card-foreground: var(--brand-foreground);
+  --subtle: var(--brand-surface-muted);
+  --muted: var(--brand-surface-subtle);
+  --muted-foreground: var(--brand-muted);
+  --border: var(--brand-border);
+  --border-strong: var(--brand-border-strong);
+  --input: var(--brand-border-strong);
+  --success: var(--brand-success);
+  --danger: var(--brand-danger);
+  --danger-subtle: var(--brand-danger-subtle);
+  --danger-border: hsla(4, 55%, 52%, 0.3);
+  --warning: #d97706;
+  --warning-subtle: hsla(38, 92%, 50%, 0.12);
+  --warning-border: hsla(38, 92%, 50%, 0.35);
+  --fill-faint: var(--brand-surface-muted);
+  --primary-subtle: var(--brand-surface-subtle);
+  --primary-subtle-hover: hsla(28, 18%, 10%, 0.1);
 }
 
 /* selection 洗色：浏览器蓝而非品牌色 */

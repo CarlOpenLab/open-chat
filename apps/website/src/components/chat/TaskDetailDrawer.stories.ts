@@ -4,7 +4,7 @@ import { fn } from "storybook/test";
 import { ref } from "vue";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
 import type { AgentView } from "../../services/acp";
-import type { Task } from "../../services/taskStorage";
+import type { Task } from "@cc-heart/open-chat-types";
 import type { SessionStatusSignals } from "../../utils/sessionStatus";
 import TaskDetailDrawer from "./TaskDetailDrawer.vue";
 

@@ -147,6 +147,7 @@ const templateMenu = computed(() => ({
           <Button
             type="text"
             :icon="dark ? h(Sun) : h(Moon)"
+            :aria-label="dark ? '切换为浅色模式' : '切换为深色模式'"
             class="!w-8 !h-8 !p-0 !text-muted-foreground hover:!text-foreground hover:!bg-muted"
             @click="emit('toggleTheme')"
           />
@@ -157,6 +158,7 @@ const templateMenu = computed(() => ({
           <Button
             type="text"
             :icon="h(Settings)"
+            aria-label="打开设置"
             class="!w-8 !h-8 !p-0 !text-muted-foreground hover:!text-foreground hover:!bg-muted"
             @click="emit('openSettings')"
           />

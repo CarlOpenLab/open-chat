@@ -49,6 +49,15 @@ export class GatewayError extends Error {
     });
   }
 
+  static notFound(message: string): GatewayError {
+    return new GatewayError({
+      status: 404,
+      message,
+      type: "invalid_request_error",
+      code: "not_found",
+    });
+  }
+
   static upstream(message: string): GatewayError {
     return new GatewayError({
       status: 502,

@@ -90,7 +90,9 @@ const handleDrop = (event: DragEvent) => {
 const useStyles = createStyles(({ token, css }) => {
   const accent = (token as AccentGlobalToken).colorAccent;
   return {
-    // 壳层：底部渐变、水平居中内边距；子元素沿用字面量类名作为选择器锚点
+    // 壳层：底部渐变、水平居中内边距；子元素沿用字面量类名作为选择器锚点。
+    // 颜色一律走 brand CSS 变量：createStyles 的 token 值不随主题切换重生成，
+    // 深色下会残留浅色字面量（输入区发白），变量层则由 data-theme 正确切换。
     layout: css`
       position: relative;
       z-index: 12;
@@ -98,8 +100,8 @@ const useStyles = createStyles(({ token, css }) => {
       background: linear-gradient(
         to bottom,
         transparent 0,
-        ${token.colorBgLayout} 32px,
-        ${token.colorBgLayout} 100%
+        var(--brand-workspace) 32px,
+        var(--brand-workspace) 100%
       );
 
       /* 对齐 uno.config.ts 的自定义断点：lt-md => max-width 820px，lt-sm => max-width 560px */
@@ -216,9 +218,9 @@ const useStyles = createStyles(({ token, css }) => {
         min-height: 96px;
         padding: 0;
         /* composer 卡片：圆角 13px，border，composer 底色，无重阴影 */
-        border: 1px solid ${token.colorBorderSecondary};
+        border: 1px solid var(--brand-border);
         border-radius: 13px;
-        background: ${token.colorBgContainer};
+        background: var(--brand-composer);
         box-shadow: none;
         transition: border-color ${token.motionDurationMid} ${token.motionEaseInOut};
       }
@@ -227,7 +229,7 @@ const useStyles = createStyles(({ token, css }) => {
         border-radius: 13px;
       }
       .antd-sender-main:focus-within {
-        border-color: ${token.colorBorder};
+        border-color: var(--brand-border-strong);
       }
       .antd-sender-content {
         min-height: 50px;
@@ -241,13 +243,13 @@ const useStyles = createStyles(({ token, css }) => {
       textarea {
         max-height: 152px;
         min-height: 36px;
-        color: ${token.colorText};
+        color: var(--brand-foreground);
         caret-color: ${accent};
         font-size: 13.5px;
         line-height: 21px;
       }
       textarea::placeholder {
-        color: ${token.colorTextTertiary};
+        color: var(--brand-muted-strong);
         opacity: 1;
       }
       /* 发送按钮：圆形 26px，inverse 底色，无阴影 */
@@ -256,13 +258,13 @@ const useStyles = createStyles(({ token, css }) => {
         min-width: 26px;
         height: 26px;
         border-radius: 50%;
-        background: ${token.colorText};
-        color: ${token.colorBgContainer};
+        background: var(--brand-foreground);
+        color: var(--brand-background);
         box-shadow: none;
       }
       .antd-sender-actions-btn:disabled {
-        background: ${token.colorFill};
-        color: ${token.colorTextDisabled};
+        background: var(--brand-sidebar-active);
+        color: var(--brand-muted);
         opacity: 1;
       }
 
@@ -274,10 +276,10 @@ const useStyles = createStyles(({ token, css }) => {
         max-width: 760px;
         min-height: 42px;
         margin: 0 auto;
-        border: 1px solid ${token.colorBorderSecondary};
+        border: 1px solid var(--brand-border);
         border-top: 0;
         border-radius: 0 0 13px 13px;
-        background: ${token.colorBgContainer};
+        background: var(--brand-composer);
         padding: 12px 8px 8px;
         box-shadow: none;
         margin-top: -8px;
@@ -322,7 +324,7 @@ const useStyles = createStyles(({ token, css }) => {
         border-radius: 7px;
         padding: 0 8px;
         background: transparent;
-        color: ${token.colorTextTertiary};
+        color: var(--brand-muted);
         font-size: 12.5px;
         line-height: 16px;
         cursor: pointer;
@@ -331,11 +333,11 @@ const useStyles = createStyles(({ token, css }) => {
           color ${token.motionDurationMid} ${token.motionEaseInOut};
       }
       .sender-flat-btn:hover:not(:disabled) {
-        background: ${token.colorFillTertiary};
-        color: ${token.colorText};
+        background: var(--brand-sidebar-hover);
+        color: var(--brand-foreground);
       }
       .sender-flat-btn:focus-visible {
-        outline: 2px solid ${token.controlOutline};
+        outline: 2px solid var(--brand-accent);
         outline-offset: 1px;
       }
       .sender-flat-btn.is-disabled,
@@ -345,7 +347,7 @@ const useStyles = createStyles(({ token, css }) => {
       }
       /* 模型作为主标题，比其余项更醒目 */
       .sender-flat-btn-model {
-        color: ${token.colorText};
+        color: var(--brand-foreground);
         font-weight: 500;
       }
       .sender-flat-model-label,

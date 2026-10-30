@@ -4,7 +4,7 @@ import { Button, Drawer } from "antdv-next";
 import { computed } from "vue";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
 import type { AgentView } from "../../services/acp";
-import type { Task } from "../../services/taskStorage";
+import type { Task } from "@cc-heart/open-chat-types";
 import { createStyles } from "../../theme/antdvStyle";
 import type { SessionStatusSignals } from "../../utils/sessionStatus";
 import TaskDetailForm from "./TaskDetailForm.vue";

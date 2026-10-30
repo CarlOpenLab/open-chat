@@ -2,7 +2,7 @@
 import { Check, Paperclip, Pencil, SendHorizontal, Trash2, X } from "@lucide/vue";
 import { Tooltip } from "antdv-next";
 import { ref } from "vue";
-import type { QueuedChatMessage } from "../../services/chatStorage";
+import type { QueuedMessage as QueuedChatMessage } from "@cc-heart/open-chat-types";
 import { createStyles } from "../../theme/antdvStyle";
 import type { AccentGlobalToken } from "../../theme/shadcnTheme";
 

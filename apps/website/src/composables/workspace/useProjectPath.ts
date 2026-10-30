@@ -1,10 +1,11 @@
 import { message } from "antdv-next";
 import { computed, ref, type Ref } from "vue";
-import { loadServerState, saveServerState } from "../../services/serverState";
+import { projectPathsApi } from "../../services/workspaceApi";
 import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../../utils/projectPath";
 import type { OpenChatConversation } from "../useChatPersistence";
 
-const PROJECT_PATH_HISTORY_KEY = "open-chat-project-paths-v1";
+/** 目录历史上限（与网关一致）。 */
+const PROJECT_PATH_HISTORY_LIMIT = 20;
 
 export interface UseProjectPathDeps {
   conversationList: Ref<OpenChatConversation[]>;
@@ -19,82 +20,78 @@ export interface UseProjectPathDeps {
 }
 
 /**
- * 项目目录域：当前/草稿/默认目录、网关侧项目历史（含旧 localStorage 迁移）、
- * 历史去重与增删，以及切换/删除目录的副作用编排。
+ * 项目目录域：当前 / 草稿 / 默认目录、网关侧目录历史（SQLite）的增删，
+ * 以及切换 / 删除目录的副作用编排。本地先乐观更新，再以网关返回的列表为准。
  */
 export function useProjectPath(deps: UseProjectPathDeps) {
   const projectPath = ref("");
   const draftProjectPath = ref("");
   const defaultProjectPath = ref("");
-  /** 全局项目历史（与供应商/模型解耦）：不再按 agentId 分区 */
+  /** 全局目录历史（与供应商 / 模型解耦），最近使用在前。 */
   const projectPathHistory = ref<string[]>([]);
 
+  /**
+   * @description 归一化目录；等于网关默认工作目录时视为「未选择」。
+   * @param {string | undefined} value - 原始目录
+   * @returns {string} 归一化后的目录；未选择时为空串
+   */
   const normalizeProjectPath = (value: string | undefined): string => {
     const path = normalizeDirectoryPath(value);
     return path && path === normalizeDirectoryPath(defaultProjectPath.value) ? "" : path;
   };
 
-  const loadProjectPathHistory = () => {
-    if (typeof window === "undefined") return;
-    // 项目历史存网关（局域网共享）；localStorage 旧数据仅在网关为空时一次性迁移
-    void loadServerState("project-paths")
-      .then((stored) => {
-        if (Array.isArray(stored) && stored.length) {
-          projectPathHistory.value = uniqueDirectoryPaths(
-            stored.filter((v): v is string => typeof v === "string").map(normalizeProjectPath),
-          ).slice(0, 20);
-          return;
-        }
-        if (stored && typeof stored === "object") {
-          // 兼容旧数据：Record<agentId, string[]> → 合并为全局列表
-          const paths: string[] = [];
-          for (const value of Object.values(stored as Record<string, unknown>)) {
-            if (Array.isArray(value)) {
-              paths.push(...value.filter((v): v is string => typeof v === "string"));
-            }
-          }
-          if (paths.length) {
-            projectPathHistory.value = uniqueDirectoryPaths(paths.map(normalizeProjectPath)).slice(
-              0,
-              20,
-            );
-          }
-          return;
-        }
-        migrateLegacyProjectPaths();
-      })
-      .catch(() => migrateLegacyProjectPaths());
+  /**
+   * @description 用网关返回的目录列表覆盖本地历史（过滤默认目录）。
+   * @param {string[]} paths - 网关目录历史
+   * @returns {void}
+   */
+  const applyHistory = (paths: string[]) => {
+    projectPathHistory.value = uniqueDirectoryPaths(paths.map(normalizeProjectPath)).slice(
+      0,
+      PROJECT_PATH_HISTORY_LIMIT,
+    );
   };
 
-  /** localStorage 旧副本仅在网关无数据时上传，避免覆盖其他设备的数据。 */
-  const migrateLegacyProjectPaths = () => {
+  /**
+   * @description 从网关加载目录历史。
+   * @returns {Promise<void>}
+   */
+  const loadProjectPathHistory = async () => {
     try {
-      const legacy = localStorage.getItem(PROJECT_PATH_HISTORY_KEY);
-      if (!legacy) return;
-      localStorage.removeItem(PROJECT_PATH_HISTORY_KEY);
-      void saveServerState("project-paths", JSON.parse(legacy)).catch(() => {});
-    } catch {
-      // ignore
+      applyHistory(await projectPathsApi.list());
+    } catch (error) {
+      console.error("Failed to load project path history:", error);
     }
   };
 
-  const saveProjectPathHistory = () => {
-    void saveServerState("project-paths", [...projectPathHistory.value]).catch(() => {});
-  };
-
+  /**
+   * @description 记住目录：本地立即移到最前，并写入网关。
+   * @param {string} value - 目录路径
+   * @returns {void}
+   */
   const rememberProjectPath = (value: string) => {
     const path = normalizeProjectPath(value);
     if (!path) return;
-    const paths = uniqueDirectoryPaths([path, ...projectPathHistory.value]).slice(0, 20);
-    projectPathHistory.value = paths;
-    saveProjectPathHistory();
+    applyHistory([path, ...projectPathHistory.value]);
+    void projectPathsApi
+      .remember(path)
+      .then(applyHistory)
+      .catch((error: unknown) => console.error("Failed to remember project path:", error));
   };
 
+  /**
+   * @description 从历史中移除目录（本地立即生效，并同步网关）。
+   * @param {string} value - 目录路径
+   * @returns {void}
+   */
   const forgetProjectPath = (value: string) => {
     const path = normalizeProjectPath(value);
     if (!path) return;
     projectPathHistory.value = projectPathHistory.value.filter((item) => item !== path);
-    saveProjectPathHistory();
+    void projectPathsApi
+      .forget(path)
+      .then(applyHistory)
+      .catch((error: unknown) => console.error("Failed to forget project path:", error));
   };
 
   const projectPathOptions = computed(() => {
@@ -104,10 +101,19 @@ export function useProjectPath(deps: UseProjectPathDeps) {
     );
   });
 
+  /**
+   * @description 最近使用的目录（新会话的默认目录）。
+   * @returns {string} 目录；无历史时为空串
+   */
   const lastProjectPath = () => {
     return projectPathHistory.value.map(normalizeProjectPath).find(Boolean) ?? "";
   };
 
+  /**
+   * @description 切换当前会话（或草稿）的项目目录，并强制重拉 agent 会话。
+   * @param {string} value - 新目录；空串表示使用默认目录
+   * @returns {void}
+   */
   const handleProjectPathChange = (value: string) => {
     if (deps.isConversationRunning(deps.currentConversationKey.value)) {
       message.warning("请先停止当前会话的任务再切换项目目录");
@@ -128,6 +134,11 @@ export function useProjectPath(deps: UseProjectPathDeps) {
     deps.refreshAcpSession(true);
   };
 
+  /**
+   * @description 从历史中删除目录；删除的正是当前目录时同时切回默认目录。
+   * @param {string} value - 目录路径
+   * @returns {void}
+   */
   const handleProjectPathRemove = (value: string) => {
     if (deps.isConversationRunning(deps.currentConversationKey.value)) {
       message.warning("请先停止当前会话的任务再删除项目目录");
@@ -147,8 +158,6 @@ export function useProjectPath(deps: UseProjectPathDeps) {
     projectPathOptions,
     normalizeProjectPath,
     loadProjectPathHistory,
-    migrateLegacyProjectPaths,
-    saveProjectPathHistory,
     rememberProjectPath,
     forgetProjectPath,
     lastProjectPath,

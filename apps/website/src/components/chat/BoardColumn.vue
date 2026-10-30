@@ -9,7 +9,7 @@
 import { Plus } from "@lucide/vue";
 import { Button } from "antdv-next";
 import { computed, h } from "vue";
-import type { Task } from "../../services/taskStorage";
+import type { Task } from "@cc-heart/open-chat-types";
 import { createStyles } from "../../theme/antdvStyle";
 import type { SessionStatus } from "../../utils/sessionStatus";
 import type { TaskStatus } from "../../utils/taskStatus";
@@ -148,10 +148,10 @@ const cards = computed(() =>
 
     <!-- 任务卡片列表（独立纵向滚动区） -->
     <div class="flex-1 overflow-y-auto p-1 pr-1.5 flex flex-col gap-2.5 min-h-32">
-      <!-- 空状态：提示 + 快捷创建入口 -->
+      <!-- 空状态：撑满列高居中，避免大片空白显得荒废 -->
       <div
         v-if="items.length === 0"
-        class="flex flex-col items-center justify-center p-6 border border-dashed border-border/70 rounded-xl text-center bg-background/30 transition-colors"
+        class="flex flex-1 flex-col items-center justify-center gap-1 min-h-28 rounded-xl border border-dashed border-border/60 bg-background/25 text-center transition-colors"
       >
         <span v-if="dragging" class="text-[12px] text-brand-accent font-medium"
           >松开移动到这里</span
@@ -162,7 +162,7 @@ const cards = computed(() =>
             size="small"
             type="link"
             :icon="h(Plus)"
-            class="!text-xs !p-0 mt-1 !text-brand-accent"
+            class="!text-xs !p-0 !text-brand-accent"
             @click="emit('create', status)"
           >
             添加任务

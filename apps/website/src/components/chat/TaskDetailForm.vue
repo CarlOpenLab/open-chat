@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Button, DatePicker, Input, Select, TextArea } from "antdv-next";
 import { computed, ref, watch } from "vue";
-import type { Task } from "../../services/taskStorage";
+import type { Task } from "@cc-heart/open-chat-types";
 import { TASK_STATUS_META } from "../../utils/taskStatus";
 import type { TaskStatus } from "../../utils/taskStatus";
 

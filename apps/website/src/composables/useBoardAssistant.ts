@@ -12,7 +12,6 @@ import {
   runBoardAssistantTurn,
   saveBoardAssistantState,
   type BoardAssistantPermission,
-  type BoardAssistantState,
 } from "../services/boardAssistant";
 
 export interface BoardAssistantMessage {
@@ -37,12 +36,16 @@ export function useBoardAssistant(options: { onTasksMutated?: () => void } = {})
   let activeController: AbortController | null = null;
 
   async function init(): Promise<void> {
-    const state = await loadBoardAssistantState();
-    if (state) {
-      agentId.value = state.agentId;
-      providerSessionId =
-        typeof state.providerSessionId === "string" ? state.providerSessionId : "";
-      bootstrapped = Boolean(providerSessionId);
+    try {
+      const state = await loadBoardAssistantState();
+      if (state) {
+        agentId.value = state.agentId;
+        providerSessionId = state.providerSessionId;
+        bootstrapped = Boolean(providerSessionId);
+      }
+    } catch (error) {
+      // 偏好读取失败时按全新会话处理：首轮会重新注入系统指令
+      console.error("Failed to load board assistant session:", error);
     }
     ready.value = true;
   }
@@ -76,10 +79,8 @@ export function useBoardAssistant(options: { onTasksMutated?: () => void } = {})
     }
   }
 
-  async function persistState(providerSessionId?: string): Promise<void> {
-    const state: BoardAssistantState = { agentId: agentId.value };
-    if (providerSessionId) state.providerSessionId = providerSessionId;
-    await saveBoardAssistantState(state);
+  async function persistState(providerSessionId = ""): Promise<void> {
+    await saveBoardAssistantState({ agentId: agentId.value, providerSessionId });
   }
 
   async function setAgent(next: string): Promise<void> {

@@ -12,7 +12,7 @@ import {
 } from "@lucide/vue";
 import { Button, Dropdown, Tooltip } from "antdv-next";
 import { computed, h, ref } from "vue";
-import type { Task } from "../../services/taskStorage";
+import type { Task } from "@cc-heart/open-chat-types";
 import { createStyles } from "../../theme/antdvStyle";
 import { TASK_PRIORITY_META } from "../../utils/taskStatus";
 import type { SessionStatus } from "../../utils/sessionStatus";

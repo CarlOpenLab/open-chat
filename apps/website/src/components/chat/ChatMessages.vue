@@ -16,6 +16,30 @@ import {
 } from "../../composables/useMessageActivityState";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 
+/** 欢迎页起步提示词：点击即发送（与 QuickCommands 的 prompt-click 通道一致）。 */
+const STARTER_PROMPTS = [
+  {
+    key: "overview",
+    label: "梳理这个项目的结构与现状",
+    description: "请梳理当前项目的目录结构、核心模块与数据流，并指出值得改进的地方。",
+  },
+  {
+    key: "fix",
+    label: "修复一个问题",
+    description: "请帮我修复一个问题。我会描述现象与复现步骤，请先定位根因再给出修复。",
+  },
+  {
+    key: "feature",
+    label: "实现一个新功能",
+    description: "请帮我实现一个新功能。我会描述需求，请先给出实现方案再动手。",
+  },
+  {
+    key: "review",
+    label: "评审最近的改动",
+    description: "请评审当前工作区最近的改动，指出潜在问题与改进建议。",
+  },
+] as const;
+
 interface Props {
   showWelcome: boolean;
   bubbleItems: BubbleItemType[];
@@ -184,7 +208,20 @@ const {
         :project-path-options="projectPathOptions"
         @project-path-change="emit('projectPathChange', $event)"
         @project-path-remove="emit('projectPathRemove', $event)"
-      />
+      >
+        <!-- 起步提示词：点击直接发送，给空白工作区一个可点的起点 -->
+        <div class="mt-6 flex flex-wrap items-center justify-center gap-2">
+          <button
+            v-for="prompt in STARTER_PROMPTS"
+            :key="prompt.key"
+            type="button"
+            class="starter-prompt"
+            @click="emit('promptClick', { data: prompt })"
+          >
+            {{ prompt.label }}
+          </button>
+        </div>
+      </EmptyState>
     </section>
 
     <div v-else class="chat-scroll-box h-full min-h-0 overflow-y-auto overscroll-contain">
@@ -236,6 +273,35 @@ const {
 <style scoped>
 .empty-state {
   animation: empty-in 360ms ease-out both;
+}
+
+/* 起步提示词胶囊：弱填充 + 细边框，hover 时点亮珊瑚色 */
+.starter-prompt {
+  padding: 6px 14px;
+  border: 1px solid var(--brand-border);
+  border-radius: 999px;
+  background: var(--brand-surface);
+  color: var(--brand-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.starter-prompt:hover {
+  color: var(--brand-accent);
+  border-color: hsla(14, 55%, 52%, 0.45);
+  box-shadow: 0 2px 10px hsla(14, 55%, 40%, 0.12);
+  transform: translateY(-1px);
+}
+
+.starter-prompt:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
 }
 
 .chat-scroll-box {

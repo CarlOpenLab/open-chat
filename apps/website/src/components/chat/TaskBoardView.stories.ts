@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/vue3-vite";
 import type { OpenChatConversation } from "../../composables/useChatPersistence";
-import type { Task } from "../../services/taskStorage";
+import type { Task } from "@cc-heart/open-chat-types";
 import type { SessionStatusSignals } from "../../utils/sessionStatus";
 import TaskBoardView from "./TaskBoardView.vue";
 

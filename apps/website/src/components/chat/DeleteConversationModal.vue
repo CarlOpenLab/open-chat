@@ -31,7 +31,7 @@ const emit = defineEmits<Emits>();
       /></span>
       <h2 class="m-0 text-[16px]">删除这段对话？</h2>
       <p class="mx-0 mb-0 mt-[5px] text-[11px] leading-[1.6] text-brand-muted">
-        删除后无法恢复，对话中的消息和本地记录都会被移除。
+        删除后无法恢复，对话记录与消息都会从网关中移除。
       </p>
       <footer class="mt-[22px] flex justify-end gap-[8px]">
         <Button @click="emit('update:open', false)">取消</Button

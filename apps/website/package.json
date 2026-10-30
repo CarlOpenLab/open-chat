@@ -45,6 +45,7 @@
     "typescript": "~5.9.3",
     "unocss": "catalog:",
     "vite": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vue-tsc": "catalog:"
   }
 }

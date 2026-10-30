@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/vue3-vite";
-import type { QueuedChatMessage } from "../../services/chatStorage";
+import type { QueuedMessage as QueuedChatMessage } from "@cc-heart/open-chat-types";
 import QueuePanel from "./QueuePanel.vue";
 
 /** 待发送队列（3 条，含一条纯附件）。 */
@@ -18,9 +18,7 @@ const queuedMessages: QueuedChatMessage[] = [
     id: "q3",
     content: "",
     createdAt: 1_726_700_120_000,
-    attachments: [
-      { reference: "cc-attachment:shot", name: "shot.png", isImage: true, path: "/tmp/shot.png" },
-    ],
+    attachments: [{ reference: "cc-attachment:shot", name: "shot.png", isImage: true }],
   },
 ];
 
