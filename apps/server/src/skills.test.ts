@@ -75,28 +75,32 @@ describe("skills scanner", () => {
     expect(global).toEqual([]);
   });
 
-  it("scans skills installed as symlinks and skips links that are not skill directories", async () => {
-    // cc-switch 的安装方式：真实内容留在自己的库目录，CLI skills 目录里放 symlink
-    writeSkill(join(directory, "store", "brainstorming"), {
-      description: "发散讨论",
-    });
-    mkdirSync(join(directory, "home", ".claude/skills"), { recursive: true });
-    writeFileSync(join(directory, "store", "loose.md"), "# 只是个文件\n");
-    const root = join(directory, "home", ".claude/skills");
-    symlinkSync(join(directory, "store", "brainstorming"), join(root, "brainstorming"));
-    symlinkSync(join(directory, "store", "loose.md"), join(root, "loose-link"));
-    symlinkSync(join(directory, "store", "gone"), join(root, "stale"));
+  // Windows 创建 symlink 需要管理员权限（EPERM），该用例仅在类 Unix 平台执行
+  it.skipIf(process.platform === "win32")(
+    "scans skills installed as symlinks and skips links that are not skill directories",
+    async () => {
+      // cc-switch 的安装方式：真实内容留在自己的库目录，CLI skills 目录里放 symlink
+      writeSkill(join(directory, "store", "brainstorming"), {
+        description: "发散讨论",
+      });
+      mkdirSync(join(directory, "home", ".claude/skills"), { recursive: true });
+      writeFileSync(join(directory, "store", "loose.md"), "# 只是个文件\n");
+      const root = join(directory, "home", ".claude/skills");
+      symlinkSync(join(directory, "store", "brainstorming"), join(root, "brainstorming"));
+      symlinkSync(join(directory, "store", "loose.md"), join(root, "loose-link"));
+      symlinkSync(join(directory, "store", "gone"), join(root, "stale"));
 
-    const { global } = await readSkillsFromRoots([
-      { base: join(directory, "home"), source: "global" },
-    ]);
+      const { global } = await readSkillsFromRoots([
+        { base: join(directory, "home"), source: "global" },
+      ]);
 
-    expect(global.map((skill) => skill.name)).toEqual(["brainstorming"]);
-    expect(global[0]).toMatchObject({
-      description: "发散讨论",
-      scope: ".claude/skills",
-    });
-  });
+      expect(global.map((skill) => skill.name)).toEqual(["brainstorming"]);
+      expect(global[0]).toMatchObject({
+        description: "发散讨论",
+        scope: ".claude/skills",
+      });
+    },
+  );
 
   it("ignores hidden directories and plain files inside skill roots", async () => {
     writeSkill(join(directory, ".hidden"), { name: "hidden", description: "应被忽略" });
