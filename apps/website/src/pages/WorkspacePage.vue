@@ -590,7 +590,7 @@ const pushHistory = (key: string) => {
   historyForward.value = [];
 };
 
-const handleActiveChange: ConversationsActiveChange = (key) => {
+const handleActiveChange: ConversationsActiveChange = (key, options = {}) => {
   const targetKey = String(key);
   const targetConversation = conversationList.value.find((item) => String(item.key) === targetKey);
   // 聚合侧栏：点击不同供应商的会话时，自动切换供应商与模型
@@ -622,18 +622,34 @@ const handleActiveChange: ConversationsActiveChange = (key) => {
     reconcileCurrentModel();
   }
 
-  if (targetKey !== currentConversationKey.value) {
+  if (targetKey !== currentConversationKey.value && !options.fromHistory) {
     pushHistory(currentConversationKey.value || "");
   }
   currentConversationKey.value = targetKey;
   syncConversationRoute("push");
   const conv = getCurrentConversation();
-  if (conv) {
-    showWelcome.value = (conv.messages?.length ?? 0) === 0;
-  }
+  showWelcome.value = (conv?.messages?.length ?? 0) === 0;
   if (window.matchMedia("(max-width: 767px)").matches) {
     closeSidebar();
   }
+};
+
+/**
+ * 会话级后退 / 前进：在切换历史栈之间跳转。
+ * 历史导航不产生新节点——当前会话被压入对侧栈（浏览器历史的标准语义）。
+ */
+const navigateConversationHistory = (direction: "back" | "forward") => {
+  if (historyLocked.value) return;
+  const stack = direction === "back" ? historyBack.value : historyForward.value;
+  const target = stack.pop();
+  if (target === undefined) return;
+  const previous = currentConversationKey.value || "";
+  if (direction === "back") {
+    historyForward.value = [...historyForward.value, previous];
+  } else {
+    historyBack.value = [...historyBack.value, previous];
+  }
+  handleActiveChange(target, { fromHistory: true });
 };
 
 const handleSidebarToggle = () => {
@@ -2424,6 +2440,7 @@ const workspace = reactive({
   handleNewConversation,
   handleActiveChange,
   handleAgentChange,
+  navigateConversationHistory,
   handleCommandPaletteSelectConversation,
   openCommandPalette,
   closeBoardDrawer,
