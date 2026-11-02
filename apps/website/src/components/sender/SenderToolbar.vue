@@ -14,7 +14,6 @@ import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
 import { computed, h, ref, type Component, type VNode } from "vue";
 import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import { createStyles } from "../../theme/antdvStyle";
-import type { AccentGlobalToken } from "../../theme/shadcnTheme";
 import ModelPicker from "./ModelPicker.vue";
 
 /**
@@ -107,7 +106,6 @@ const emit = defineEmits<{
 }>();
 
 const useStyles = createStyles(({ token, css }) => {
-  const accent = (token as AccentGlobalToken).colorAccent;
   return {
     // Sender footer slot 最外层容器
     root: css`
@@ -129,43 +127,43 @@ const useStyles = createStyles(({ token, css }) => {
       font-size: 11.5px;
       line-height: 14px;
       background: transparent;
-      color: ${token.colorTextTertiary};
+      color: var(--brand-muted-strong);
       cursor: pointer;
       transition:
         background ${token.motionDurationMid} ${token.motionEaseInOut},
         color ${token.motionDurationMid} ${token.motionEaseInOut};
 
       &:hover {
-        background: ${token.colorFillTertiary};
-        color: ${token.colorText};
+        background: var(--brand-surface-subtle);
+        color: var(--brand-foreground);
       }
     `,
     chipActive: css`
-      background: ${token.colorFillTertiary};
-      color: ${token.colorText};
+      background: var(--brand-surface-subtle);
+      color: var(--brand-foreground);
     `,
     chipDisabled: css`
-      color: ${token.colorTextQuaternary};
+      color: var(--brand-ghost);
       opacity: 0.55;
       cursor: not-allowed;
 
       &:hover {
         background: transparent;
-        color: ${token.colorTextQuaternary};
+        color: var(--brand-ghost);
       }
     `,
     textAccent: css`
-      color: ${accent};
+      color: var(--brand-accent);
     `,
     textMutedStrong: css`
-      color: ${token.colorTextTertiary};
+      color: var(--brand-muted-strong);
     `,
     runState: css`
       margin-left: 6px;
       flex: none;
       font-size: 11px;
       line-height: 14px;
-      color: ${token.colorTextTertiary};
+      color: var(--brand-muted-strong);
     `,
     /* ===== 下拉弹层：弹层挂 body，样式以各自 rootClass（含本哈希类）为锚 ===== */
     senderOptionMenu: css`
@@ -182,14 +180,14 @@ const useStyles = createStyles(({ token, css }) => {
         gap: 2px;
       }
       .permission-menu-label {
-        color: ${token.colorText};
+        color: var(--brand-foreground);
         font-size: 12px;
         font-weight: 500;
         line-height: 15px;
       }
       .permission-menu-description {
         max-width: 240px;
-        color: ${token.colorTextTertiary};
+        color: var(--brand-muted-strong);
         font-size: 10px;
         line-height: 14px;
         white-space: normal;
@@ -211,14 +209,14 @@ const useStyles = createStyles(({ token, css }) => {
       .reasoning-level-name {
         min-width: 0;
         flex: 1;
-        color: ${token.colorText};
+        color: var(--brand-foreground);
         font-size: 12px;
       }
       .reasoning-level-check {
         width: 12px;
         height: 12px;
         flex: none;
-        color: ${accent};
+        color: var(--brand-accent);
       }
       .reasoning-level-check-blank {
         opacity: 0;

@@ -105,8 +105,40 @@ const menu = (conversation: ConversationItemType) => ({
       :menu="menu"
       :label-render="labelRender"
       groupable
-      :creation="{ label: '新对话', onClick: () => ws.handleNewConversation() }"
       @active-change="ws.handleActiveChange($event)"
     />
   </aside>
 </template>
+
+<style scoped>
+/* 会话列表形态对齐参考设计（memoh 侧栏）：
+   小号分组标签 + 纯文本行（无卡片描边），悬停出操作，当前会话仅文字提亮。 */
+.conversation-list {
+  padding: 0 6px 8px;
+}
+
+.conversation-list :deep(.antd-conversations-group-title) {
+  height: auto;
+  min-height: 24px;
+  padding: 4px 8px 2px;
+}
+
+.conversation-list :deep(.antd-conversations-group-label) {
+  color: var(--brand-muted-strong);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.conversation-list :deep(.antd-conversations-item) {
+  height: 32px;
+  min-height: 32px;
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.conversation-list :deep(.antd-conversations-label) {
+  font-size: 13px;
+}
+</style>

@@ -294,7 +294,10 @@ onBeforeUnmount(() => {
 
 <template>
   <XProvider :theme="appTheme" :locale="locale" layer>
-    <ThemeProvider :appearance="dark ? 'dark' : 'light'">
+    <!-- theme 必须随 appTheme 传入：antdv-style 的 token 只在挂载时从 ConfigProvider
+         捕获一次，缺了它 createStyles 消费方（composer 卡片等）的字面量颜色不会跟随
+         运行时主题切换（html[data-theme] 与 antd cssVar 会变，这些不会）。 -->
+    <ThemeProvider :appearance="dark ? 'dark' : 'light'" :theme="appTheme">
       <main
         v-if="!accessReady || !accessGranted"
         class="grid min-h-[100dvh] place-items-center bg-background px-5"

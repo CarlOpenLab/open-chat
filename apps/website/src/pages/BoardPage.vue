@@ -36,6 +36,7 @@ const ws = useWorkspace();
       @delete-task="ws.handleTaskDelete($event)"
       @toggle-theme="ws.toggleTheme()"
       @open-settings="ws.settingsOpen = true"
+      @back-to-chat="ws.handleViewModeChange('chat')"
     />
   </div>
 

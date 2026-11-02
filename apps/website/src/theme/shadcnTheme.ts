@@ -296,7 +296,7 @@ export const shadcnDarkTheme: ThemeConfig = {
     Segmented: {
       ...shadcnTheme.components?.Segmented,
       trackBg: neutral[900],
-      itemSelectedBg: neutral[800],
+      itemSelectedBg: neutral[700],
       itemHoverBg: neutral[800],
       itemActiveBg: neutral[700],
     },

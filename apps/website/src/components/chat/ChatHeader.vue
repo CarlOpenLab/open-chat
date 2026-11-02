@@ -107,7 +107,7 @@ const titleMenu = computed<MenuProps>(() => ({
 
 <template>
   <header
-    class="relative z-20 flex h-[48px] min-w-0 flex-none items-center gap-2 bg-brand-workspace pr-[14px]"
+    class="relative z-20 flex h-[44px] min-w-0 flex-none items-center gap-2 bg-brand-workspace pr-[14px]"
     :class="sidebarOpen ? 'pl-[14px]' : 'pl-[10px]'"
   >
     <!-- 侧栏收起时：折叠按钮 + 历史导航 -->

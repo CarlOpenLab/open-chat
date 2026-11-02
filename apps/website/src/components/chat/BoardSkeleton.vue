@@ -1,5 +1,5 @@
 <script setup lang="ts">
- /**
+/**
  * BoardSkeleton：看板水合骨架屏（纯展示，无 props / emits）。
  *
  * 本地任务状态从服务端水合期间占位，避免看板闪现空态。

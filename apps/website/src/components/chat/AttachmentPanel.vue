@@ -3,7 +3,6 @@ import { ImagePlus, X } from "@lucide/vue";
 import { ref } from "vue";
 import type { StagedAttachment } from "../../composables/useComposerData";
 import { createStyles } from "../../theme/antdvStyle";
-import type { AccentGlobalToken } from "../../theme/shadcnTheme";
 
 interface Props {
   attachments: StagedAttachment[];
@@ -33,9 +32,9 @@ const useStyles = createStyles(({ token, css }) => ({
       height: 64px;
       flex: none;
       overflow: hidden;
-      border: 1px solid ${token.colorBorder};
+      border: 1px solid var(--brand-border);
       border-radius: 8px;
-      background: ${token.colorFillSecondary};
+      background: var(--brand-surface-subtle);
     }
     .attachment-image {
       width: 100%;
@@ -74,8 +73,8 @@ const useStyles = createStyles(({ token, css }) => ({
       align-items: center;
       justify-content: center;
       font-size: 10.5px;
-      color: ${token.colorText};
-      background: color-mix(in srgb, ${token.colorBgLayout} 78%, transparent);
+      color: var(--brand-foreground);
+      background: color-mix(in srgb, var(--brand-workspace) 78%, transparent);
     }
     .attachment-add {
       display: grid;
@@ -83,19 +82,19 @@ const useStyles = createStyles(({ token, css }) => ({
       height: 64px;
       flex: none;
       place-items: center;
-      border: 1px dashed ${token.colorBorder};
+      border: 1px dashed var(--brand-border);
       border-radius: 8px;
       padding: 0;
       background: transparent;
-      color: ${token.colorTextTertiary};
+      color: var(--brand-muted-strong);
       cursor: pointer;
       transition:
         border-color ${token.motionDurationMid} ${token.motionEaseInOut},
         color ${token.motionDurationMid} ${token.motionEaseInOut};
     }
     .attachment-add:hover {
-      border-color: ${(token as AccentGlobalToken).colorAccent};
-      color: ${(token as AccentGlobalToken).colorAccent};
+      border-color: var(--brand-accent);
+      color: var(--brand-accent);
     }
     .attachment-add-icon {
       width: 14px;

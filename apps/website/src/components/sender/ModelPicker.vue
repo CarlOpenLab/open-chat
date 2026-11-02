@@ -4,7 +4,6 @@ import { Dropdown, type MenuProps } from "antdv-next";
 import { computed, h } from "vue";
 import type { ModelCatalogEntry } from "../../composables/useChatModels";
 import { createStyles } from "../../theme/antdvStyle";
-import type { AccentGlobalToken } from "../../theme/shadcnTheme";
 import ModelIcon from "../Icons/ModelIcon.vue";
 
 /**
@@ -43,10 +42,9 @@ const emit = defineEmits<{
 }>();
 
 const useStyles = createStyles(({ token, css }) => {
-  const accent = (token as AccentGlobalToken).colorAccent;
   return {
     textMutedStrong: css`
-      color: ${token.colorTextTertiary};
+      color: var(--brand-muted-strong);
     `,
     /* ===== 下拉弹层：弹层挂 body，样式以 rootClass（含本哈希类）为锚 ===== */
     chatModelMenu: css`
@@ -81,7 +79,7 @@ const useStyles = createStyles(({ token, css }) => {
       .model-menu-name {
         min-width: 0;
         overflow: hidden;
-        color: ${token.colorTextSecondary};
+        color: var(--brand-muted);
         font-size: 12px;
         font-weight: 400;
         text-overflow: ellipsis;
@@ -89,18 +87,18 @@ const useStyles = createStyles(({ token, css }) => {
       }
       .model-menu-provider {
         overflow: hidden;
-        color: ${token.colorTextQuaternary};
+        color: var(--brand-ghost);
         font-size: 10px;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
       .model-menu-name.is-selected {
-        color: ${token.colorText};
+        color: var(--brand-foreground);
         font-weight: 600;
       }
       .model-menu-ctx {
         flex: none;
-        color: ${token.colorTextQuaternary};
+        color: var(--brand-ghost);
         font-size: 10px;
         font-variant-numeric: tabular-nums;
       }
@@ -108,7 +106,7 @@ const useStyles = createStyles(({ token, css }) => {
         width: 12px;
         height: 12px;
         flex: none;
-        color: ${accent};
+        color: var(--brand-accent);
         opacity: 0;
         transition: opacity ${token.motionDurationMid} ${token.motionEaseInOut};
       }

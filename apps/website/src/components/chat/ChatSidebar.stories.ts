@@ -147,9 +147,32 @@ const framed =
   `,
   });
 
+/** 空侧栏：默认插槽留空时列表区不占位，导航与底栏骨架贴住上下两端。 */
+export const Empty: Story = {
+  render: framed(),
+};
+
 /** 会话列表：默认插槽内按天分组，当前会话高亮。 */
 export const WithConversations: Story = {
   render: framed(conversationListSlot),
+};
+
+/** 收起态：open=false 时不画右边框，标题栏图标旋转 180° 表示可展开。 */
+export const Collapsed: Story = {
+  args: { open: false },
+  render: framed(),
+};
+
+/** 供应商未就绪：活动供应商缺 ACP 适配器，trigger 状态点转灰并提示未找到。 */
+export const AgentUnavailable: Story = {
+  args: { activeAgentId: "codex" },
+  render: framed(),
+};
+
+/** 深色主题：底栏主题按钮换成「切换到浅色」的太阳图标（配合工具栏深色主题查看）。 */
+export const DarkFooterIcon: Story = {
+  args: { dark: true },
+  render: framed(),
 };
 
 /** 供应商选择弹窗：play 点击供应商 trigger 打开 Modal，展示当前项与不可用原因。 */

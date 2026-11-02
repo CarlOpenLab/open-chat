@@ -115,8 +115,6 @@ export interface Workspace {
   handleNewConversation: () => void;
   handleActiveChange: ConversationsActiveChange;
   handleAgentChange: (agentId: string) => void;
-  /** 会话切换历史的后退 / 前进。 */
-  navigateConversationHistory: (direction: "back" | "forward") => void;
   handleCommandPaletteSelectConversation: (key: string) => void;
   openCommandPalette: () => void;
   closeBoardDrawer: () => void;
@@ -186,10 +184,7 @@ export interface Workspace {
 }
 
 /** Conversations 组件 onActiveChange 的 key 是 string | number，内部统一转 string。 */
-export type ConversationsActiveChange = (
-  key: string | number,
-  options?: { fromHistory?: boolean },
-) => void;
+export type ConversationsActiveChange = (key: string | number) => void;
 
 export type WorkspaceSessionStatus = SessionStatus;
 

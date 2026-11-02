@@ -22,14 +22,13 @@ const ws = useWorkspace();
         <ChatSidebar
           :open="ws.conversationsOpen"
           :dark="ws.dark"
-          :agents="ws.agents"
-          :active-agent-id="ws.activeAgentId"
+          :view-mode="ws.viewMode"
           @toggle-sidebar="ws.handleSidebarToggle()"
           @toggle-theme="ws.toggleTheme()"
           @new-conversation="ws.handleNewConversation()"
           @open-search="ws.openCommandPalette()"
           @open-settings="ws.settingsOpen = true"
-          @agent-change="ws.handleAgentChange($event)"
+          @view-mode-change="ws.handleViewModeChange($event)"
         >
           <ConversationListPanel />
         </ChatSidebar>

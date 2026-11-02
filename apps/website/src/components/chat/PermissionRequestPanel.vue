@@ -19,16 +19,16 @@ const useStyles = createStyles(({ token, css }) => ({
   root: css`
     width: 100%;
     margin-top: 8px;
-    border: 1px solid ${token.colorWarningBorder};
+    border: 1px solid var(--warning-border);
     border-radius: 8px;
-    background: ${token.colorWarningBg};
+    background: var(--warning-subtle);
     padding: 9px 10px;
 
     .permission-request-title {
       display: flex;
       align-items: center;
       gap: 7px;
-      color: ${token.colorText};
+      color: var(--brand-foreground);
       font-size: 12px;
       font-weight: 600;
       line-height: 16px;
@@ -37,16 +37,16 @@ const useStyles = createStyles(({ token, css }) => ({
       width: 14px;
       height: 14px;
       flex: none;
-      color: ${token.colorWarning};
+      color: var(--warning);
     }
     .permission-request-details {
       max-height: 72px;
       margin-top: 6px;
       overflow: auto;
       border-radius: 5px;
-      background: ${token.colorFillTertiary};
+      background: var(--brand-surface-subtle);
       padding: 6px 7px;
-      color: ${token.colorTextSecondary};
+      color: var(--brand-muted);
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 10px;
       line-height: 15px;
@@ -64,23 +64,23 @@ const useStyles = createStyles(({ token, css }) => ({
       min-height: 26px;
       align-items: center;
       gap: 5px;
-      border: 1px solid ${token.colorBorder};
+      border: 1px solid var(--brand-border);
       border-radius: 6px;
       background: transparent;
       padding: 0 9px;
-      color: ${token.colorTextSecondary};
+      color: var(--brand-muted);
       font-size: 11px;
       font-weight: 600;
       cursor: pointer;
     }
     .permission-request-action:hover {
-      background: ${token.colorFillTertiary};
-      color: ${token.colorText};
+      background: var(--brand-surface-subtle);
+      color: var(--brand-foreground);
     }
     .permission-request-action.is-primary {
-      border-color: ${token.colorText};
-      background: ${token.colorText};
-      color: ${token.colorBgContainer};
+      border-color: var(--brand-foreground);
+      background: var(--brand-foreground);
+      color: var(--brand-composer);
     }
     .permission-request-action.is-primary:hover {
       opacity: 0.9;
