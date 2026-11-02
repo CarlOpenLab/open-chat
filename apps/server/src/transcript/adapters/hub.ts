@@ -1,4 +1,4 @@
-import type { PlanEntry, SessionEvent, ToolCall } from "acp-hub-core";
+import type { PlanEntry, SessionEvent, ToolCall } from "@cc-heart/acp-hub-core";
 import { transcriptMessageFor, upsertPlanMessage, upsertToolMessage } from "../core";
 import type { TranscriptHistoryCollector } from "../types";
 import { stringifyValue } from "../value";

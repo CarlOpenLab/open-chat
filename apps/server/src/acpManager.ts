@@ -5,11 +5,11 @@ import type {
   AcpAgentAdapter,
   SessionEvent,
   ToolCall,
-} from "acp-hub-core";
-import { createAcpAgentAdapter } from "acp-hub-core";
-import { createClaudeAdapter } from "acp-hub-adapter-claude";
-import { createCodexAdapter } from "acp-hub-adapter-codex";
-import { createOhMyPiAdapter, createPiAdapter } from "acp-hub-adapter-pi";
+} from "@cc-heart/acp-hub-core";
+import { createAcpAgentAdapter } from "@cc-heart/acp-hub-core";
+import { createClaudeAdapter } from "@cc-heart/acp-hub-adapter-claude";
+import { createCodexAdapter } from "@cc-heart/acp-hub-adapter-codex";
+import { createOhMyPiAdapter, createPiAdapter } from "@cc-heart/acp-hub-adapter-pi";
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import type { AcpAgentConfig, AcpConfig } from "./config";
