@@ -19,6 +19,7 @@ import { collectHubEvent, normalizeHubActivity, normalizeHubPlan } from "./trans
 import { readProviderFileHistory } from "./historyReaders";
 import { findCodexRolloutFile } from "./codexRollout";
 import { defaultWorkspaceDir } from "./attachments";
+import { stallErrorMessage, startStallWatchdog } from "./acpStallWatchdog";
 import { createTranscriptCollector } from "./transcript/core";
 import { writeTranscriptCustomEvent } from "./transcript/stream";
 import { writeNativeEvent } from "./nativeEvents";
@@ -114,6 +115,17 @@ const HISTORY_MESSAGE_LIMIT = 2000;
 /** 每个会话保留的最近事件数（重放上限）。 */
 const BUS_BUFFER_LIMIT = 2000;
 
+/**
+ * 回合停滞兜底：超过该时长没有任何会话事件就中止回合。
+ *
+ * `prompt()` 的返回完全由 Agent 决定。上游凭据失效时 claude-code 会自己退避重试
+ * 数分钟，这期间既不返回也不产生事件，前端只能对着「工作中 · Ns」的空对话区干等。
+ * 阈值比 localProvider 的 50s 宽松一些，给真正的慢工具留余量。
+ */
+const SESSION_EVENT_STALL_MS = 90_000;
+/** 停滞检测的轮询间隔。 */
+const STALL_POLL_INTERVAL_MS = 1_000;
+
 const CLIENT_INFO = { name: "Open Chat", version: "0.1.0" } as const;
 /** 与 initialize 握手一起下发的客户端能力（保留原 ACP 路径的公告）。 */
 const CLIENT_CAPABILITIES = { session: { configOptions: { boolean: {} } } } as const;
@@ -136,6 +148,8 @@ export class AcpManager {
   private readonly turnHistoryStart = new Map<string, number>();
   /** 各会话当前回合的 tool_call 合并快照（toolCallId → 最新完整快照）。 */
   private readonly toolCallSnapshots = new Map<string, Map<string, ToolCall>>();
+  /** 各 ACP 会话最近一次收到会话事件的时间戳（停滞检测用）。 */
+  private readonly lastEventAt = new Map<string, number>();
 
   constructor(
     private readonly config: AcpConfig,
@@ -291,7 +305,44 @@ export class AcpManager {
     try {
       // acp-hub 的 prompt 已内置 abort → session/cancel 竞速：用户按下停止时
       // prompt 以 AbortError 拒绝，activeRuns 与注册表随之释放。
-      const result = await session.acpSession.prompt(text, { signal });
+      //
+      // 停滞看门狗：Agent 卡在重试循环（典型场景是上游 401 后自己退避重试数分钟）
+      // 时 prompt 既不返回也没有事件，前端只能看到空对话区 + 跳动的「工作中」。
+      // 这里用一个内部 controller 兜底中止，并把「停滞」与「用户取消」区分开：
+      // 用户取消沿用原来的静默语义，停滞必须变成一条明确的 turn.failed。
+      const stallController = new AbortController();
+      const forwardAbort = (): void => stallController.abort();
+      if (signal.aborted) stallController.abort();
+      else signal.addEventListener("abort", forwardAbort, { once: true });
+
+      // 回合起点即为首次活动时间：握手/排队阶段没有事件是正常的。
+      this.lastEventAt.set(session.sessionId, Date.now());
+      let stalled = false;
+      const stopWatchdog = startStallWatchdog({
+        stallMs: SESSION_EVENT_STALL_MS,
+        pollMs: STALL_POLL_INTERVAL_MS,
+        lastEventAt: () => this.lastEventAt.get(session.sessionId),
+        permissionPending: () => this.hasPendingPermissionForSession(session.sessionId),
+        onStall: () => {
+          stalled = true;
+          stallController.abort();
+        },
+      });
+
+      let result: Awaited<ReturnType<typeof session.acpSession.prompt>>;
+      try {
+        result = await session.acpSession.prompt(text, { signal: stallController.signal });
+      } catch (error) {
+        // 停滞中止会被 acp-hub 包装成 prompt_failed + cause=AbortError，
+        // chat.ts 对 AbortError 是静默返回的，所以必须在这里转成真实错误。
+        if (stalled) throw GatewayError.upstream(stallErrorMessage(SESSION_EVENT_STALL_MS));
+        throw error;
+      } finally {
+        stopWatchdog();
+        signal.removeEventListener("abort", forwardAbort);
+        this.lastEventAt.delete(session.sessionId);
+      }
+      if (stalled) throw GatewayError.upstream(stallErrorMessage(SESSION_EVENT_STALL_MS));
       // 索引里只保留首条用户消息作为标题，并刷新活跃时间。
       this.touchSessionIndex(session, text);
       this.emitCustom(session.sessionId, res, "acp_turn", {
@@ -348,6 +399,7 @@ export class AcpManager {
     this.busSubscribers.clear();
     this.turnHistoryStart.clear();
     this.toolCallSnapshots.clear();
+    this.lastEventAt.clear();
     for (const runtime of this.runtimes.values()) {
       void runtime.adapter.dispose().catch(() => {});
       runtime.connectPromise = null;
@@ -690,6 +742,8 @@ export class AcpManager {
   }
 
   private handleSessionEvent(entry: AcpSessionEntry, event: SessionEvent): void {
+    // 任何会话事件都算「有进展」，重置停滞看门狗。
+    this.lastEventAt.set(entry.sessionId, Date.now());
     const collector = this.historyCollectors.get(entry.sessionId);
     if (collector && event.type !== "tool_call" && event.type !== "tool_call_update") {
       collectHubEvent(collector, event);
@@ -826,6 +880,18 @@ export class AcpManager {
       this.pendingPermissions.delete(id);
       void pending.acpSession.cancelPermission(pending.requestId).catch(() => {});
     }
+  }
+
+  /**
+   * @description 该会话当前是否有等待用户批准的权限询问（停滞检测跳过这类等待）。
+   * @param {string} sessionId - 网关内的 ACP 会话 id
+   * @returns {boolean} 存在待批权限时为 true
+   */
+  private hasPendingPermissionForSession(sessionId: string): boolean {
+    for (const pending of this.pendingPermissions.values()) {
+      if (pending.sessionId === sessionId) return true;
+    }
+    return false;
   }
 
   /** 有效配置列表：桥接包在 ACP 会话响应里广告什么就展示什么。 */

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, toRef } from "vue";
 import { useNow } from "../../composables/useNow";
-import { formatWorkingElapsed } from "../../utils/chatDuration";
+import { formatWorkingStatus } from "../../utils/chatDuration";
 
 interface Props {
   /** 会话运行中（与侧栏 busy 状态同源）。 */
@@ -16,11 +16,10 @@ const props = withDefaults(defineProps<Props>(), { workingStartedAtMs: undefined
 const workingNow = useNow(toRef(props, "working"));
 
 /** 列尾"工作中 · Xs"的已运行时长；无服务端起点时不显示时长。 */
-const workingElapsed = computed(() =>
-  props.workingStartedAtMs
-    ? formatWorkingElapsed(Math.max(0, workingNow.value - props.workingStartedAtMs))
-    : "",
-);
+const workingStatus = computed(() => {
+  if (!props.workingStartedAtMs) return { elapsed: "", hint: "" };
+  return formatWorkingStatus(Math.max(0, workingNow.value - props.workingStartedAtMs));
+});
 </script>
 
 <template>
@@ -33,7 +32,9 @@ const workingElapsed = computed(() =>
         <i class="working-dot" />
         <i class="working-dot" />
       </span>
-      <span>工作中{{ workingElapsed ? ` · ${workingElapsed}` : "" }}</span>
+      <span>工作中{{ workingStatus.elapsed ? ` · ${workingStatus.elapsed}` : "" }}</span>
+      <!-- 长时间没有响应时补一句原因：否则对话区只有跳动的计时，观感等同白屏。 -->
+      <span v-if="workingStatus.hint" class="text-brand-muted">{{ workingStatus.hint }}</span>
     </div>
   </div>
 </template>
