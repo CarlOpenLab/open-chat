@@ -19,7 +19,13 @@ import {
   type WebAccessControl,
 } from "./access";
 import { AgentManager } from "./agentManager";
-import { attachmentStore, dataRootDir, defaultWorkspaceDir } from "./attachments";
+import {
+  attachmentIdFromReference,
+  attachmentStore,
+  dataRootDir,
+  defaultWorkspaceDir,
+  setAttachmentRecorder,
+} from "./attachments";
 import { resolveExecutable } from "./commandEnv";
 import { defaultAppConfig, type AppConfig, type LocalConfig } from "./config";
 import { GatewayError } from "./error";
@@ -78,7 +84,7 @@ export function loadGatewayRuntime(store?: WorkspaceStore): GatewayRuntime {
   const workspaceStore = store ?? openWorkspaceStore();
   const searchProvider = createSearchProvider(config.search);
   const localChat = createLocalChatManager(config);
-  const agentManager = new AgentManager(config.acp, localChat);
+  const agentManager = new AgentManager(config.acp, localChat, workspaceStore.agentSessions);
   return { config, store: workspaceStore, searchProvider, localChat, agentManager };
 }
 
@@ -110,6 +116,19 @@ export function createGatewayApp(
   mkdirSync(defaultWorkspaceDir(), { recursive: true });
   const app = express();
   app.disable("x-powered-by");
+
+  // 附件落盘后登记进 SQLite 索引（字节仍在数据目录，索引只存元数据）。
+  setAttachmentRecorder((stored) => {
+    const id = attachmentIdFromReference(stored.reference);
+    if (!id) return;
+    store.attachments.record({
+      id,
+      name: stored.name,
+      path: stored.path,
+      size: stored.size,
+      isImage: stored.isImage,
+    });
+  });
   app.use(cors(buildCorsOptions(config.corsAllowedOrigins)));
   // 附件上传走 base64 JSON，放大后可达 40MB 左右，放宽 body 上限
   app.use(express.json({ limit: "44mb" }));
@@ -135,7 +154,7 @@ export function createGatewayApp(
   // 本机能力与会话
   app.use("/api/project-path", createProjectPathRouter(store));
   app.use("/api/skills", createSkillsRouter());
-  app.use("/api/attachments", createAttachmentRouter(attachmentStore));
+  app.use("/api/attachments", createAttachmentRouter(attachmentStore, store.attachments));
   app.use("/api/acp", createAgentRouter(agentManager));
   const chatDeps = {
     config,

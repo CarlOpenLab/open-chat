@@ -23,6 +23,7 @@ import { createTranscriptCollector } from "./transcript/core";
 import { writeTranscriptCustomEvent } from "./transcript/stream";
 import { writeNativeEvent } from "./nativeEvents";
 import type { TranscriptHistoryCollector, TranscriptMessage } from "./transcript/types";
+import type { AgentSessionStore } from "./store/agentSessions";
 
 export interface AcpAgentView {
   id: string;
@@ -65,6 +66,8 @@ interface AcpSessionEntry {
   conversationId: string;
   /** 创建该会话的适配器实例；适配器重建后据此判定缓存会话已失效。 */
   adapter: AcpAgentAdapter;
+  /** 会话工作目录（用于索引与历史播种）。 */
+  cwd: string;
   /** ACP 侧 sessionId（provider session id）。 */
   sessionId: string;
   /**
@@ -134,7 +137,11 @@ export class AcpManager {
   /** 各会话当前回合的 tool_call 合并快照（toolCallId → 最新完整快照）。 */
   private readonly toolCallSnapshots = new Map<string, Map<string, ToolCall>>();
 
-  constructor(private readonly config: AcpConfig) {
+  constructor(
+    private readonly config: AcpConfig,
+    /** ACP 会话索引（SQLite）；不传时只在内存里管理会话，不落索引。 */
+    private readonly sessionIndex: AgentSessionStore | null = null,
+  ) {
     for (const agent of config.agents) {
       if (agent.transport === "opencode") continue;
       this.runtimes.set(agent.id, {
@@ -285,6 +292,8 @@ export class AcpManager {
       // acp-hub 的 prompt 已内置 abort → session/cancel 竞速：用户按下停止时
       // prompt 以 AbortError 拒绝，activeRuns 与注册表随之释放。
       const result = await session.acpSession.prompt(text, { signal });
+      // 索引里只保留首条用户消息作为标题，并刷新活跃时间。
+      this.touchSessionIndex(session, text);
       this.emitCustom(session.sessionId, res, "acp_turn", {
         agentId,
         sessionId: session.sessionId,
@@ -501,7 +510,7 @@ export class AcpManager {
             cwd,
             resumeSessionId: normalizedProviderSessionId,
           });
-          const entry = this.registerSession(runtime, conversationId, acpSession, key);
+          const entry = this.registerSession(runtime, conversationId, acpSession, key, cwd);
           await this.seedSessionHistory(runtime, entry, normalizedProviderSessionId, cwd);
           return entry;
         } catch (error) {
@@ -517,7 +526,7 @@ export class AcpManager {
       }
     }
     const acpSession = await adapter.createSession({ cwd });
-    const entry = this.registerSession(runtime, conversationId, acpSession, key);
+    const entry = this.registerSession(runtime, conversationId, acpSession, key, cwd);
     if (displacedProviderSessionId) {
       await this.seedSessionHistory(runtime, entry, displacedProviderSessionId, cwd);
     }
@@ -571,6 +580,7 @@ export class AcpManager {
     conversationId: string,
     acpSession: AgentSession,
     key: string,
+    cwd: string,
   ): AcpSessionEntry {
     // 常驻 collector：新会话也在生命周期内持续收集消息（含后续回合），
     // 供状态查询与订阅快照重建完整会话视图。
@@ -580,6 +590,7 @@ export class AcpManager {
       agentId: runtime.config.id,
       conversationId,
       adapter: runtime.adapter,
+      cwd,
       sessionId: acpSession.id,
       acpSession,
       response: {
@@ -592,11 +603,41 @@ export class AcpManager {
     };
     this.sessions.set(key, entry);
     this.sessionsByAcpId.set(acpSession.id, entry);
+    this.indexSession(entry);
     // resume 重定向恢复：agent 用另一个 id 推 update 时，连接层会认领别名，
     // 这里把真实 id 广播给订阅者，让客户端持久化为新的 providerSessionId。
     acpSession.onAlias = (alias) => this.handleSessionAlias(entry, alias);
     void this.pumpEvents(entry);
     return entry;
+  }
+
+  /**
+   * 把会话写进 SQLite 索引（agent / sessionId / 归属会话 / 工作目录）。
+   * 索引是旁路信息：写库失败只记日志，不影响会话本身可用。
+   */
+  private indexSession(entry: AcpSessionEntry): void {
+    if (!this.sessionIndex) return;
+    try {
+      this.sessionIndex.record({
+        agentId: entry.agentId,
+        sessionId: entry.sessionId,
+        conversationId: entry.conversationId,
+        cwd: entry.cwd,
+        source: "gateway",
+      });
+    } catch (error) {
+      console.error(`[acp:${entry.agentId}] 会话索引写入失败：`, error);
+    }
+  }
+
+  /** 刷新索引里的活跃时间（首条用户消息顺带作为标题）。 */
+  private touchSessionIndex(entry: AcpSessionEntry, title?: string): void {
+    if (!this.sessionIndex) return;
+    try {
+      this.sessionIndex.touch(entry.agentId, entry.sessionId, title);
+    } catch (error) {
+      console.error(`[acp:${entry.agentId}] 会话索引更新失败：`, error);
+    }
   }
 
   /** 会话别名被认领：登记索引、更新解析 id、通知订阅者更新 providerSessionId。 */
@@ -610,6 +651,20 @@ export class AcpManager {
     this.sessionsByAcpId.set(alias, entry);
     entry.resolvedSessionId = alias;
     entry.lastUsed = Date.now();
+    // 别名也是provider 侧的真实 id：单独记一行，之后按新 id 也能查到这条会话。
+    if (this.sessionIndex) {
+      try {
+        this.sessionIndex.record({
+          agentId: entry.agentId,
+          sessionId: alias,
+          conversationId: entry.conversationId,
+          cwd: entry.cwd,
+          source: "gateway",
+        });
+      } catch (error) {
+        console.error(`[acp:${entry.agentId}] 会话别名索引写入失败：`, error);
+      }
+    }
     console.log(
       `[acp:${entry.agentId}] session resumed as ${alias} (reassigned by agent); ` +
         `conversation ${entry.conversationId} should adopt the new providerSessionId`,

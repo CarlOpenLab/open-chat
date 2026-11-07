@@ -49,6 +49,46 @@ export interface StoredAttachment {
   path: string;
   name: string;
   isImage: boolean;
+  /** 字节数（附件索引据此统计占用）。 */
+  size: number;
+}
+
+/**
+ * 附件落盘后的回调：网关启动时接上 SQLite 索引（见 app.ts）。
+ * 存储层不直接依赖数据库，测试与 CLI 场景可以不接。
+ */
+let attachmentRecorder: ((stored: StoredAttachment) => void) | null = null;
+
+/**
+ * @description 注册附件落盘回调。
+ * @param {(stored: StoredAttachment) => void} recorder - 收到已落盘附件元数据
+ * @returns {void}
+ */
+export function setAttachmentRecorder(recorder: ((stored: StoredAttachment) => void) | null): void {
+  attachmentRecorder = recorder;
+}
+
+/**
+ * @description 从引用 `cc-attachment:<id>` 提取索引 id；格式非法时返回 null（不抛错）。
+ * @param {string} reference - 附件引用
+ * @returns {string | null} 引用 id
+ */
+export function attachmentIdFromReference(reference: string): string | null {
+  try {
+    return referenceId(reference);
+  } catch {
+    return null;
+  }
+}
+
+function recordAttachment(stored: StoredAttachment): void {
+  if (!attachmentRecorder) return;
+  try {
+    attachmentRecorder(stored);
+  } catch (error) {
+    // 索引失败不能影响附件本身可用：字节已经落好盘了
+    console.error("[attachments] 索引写入失败：", error);
+  }
 }
 
 /** 数据根目录：`OPEN_CHAT_DATA_DIR` 优先，默认用户主目录下的隐藏目录。 */
@@ -123,12 +163,15 @@ export class AttachmentStore {
       fs.rmSync(staging, { recursive: true, force: true });
       throw error;
     }
-    return {
+    const stored: StoredAttachment = {
       reference: `${ATTACHMENT_SCHEME}${id}`,
       path: path.join(destination, safe),
       name: safe,
       isImage: isImageName(safe),
+      size: bytes.length,
     };
+    recordAttachment(stored);
+    return stored;
   }
 
   /** 解析引用对应的附件根目录；引用非法或不存在时返回 null。 */
@@ -159,12 +202,15 @@ export class AttachmentStore {
     const directory = path.join(this.root, id);
     const file = path.join(directory, safe);
     if (fs.existsSync(file) && fs.statSync(file).isFile()) {
-      return {
+      const existing: StoredAttachment = {
         reference: `${ATTACHMENT_SCHEME}${id}`,
         path: file,
         name: safe,
         isImage: isImageName(safe),
+        size: bytes.length,
       };
+      recordAttachment(existing);
+      return existing;
     }
     const staging = path.join(this.root, `.${id}.tmp`);
     try {
@@ -176,12 +222,15 @@ export class AttachmentStore {
       // 并发写入同一内容时目录可能已由另一请求建好，直接复用。
       if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw error;
     }
-    return {
+    const stored: StoredAttachment = {
       reference: `${ATTACHMENT_SCHEME}${id}`,
       path: file,
       name: safe,
       isImage: isImageName(safe),
+      size: bytes.length,
     };
+    recordAttachment(stored);
+    return stored;
   }
 
   /** 按引用 + 文件名读取字节，校验路径归属，杜绝目录穿越。 */

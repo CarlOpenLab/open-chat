@@ -24,6 +24,13 @@ export function createAgentRouter(agentManager: AgentManager): Router {
     res.json({ agents: agentManager.listAgents() });
   });
 
+  // 会话索引（SQLite，按最近活跃排序）：会话正文仍在各 CLI 原生存储里
+  router.get("/sessions", (req, res) => {
+    res.json({
+      sessions: agentManager.listIndexedSessions(optionalString(req.query.agentId)),
+    });
+  });
+
   router.get("/session", async (req, res) => {
     const agentId = requiredQuery(req, "agentId");
     const conversationId = requiredQuery(req, "conversationId");

@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { createWebAccessControl } from "./access";
 import { AgentManager } from "./agentManager";
 import { createGatewayApp, type GatewayRuntime } from "./app";
+import { MIGRATIONS } from "./db/migrations";
 import { defaultAppConfig } from "./config";
 import { WorkspaceStore } from "./store/workspace";
 
@@ -174,7 +175,7 @@ describe("gateway HTTP API", () => {
     expect(imported.body.imported).toMatchObject({ tasks: 1, projectPaths: 1 });
 
     const info = await api("/api/workspace/info");
-    expect(info.body).toMatchObject({ databasePath: ":memory:", schemaVersion: 1 });
+    expect(info.body).toMatchObject({ databasePath: ":memory:", schemaVersion: MIGRATIONS.length });
     expect(info.body.counts.tasks).toBeGreaterThan(0);
   });
 

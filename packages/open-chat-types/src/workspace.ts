@@ -206,6 +206,10 @@ export interface WorkspaceInfo {
     conversations: number;
     providers: number;
     projectPaths: number;
+    /** 登记在附件索引里的附件数（字节在数据目录，不在库内）。 */
+    attachments: number;
+    /** ACP 会话索引条数。 */
+    agentSessions: number;
   };
 }
 

@@ -7,6 +7,8 @@ import path from "node:path";
 import type { WorkspaceInfo, WorkspacePreferences } from "@cc-heart/open-chat-types";
 import { dataRootDir } from "../attachments";
 import { openDatabase, schemaVersion, type Database } from "../db/database";
+import { AgentSessionStore } from "./agentSessions";
+import { AttachmentIndexStore } from "./attachments";
 import { ConversationStore } from "./conversations";
 import { PreferenceStore } from "./preferences";
 import { ProjectPathStore } from "./projectPaths";
@@ -33,6 +35,10 @@ export interface WorkspaceExport {
   providers: ReturnType<typeof toProviderView>[];
   projectPaths: string[];
   preferences: WorkspacePreferences;
+  /** 附件元数据（字节仍留在数据目录，备份不内嵌文件）。 */
+  attachments: ReturnType<AttachmentIndexStore["list"]>;
+  /** ACP 会话索引（正文在 CLI 原生存储里）。 */
+  agentSessions: ReturnType<AgentSessionStore["list"]>;
 }
 
 export class WorkspaceStore {
@@ -41,6 +47,8 @@ export class WorkspaceStore {
   readonly providers: ProviderStore;
   readonly projectPaths: ProjectPathStore;
   readonly preferences: PreferenceStore;
+  readonly attachments: AttachmentIndexStore;
+  readonly agentSessions: AgentSessionStore;
 
   constructor(
     readonly db: Database,
@@ -51,6 +59,8 @@ export class WorkspaceStore {
     this.providers = new ProviderStore(db);
     this.projectPaths = new ProjectPathStore(db);
     this.preferences = new PreferenceStore(db);
+    this.attachments = new AttachmentIndexStore(db);
+    this.agentSessions = new AgentSessionStore(db);
   }
 
   /**
@@ -86,6 +96,8 @@ export class WorkspaceStore {
         conversations: this.conversations.count(),
         providers: this.providers.count(),
         projectPaths: this.projectPaths.count(),
+        attachments: this.attachments.count(),
+        agentSessions: this.agentSessions.count(),
       },
     };
   }
@@ -111,6 +123,8 @@ export class WorkspaceStore {
       providers: this.providers.list().map(toProviderView),
       projectPaths: this.projectPaths.list(),
       preferences: this.preferences.get(),
+      attachments: this.attachments.list(1000),
+      agentSessions: this.agentSessions.list({ limit: 1000 }),
     };
   }
 

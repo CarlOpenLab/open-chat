@@ -6,14 +6,28 @@ import { Router } from "express";
 import { attachmentContentType, type AttachmentStore } from "../attachments";
 import { GatewayError } from "../error";
 import { toGatewayError } from "../http";
+import type { AttachmentIndexStore } from "../store/attachments";
 
 /**
  * @description 创建附件路由（挂载在 `/api/attachments`）。
  * @param {AttachmentStore} attachments - 附件存储
+ * @param {AttachmentIndexStore} [index] - 附件元数据索引（SQLite）；不传时不提供列表
  * @returns {Router} Express 路由
  */
-export function createAttachmentRouter(attachments: AttachmentStore): Router {
+export function createAttachmentRouter(
+  attachments: AttachmentStore,
+  index?: AttachmentIndexStore,
+): Router {
   const router = Router();
+
+  // 已登记附件列表（按最近使用排序）：元数据在库里，字节在数据目录
+  router.get("/", (_req, res) => {
+    if (!index) {
+      res.json({ attachments: [], totalBytes: 0 });
+      return;
+    }
+    res.json({ attachments: index.list(), totalBytes: index.totalBytes() });
+  });
 
   router.post("/", (req, res) => {
     const body = req.body as { name?: unknown; dataBase64?: unknown };

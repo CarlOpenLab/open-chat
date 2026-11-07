@@ -70,4 +70,40 @@ export const MIGRATIONS: readonly string[] = [
     updated_at INTEGER NOT NULL
   );
   `,
+
+  // v2：附件元数据索引 / ACP 会话索引
+  //
+  // 附件字节仍落盘（`attachments/<id>/<name>`，agent 同机直接读路径），这里只
+  // 存引用、路径、大小与时间，用于清理孤儿、按引用回查和备份导出。
+  //
+  // 会话索引记录网关启动过的 ACP 会话，source 区分来源：gateway 由网关自己
+  // 创建，cli-file 由终端直开的会话扫描入库。providerSessionId 换了 id（resume
+  // 重定向别名）时按新 id 追加一行，旧行保留以便追溯。
+  `
+  CREATE TABLE attachments (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    path         TEXT NOT NULL,
+    size         INTEGER NOT NULL DEFAULT 0,
+    is_image     INTEGER NOT NULL DEFAULT 0 CHECK (is_image IN (0, 1)),
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL
+  );
+  CREATE INDEX attachments_last_used_idx ON attachments (last_used_at DESC);
+
+  CREATE TABLE agent_sessions (
+    agent_id        TEXT NOT NULL,
+    session_id      TEXT NOT NULL,
+    conversation_id TEXT,
+    cwd             TEXT,
+    title           TEXT NOT NULL DEFAULT '',
+    source          TEXT NOT NULL DEFAULT 'gateway'
+                    CHECK (source IN ('gateway', 'cli-file')),
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, session_id)
+  );
+  CREATE INDEX agent_sessions_updated_idx ON agent_sessions (updated_at DESC);
+  CREATE INDEX agent_sessions_conversation_idx ON agent_sessions (conversation_id);
+  `,
 ];

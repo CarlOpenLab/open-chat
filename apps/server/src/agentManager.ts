@@ -15,6 +15,7 @@ import {
 import { GatewayError } from "./error";
 import { SessionRunRegistry } from "./sessionRunRegistry";
 import type { TranscriptMessage } from "./transcript/types";
+import type { AgentSessionRecord, AgentSessionStore } from "./store/agentSessions";
 
 export type AgentView = AcpAgentView | OpenCodeAgentView;
 type AgentSessionStateView = AcpSessionStateView | OpenCodeSessionStateView;
@@ -27,9 +28,21 @@ export class AgentManager {
   constructor(
     private readonly config: AcpConfig,
     localChat: LocalChatManager | null,
+    /** ACP 会话索引（SQLite）；不传时不落索引。 */
+    private readonly sessionIndex: AgentSessionStore | null = null,
   ) {
-    this.acp = new AcpManager(config);
+    this.acp = new AcpManager(config, sessionIndex);
     this.openCode = localChat ? new OpenCodeManager(config, localChat) : null;
+  }
+
+  /**
+   * @description 列出会话索引（按最近活跃排序）。
+   * @param {string} [agentId] - 只列某个 agent 的会话
+   * @param {number} [limit] - 条数上限
+   * @returns {AgentSessionRecord[]} 会话索引
+   */
+  listIndexedSessions(agentId?: string, limit?: number): AgentSessionRecord[] {
+    return this.sessionIndex ? this.sessionIndex.list({ agentId, limit }) : [];
   }
 
   listAgents(): AgentView[] {

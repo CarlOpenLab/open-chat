@@ -399,6 +399,8 @@ describe("WorkspaceStore", () => {
         conversations: 1,
         providers: 1,
         projectPaths: 0,
+        attachments: 0,
+        agentSessions: 0,
       });
       const exported = store.exportAll();
       expect(exported.transcripts).toEqual({ c1: [{ id: "x" }] });
