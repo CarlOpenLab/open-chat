@@ -54,6 +54,8 @@ interface AcpRuntime {
   adapter: AcpAgentAdapter;
   connectPromise: Promise<AgentCapabilities> | null;
   capabilities: AgentCapabilities | null;
+  /** 正在进行的适配器重建（并发请求共用，避免互相 dispose 对方刚连上的适配器）。 */
+  reconnecting: Promise<void> | null;
 }
 
 type AcpSessionResponse = Pick<AgentSession["raw"], "configOptions" | "modes">;
@@ -61,6 +63,8 @@ type AcpSessionResponse = Pick<AgentSession["raw"], "configOptions" | "modes">;
 interface AcpSessionEntry {
   agentId: string;
   conversationId: string;
+  /** 创建该会话的适配器实例；适配器重建后据此判定缓存会话已失效。 */
+  adapter: AcpAgentAdapter;
   /** ACP 侧 sessionId（provider session id）。 */
   sessionId: string;
   /**
@@ -138,6 +142,7 @@ export class AcpManager {
         adapter: this.createAdapter(agent),
         connectPromise: null,
         capabilities: null,
+        reconnecting: null,
       });
     }
   }
@@ -338,6 +343,7 @@ export class AcpManager {
       void runtime.adapter.dispose().catch(() => {});
       runtime.connectPromise = null;
       runtime.capabilities = null;
+      runtime.reconnecting = null;
     }
   }
 
@@ -448,7 +454,15 @@ export class AcpManager {
   ): Promise<AcpSessionEntry> {
     const key = `${runtime.config.id}:${conversationId}:${projectPath || ""}`;
     const existing = this.sessions.get(key);
-    if (existing) {
+    // 适配器重建过：旧连接上的会话对象已失效，不能复用缓存条目。
+    if (existing && existing.adapter !== runtime.adapter) {
+      this.sessions.delete(key);
+      if (this.sessionsByAcpId.get(existing.sessionId) === existing) {
+        this.sessionsByAcpId.delete(existing.sessionId);
+      }
+      this.historyCollectors.delete(existing.sessionId);
+      this.toolCallSnapshots.delete(existing.sessionId);
+    } else if (existing) {
       existing.lastUsed = Date.now();
       return existing;
     }
@@ -565,6 +579,7 @@ export class AcpManager {
     const entry: AcpSessionEntry = {
       agentId: runtime.config.id,
       conversationId,
+      adapter: runtime.adapter,
       sessionId: acpSession.id,
       acpSession,
       response: {
@@ -786,27 +801,82 @@ export class AcpManager {
 
   /** 连接（幂等）；进程死亡后重建适配器重试一次。 */
   private async adapterFor(runtime: AcpRuntime): Promise<AcpAgentAdapter> {
-    if (!runtime.connectPromise) {
-      runtime.connectPromise = runtime.adapter.connect().then((capabilities) => {
-        runtime.capabilities = capabilities;
-        return capabilities;
-      });
+    // 上一次重建还没结束：等它，别在它换适配器时插一脚。
+    if (runtime.reconnecting) await runtime.reconnecting;
+    // 连接已死亡（桥接进程退出 / 被 dispose）：acp-hub 的连接关闭后不可复用，
+    // 且 AcpAgentAdapter 自己不会重建 connection，只能整体换适配器。
+    if (!this.isAdapterAlive(runtime.adapter)) {
+      await this.reconnectAdapter(runtime);
+      return runtime.adapter;
     }
+    if (!runtime.connectPromise) this.connectAdapter(runtime);
     try {
       await runtime.connectPromise;
-      return runtime.adapter;
+      if (this.isAdapterAlive(runtime.adapter)) return runtime.adapter;
+      // 等待期间连接死亡：落回重建路径
     } catch {
+      // 连接建立失败（进程启动失败 / 握手失败）：重建后重试一次
+    }
+    await this.reconnectAdapter(runtime);
+    return runtime.adapter;
+  }
+
+  /**
+   * 适配器的底层连接是否仍可用。
+   *
+   * 尚未建立连接时返回 true（交给 `connect()` 建连）；一旦 `AcpAgentConnection`
+   * 被 dispose 或桥接进程退出，它就永久关闭，`connect()` 只会抛 `disposed`。
+   */
+  private isAdapterAlive(adapter: AcpAgentAdapter): boolean {
+    const connection = adapter.rawConnection;
+    return connection === undefined || connection.isConnected;
+  }
+
+  /** 建立连接并把 capabilities 记到 runtime（连接对象由适配器持有）。 */
+  private connectAdapter(runtime: AcpRuntime): Promise<AgentCapabilities> {
+    runtime.connectPromise = runtime.adapter.connect().then((capabilities) => {
+      runtime.capabilities = capabilities;
+      return capabilities;
+    });
+    return runtime.connectPromise;
+  }
+
+  /**
+   * 换新适配器并重新连接；并发请求共用同一次重建。
+   *
+   * 必须先换适配器再 dispose 旧的：旧适配器上的查询可能仍在飞行中，过早 dispose
+   * 会让它们以 `disposed` 失败。重建串行化则避免两个并发请求各自重建、互相把对方
+   * 刚连上的适配器关掉（旧实现就是先 dispose 再换，存在这个竞态）。
+   */
+  private async reconnectAdapter(runtime: AcpRuntime): Promise<void> {
+    if (runtime.reconnecting) return runtime.reconnecting;
+    runtime.reconnecting = (async () => {
+      const previous = runtime.adapter;
       runtime.connectPromise = null;
       runtime.capabilities = null;
-      // acp-hub 连接死亡后不可复用（dispose 语义）：换新适配器重试一次。
-      await runtime.adapter.dispose().catch(() => {});
       runtime.adapter = this.createAdapter(runtime.config);
-      runtime.connectPromise = runtime.adapter.connect().then((capabilities) => {
-        runtime.capabilities = capabilities;
-        return capabilities;
-      });
-      await runtime.connectPromise;
-      return runtime.adapter;
+      // 旧连接上的会话对象无法在新连接上复用：清掉缓存，让调用方按 providerSessionId 重新恢复。
+      this.dropStaleSessions(runtime, previous);
+      await previous.dispose().catch(() => {});
+      await this.connectAdapter(runtime);
+    })().finally(() => {
+      runtime.reconnecting = null;
+    });
+    return runtime.reconnecting;
+  }
+
+  /** 丢弃挂在旧适配器上的会话缓存（历史由本地 CLI 文件重新播种）。 */
+  private dropStaleSessions(runtime: AcpRuntime, previous: AcpAgentAdapter): void {
+    for (const [key, entry] of [...this.sessions]) {
+      if (entry.adapter !== previous) continue;
+      this.sessions.delete(key);
+      if (this.sessionsByAcpId.get(entry.sessionId) === entry) {
+        this.sessionsByAcpId.delete(entry.sessionId);
+      }
+      this.historyCollectors.delete(entry.sessionId);
+      this.cancelPermissionsForSession(entry.sessionId);
+      this.endSessionStream(entry.sessionId);
+      this.toolCallSnapshots.delete(entry.sessionId);
     }
   }
 
