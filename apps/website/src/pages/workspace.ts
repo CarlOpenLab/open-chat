@@ -44,6 +44,9 @@ export interface Workspace {
   themeMode: "system" | "light" | "dark";
   toggleTheme: () => void;
   setThemeMode: (mode: "system" | "light" | "dark") => void;
+  /** 布局视图：看板页 / 对话页（顶栏 TopTabBar 切换） */
+  viewMode: "board" | "chat";
+  handleViewModeChange: (mode: "board" | "chat") => void;
 
   // ===== 当前会话（对话区） =====
   content: string;
