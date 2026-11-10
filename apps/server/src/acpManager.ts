@@ -47,6 +47,8 @@ export interface AcpSessionStateView {
   loadSupported: boolean;
   /** 该 ACP 会话当前是否正在运行（服务端 activeRuns，回合进行中为 true）。 */
   running: boolean;
+  /** 运行中回合的起始时间（毫秒）；未运行时缺省。刷新页面后据此恢复计时。 */
+  startedAt?: number;
 }
 
 interface AcpRuntime {

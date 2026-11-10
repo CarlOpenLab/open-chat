@@ -38,6 +38,19 @@ const chunkText = (chunk: unknown): string => {
 export class SessionRunRegistry {
   private readonly runs = new Map<string, SessionRunEntry>();
 
+  /**
+   * @description 查询某个会话当前是否有由网关启动的回合在运行。
+   * @param {string} agentId - agent id
+   * @param {string} conversationId - 前端会话 key
+   * @returns {{ startedAt: number } | undefined} 运行信息；未运行时为 undefined
+   */
+  findRun(agentId: string, conversationId: string): { startedAt: number } | undefined {
+    const entry = [...this.runs.values()].find(
+      (run) => run.agentId === agentId && run.conversationId === conversationId,
+    );
+    return entry ? { startedAt: entry.startedAt } : undefined;
+  }
+
   list(agentId?: string): SessionRunView[] {
     return [...this.runs.values()]
       .filter((run) => !agentId || run.agentId === agentId)

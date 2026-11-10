@@ -87,7 +87,7 @@ const conversationGroups = [
   {
     title: "昨天",
     items: [
-      { label: "任务看板拖拽排序", active: false },
+      { label: "整理最近的会话记录", active: false },
       { label: "补充 workspace mock 视图", active: false },
     ],
   },

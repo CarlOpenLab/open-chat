@@ -33,11 +33,7 @@ export interface OpenChatConversation {
   providerSessionId?: string;
   projectPath?: string;
   systemPrompt?: string;
-  /** 所属任务（任务抽屉「新建会话」时写入）。 */
-  taskId?: string;
-  /** 看板手动归列的覆盖状态；缺省时按运行信号自动推导。 */
-  statusOverride?: string;
-  /** 出错或手动停止的持久标记，用于看板已终止归类。 */
+  /** 出错或手动停止的持久标记。 */
   lastError?: string;
   queuedMessages?: QueuedMessage[];
   queuePaused?: boolean;
@@ -117,8 +113,6 @@ export function conversationToRecord(conversation: OpenChatConversation): Conver
     providerSessionId: optionalText(conversation.providerSessionId),
     projectPath: optionalText(conversation.projectPath),
     systemPrompt: (conversation.systemPrompt ?? "").slice(0, CONVERSATION_LIMITS.systemPrompt),
-    taskId: optionalText(conversation.taskId, 64),
-    statusOverride: optionalText(conversation.statusOverride, 32),
     lastError: optionalText(conversation.lastError, 2000),
     queuePaused: conversation.queuePaused === true,
     queuedMessages: normalizeQueue(conversation.queuedMessages),
@@ -144,8 +138,6 @@ export function recordToConversation(record: ConversationRecord): OpenChatConver
     ...(record.providerSessionId ? { providerSessionId: record.providerSessionId } : {}),
     ...(record.projectPath ? { projectPath: record.projectPath } : {}),
     systemPrompt: record.systemPrompt,
-    ...(record.taskId ? { taskId: record.taskId } : {}),
-    ...(record.statusOverride ? { statusOverride: record.statusOverride } : {}),
     ...(record.lastError ? { lastError: record.lastError } : {}),
     queuedMessages: record.queuedMessages,
     queuePaused: record.queuePaused,
@@ -234,7 +226,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
           flushPersistState();
         }, RETRY_DELAY_MS);
       }
-      // 409：所属任务还在创建中，属于正常竞态，静默重试
+      // 409：并发写入冲突，属于正常竞态，静默重试
       if (error instanceof ApiError && error.status === 409) return;
     }
     console.error(`Failed to sync conversation ${key}:`, error);
@@ -342,7 +334,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
   };
 
   /**
-   * @description 清空全部会话（任务保留，关联自动解除）。
+   * @description 清空全部会话。
    * @returns {Promise<void>}
    */
   const handleClearLocalHistory = async () => {
@@ -367,7 +359,7 @@ export function useChatPersistence(options: UseChatPersistenceOptions) {
   };
 
   /**
-   * @description 下载工作区完整备份（任务、会话、Model API 消息、偏好；服务商 Key 只含掩码）。
+   * @description 下载工作区完整备份（会话、Model API 消息、偏好；服务商 Key 只含掩码）。
    * @returns {Promise<void>}
    */
   const handleExportLocalHistory = async () => {

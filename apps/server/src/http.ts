@@ -31,7 +31,7 @@ export function toGatewayError(err: unknown, fallback: string): GatewayError {
   if (isForeignKeyViolation(err)) {
     return new GatewayError({
       status: 409,
-      message: "引用的任务或会话不存在",
+      message: "引用的会话不存在",
       type: "invalid_request_error",
       code: "conflict",
     });

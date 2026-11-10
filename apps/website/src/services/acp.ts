@@ -56,8 +56,10 @@ export interface AcpSessionState {
   modes?: unknown;
   messages?: TranscriptMessage[];
   loadSupported?: boolean;
-  /** 该 ACP 会话当前是否正在运行（服务端 activeRuns，回合进行中为 true）。 */
+  /** 该会话当前是否有网关托管的回合在运行（服务端运行注册表）。 */
   running?: boolean;
+  /** 运行中回合的起始时间（毫秒）；刷新后据此恢复「工作中」计时。 */
+  startedAt?: number;
 }
 
 export type AcpSessionStreamOutcome = "completed" | "failed" | "disconnected";

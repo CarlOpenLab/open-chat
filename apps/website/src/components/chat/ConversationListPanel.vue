@@ -69,17 +69,23 @@ const labelRender = (item: ConversationItemType, _info: ConversationItemRenderIn
   });
 };
 
+/** 菜单图标统一 14px 见方：lucide 图标按 em 伸缩，用 font-size + size 保持等比，
+ *  避免只压 h/w 把 24×24 视口挤成非等比形状。 */
+const MENU_ICON_CLASS = "menu-icon";
+const menuIcon = (component: typeof SquarePen) =>
+  h(component, { class: MENU_ICON_CLASS, size: 14, "stroke-width": 1.8 });
+
 const menu = (conversation: ConversationItemType) => ({
   items: [
-    { key: "rename", label: "重命名", icon: h(SquarePen, { class: "!h-[13px] !w-[13px]" }) },
-    { key: "pin", label: "置顶 / 取消置顶", icon: h(Pin, { class: "!h-[13px] !w-[13px]" }) },
-    { key: "archive", label: "归档", icon: h(Archive, { class: "!h-[13px] !w-[13px]" }) },
+    { key: "rename", label: "重命名", icon: menuIcon(SquarePen) },
+    { key: "pin", label: "置顶 / 取消置顶", icon: menuIcon(Pin) },
+    { key: "archive", label: "归档", icon: menuIcon(Archive) },
     { type: "divider" as const },
     {
       key: "delete",
       label: "删除",
       danger: true,
-      icon: h(Trash2, { class: "!h-[13px] !w-[13px]" }),
+      icon: menuIcon(Trash2),
     },
   ],
   onClick: ({ key }: { key: string | number }) => {
@@ -140,5 +146,13 @@ const menu = (conversation: ConversationItemType) => ({
 
 .conversation-list :deep(.antd-conversations-label) {
   font-size: 13px;
+}
+
+/* 菜单图标：14px 等比、固定宽高，保证四行图标左缘与颜色一致（删除行只换色不换形）。 */
+.conversation-list :deep(.menu-icon) {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
 }
 </style>

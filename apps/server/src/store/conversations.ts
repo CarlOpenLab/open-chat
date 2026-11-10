@@ -23,8 +23,6 @@ interface ConversationRow {
   provider_session_id: string | null;
   project_path: string | null;
   system_prompt: string;
-  task_id: string | null;
-  status_override: string | null;
   last_error: string | null;
   queue_paused: number;
   queued_messages: string;
@@ -150,8 +148,6 @@ export function parseConversationRecord(
       typeof obj.systemPrompt === "string"
         ? obj.systemPrompt.slice(0, CONVERSATION_LIMITS.systemPrompt)
         : "",
-    taskId: optionalText(obj.taskId, 64),
-    statusOverride: optionalText(obj.statusOverride, 32),
     lastError: optionalText(obj.lastError, ERROR_TEXT_LIMIT),
     queuePaused: obj.queuePaused === true,
     queuedMessages: normalizeQueuedMessages(obj.queuedMessages, now),
@@ -175,8 +171,6 @@ function rowToRecord(row: ConversationRow): ConversationRecord {
     providerSessionId: row.provider_session_id,
     projectPath: row.project_path,
     systemPrompt: row.system_prompt,
-    taskId: row.task_id,
-    statusOverride: row.status_override,
     lastError: row.last_error,
     queuePaused: row.queue_paused === 1,
     queuedMessages: parseJsonColumn<QueuedMessage[]>(row.queued_messages, []),
@@ -221,15 +215,14 @@ export class ConversationStore {
    * 重新写入已归档的会话会取消归档。
    * @param {ConversationRecord} record - 已规范化的记录
    * @returns {ConversationRecord} 写入后的记录
-   * @throws {Error} taskId 指向不存在的任务时抛出外键约束错误（路由层映射为 409）
    */
   upsert(record: ConversationRecord): ConversationRecord {
     this.db
       .prepare(
         `INSERT INTO conversations (key, title, pinned, agent_id, model_id, provider_session_id,
-           project_path, system_prompt, task_id, status_override, last_error, queue_paused,
+           project_path, system_prompt, last_error, queue_paused,
            queued_messages, archived_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
          ON CONFLICT (key) DO UPDATE SET
            title = excluded.title,
            pinned = excluded.pinned,
@@ -238,8 +231,6 @@ export class ConversationStore {
            provider_session_id = excluded.provider_session_id,
            project_path = excluded.project_path,
            system_prompt = excluded.system_prompt,
-           task_id = excluded.task_id,
-           status_override = excluded.status_override,
            last_error = excluded.last_error,
            queue_paused = excluded.queue_paused,
            queued_messages = excluded.queued_messages,
@@ -255,8 +246,6 @@ export class ConversationStore {
         record.providerSessionId,
         record.projectPath,
         record.systemPrompt,
-        record.taskId,
-        record.statusOverride,
         record.lastError,
         record.queuePaused ? 1 : 0,
         JSON.stringify(record.queuedMessages),
@@ -278,7 +267,7 @@ export class ConversationStore {
   }
 
   /**
-   * @description 归档会话：从列表隐藏但保留数据（任务关联与 transcript 一并保留）。
+   * @description 归档会话：从列表隐藏但保留数据（transcript 一并保留）。
    * @param {string} key - 会话 key
    * @param {number} now - 归档时间
    * @returns {boolean} 会话存在时为 true
@@ -300,7 +289,7 @@ export class ConversationStore {
   }
 
   /**
-   * @description 清空全部会话（设置页「清空历史」），任务保留但解除关联。
+   * @description 清空全部会话（设置页「清空历史」）。
    * @returns {number} 删除的会话数量
    */
   deleteAll(): number {

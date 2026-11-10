@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { Bot, Check, ChevronDown, Circle, FolderOpen, GitBranch, Trash2, X } from "@lucide/vue";
+import { Bot, Check, ChevronDown, Circle, FolderOpen, GitBranch, X } from "@lucide/vue";
 import { Dropdown, Tooltip, type MenuProps } from "antdv-next";
 import { computed, h } from "vue";
+import { useProjectPathMenu } from "../../composables/useProjectPathMenu";
 import type { AgentView } from "../../services/acp";
 import type { GitWorkspaceInfo } from "../../services/ai";
 import { createStyles } from "../../theme/antdvStyle";
-import { normalizeDirectoryPath, uniqueDirectoryPaths } from "../../utils/projectPath";
+import { projectPathName as folderName } from "../../utils/projectPath";
 
 /**
  * SenderBottomBar：输入卡片下方连成一体的底部行（Sender #bottom slot 内容）。
@@ -65,90 +66,6 @@ const useStyles = createStyles(({ token, css }) => {
       color: var(--brand-muted-strong);
     `,
     /* ===== 下拉弹层：弹层挂 body，样式以各自 rootClass（含本哈希类）为锚 ===== */
-    projectPathMenu: css`
-      min-width: 260px;
-      max-width: min(380px, calc(100vw - 32px));
-      max-height: min(360px, 60vh);
-      overflow-y: auto;
-      padding: 6px;
-
-      .ant-dropdown-menu-item-content {
-        min-width: 0;
-      }
-      .ant-dropdown-menu-item-divider {
-        margin: 4px 0;
-      }
-      .project-path-menu-row {
-        display: flex;
-        min-width: 0;
-        align-items: center;
-        gap: 8px;
-        padding-left: 4px;
-      }
-      .project-path-menu-copy {
-        display: flex;
-        min-width: 0;
-        flex: 1;
-        flex-direction: column;
-        gap: 1px;
-      }
-      .project-path-menu-name,
-      .project-path-menu-location {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .project-path-menu-name {
-        color: var(--brand-foreground);
-        font-size: 12px;
-        line-height: 16px;
-      }
-      .project-path-menu-location {
-        color: var(--brand-muted-strong);
-        font-size: 10.5px;
-        line-height: 14px;
-      }
-      .project-path-menu-remove {
-        display: grid;
-        width: 26px;
-        height: 26px;
-        flex: none;
-        place-items: center;
-        border: 0;
-        border-radius: 5px;
-        padding: 0;
-        background: transparent;
-        color: var(--brand-muted-strong);
-        cursor: pointer;
-      }
-      .project-path-menu-remove:hover,
-      .project-path-menu-remove:focus-visible {
-        background: var(--brand-danger-subtle);
-        color: var(--brand-danger);
-        outline: none;
-      }
-      .project-path-menu-name.is-selected {
-        color: var(--brand-foreground);
-        font-weight: 600;
-      }
-      .project-path-menu-check {
-        width: 12px;
-        height: 12px;
-        flex: none;
-        color: var(--brand-accent);
-        opacity: 0;
-        transition: opacity ${token.motionDurationMid} ${token.motionEaseInOut};
-      }
-      .project-path-menu-check.is-visible {
-        opacity: 1;
-      }
-      .project-path-menu-empty {
-        display: block;
-        padding: 4px 8px;
-        color: var(--brand-ghost);
-        font-size: 12px;
-      }
-    `,
     gitBranchMenu: css`
       min-width: 180px;
       max-width: min(320px, calc(100vw - 32px));
@@ -272,105 +189,20 @@ const agentMenu = computed<MenuProps>(() => ({
   onClick: ({ key }) => emit("agentChange", String(key)),
 }));
 
-const pathName = (path: string): string => {
-  const normalized = normalizeDirectoryPath(path);
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || normalized;
-};
+const projectPathName = computed(() => folderName(String(props.projectPath || "")));
 
-const projectPathName = computed(() => pathName(String(props.projectPath || "")));
-
-const projectPathMenu = computed<MenuProps>(() => {
-  const paths = uniqueDirectoryPaths(props.projectPathOptions);
-  const currentPath = normalizeDirectoryPath(props.projectPath);
-  const currentIndex = paths.indexOf(currentPath);
-  const hasSelection = currentIndex >= 0;
-
-  const pathItems: NonNullable<MenuProps["items"]> = paths.map((path, index) => ({
-    key: `__path_${index}__`,
-    label: path,
-    // store raw path for labelRender
-    path,
-  }));
-
-  const emptyHint: NonNullable<MenuProps["items"]> =
-    paths.length === 0 ? [{ key: "__empty__", label: "暂无历史目录", disabled: true }] : [];
-
-  const clearItem: NonNullable<MenuProps["items"]> = hasSelection
-    ? [{ key: "__none__", label: "清除已选目录", icon: h(X) }]
-    : [];
-
-  const items: NonNullable<MenuProps["items"]> = [
-    ...pathItems,
-    ...emptyHint,
-    ...(pathItems.length > 0 || emptyHint.length > 0 ? [{ type: "divider" as const }] : []),
-    ...clearItem,
-    { key: "__pick__", label: "选择其他目录", icon: h(FolderOpen) },
-  ];
-
-  return {
-    rootClass: cx("project-path-menu", styles.projectPathMenu),
-    items,
-    selectable: true,
-    selectedKeys: hasSelection ? [`__path_${currentIndex}__`] : [],
-    labelRender: (item) => {
-      if (item.type === "divider") return null;
-      if (String(item.key).startsWith("__path_")) {
-        const match = String(item.key).match(/^__path_(\d+)__$/);
-        const idx = match ? Number(match[1]) : -1;
-        const path = idx >= 0 ? paths[idx] : "";
-        if (!path) return h("span", null, String(item.label ?? ""));
-        const selected = idx === currentIndex;
-        return h("div", { class: "project-path-menu-row", title: path }, [
-          h(Check, {
-            class: ["project-path-menu-check", { "is-visible": selected }],
-            size: 14,
-            "aria-hidden": "true",
-          }),
-          h("span", { class: "project-path-menu-copy" }, [
-            h(
-              "span",
-              { class: ["project-path-menu-name", { "is-selected": selected }] },
-              pathName(path) || "未命名目录",
-            ),
-            h("span", { class: "project-path-menu-location" }, path),
-          ]),
-          h(
-            "button",
-            {
-              type: "button",
-              class: "project-path-menu-remove",
-              title: "从列表移除",
-              "aria-label": `从列表移除 ${path}`,
-              onClick: (event: MouseEvent) => {
-                event.preventDefault();
-                event.stopPropagation();
-                emit("projectPathRemove", path);
-              },
-            },
-            [h(Trash2, { size: 14, "aria-hidden": "true" })],
-          ),
-        ]);
-      }
-      if (item.key === "__empty__") {
-        return h("span", { class: "project-path-menu-empty" }, String(item.label));
-      }
-      return null;
-    },
-    onClick: ({ key }) => {
-      if (key === "__none__") {
-        emit("projectPathChange", "");
-        return;
-      }
-      if (key === "__pick__") {
-        emit("pickProjectPath");
-        return;
-      }
-      const match = String(key).match(/^__path_(\d+)__$/);
-      const selected = match ? paths[Number(match[1])] : undefined;
-      if (selected) emit("projectPathChange", selected);
-    },
-  };
-});
+const projectPathMenu = useProjectPathMenu(
+  {
+    paths: () => props.projectPathOptions,
+    currentPath: () => props.projectPath,
+  },
+  {
+    onSelect: (path) => emit("projectPathChange", path),
+    onRemove: (path) => emit("projectPathRemove", path),
+    onClear: () => emit("projectPathChange", ""),
+    onPick: () => emit("pickProjectPath"),
+  },
+);
 
 const gitBranchLabel = computed(() => {
   if (props.gitBusy) return "切换中...";

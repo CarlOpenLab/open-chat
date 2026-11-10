@@ -58,7 +58,7 @@ describe("gateway HTTP API", () => {
   });
 
   it("requires the per-start password for /api but keeps access/status public", async () => {
-    const anonymous = await fetch(`${baseUrl}/api/tasks`);
+    const anonymous = await fetch(`${baseUrl}/api/conversations`);
     expect(anonymous.status).toBe(401);
     const status = await fetch(`${baseUrl}/api/access/status`);
     expect(await status.json()).toEqual({ authorized: false });
@@ -72,48 +72,13 @@ describe("gateway HTTP API", () => {
     expect((await api("/api/access/status")).body).toEqual({ authorized: true });
   });
 
-  it("serves task CRUD on /api/tasks and the assistant alias /api/board/tasks", async () => {
-    const created = await api("/api/board/tasks", {
-      method: "POST",
-      json: { title: "由助手创建", priority: "P1" },
-    });
-    expect(created.status).toBe(201);
-    const id = created.body.task.id as string;
-
-    const listed = await api("/api/tasks");
-    expect(listed.body.tasks.map((task: { id: string }) => task.id)).toContain(id);
-
-    const patched = await api(`/api/tasks/${id}`, { method: "PATCH", json: { status: "doing" } });
-    expect(patched.body.task).toMatchObject({ id, status: "doing", priority: "P1" });
-
-    expect((await api(`/api/tasks/${id}`, { method: "PATCH", json: { status: "x" } })).status).toBe(
-      400,
-    );
-    expect((await api("/api/tasks/missing", { method: "PATCH", json: {} })).status).toBe(404);
-
-    // 删除必须显式确认
-    expect((await api(`/api/board/tasks/${id}`, { method: "DELETE" })).status).toBe(400);
-    const deleted = await api(`/api/tasks/${id}`, { method: "DELETE", json: { confirmed: true } });
-    expect(deleted.body).toEqual({ ok: true });
-    expect((await api(`/api/tasks/${id}`)).status).toBe(404);
-  });
-
-  it("upserts conversations, links them to tasks and maps foreign key errors to 409", async () => {
-    const task = (await api("/api/tasks", { method: "POST", json: { title: "带会话的任务" } })).body
-      .task;
+  it("upserts conversations and returns them in the list", async () => {
     const key = "acp:codex:1760000000000-abc";
     const saved = await api(`/api/conversations/${encodeURIComponent(key)}`, {
       method: "PUT",
-      json: { title: "会话", agentId: "codex", taskId: task.id, updatedAt: 5 },
+      json: { title: "会话", agentId: "codex", updatedAt: 5 },
     });
-    expect(saved.body.conversation).toMatchObject({ key, taskId: task.id, agentId: "codex" });
-    expect((await api(`/api/tasks/${task.id}`)).body.task.sessionKeys).toEqual([key]);
-
-    const conflict = await api("/api/conversations/orphan", {
-      method: "PUT",
-      json: { taskId: "ghost" },
-    });
-    expect(conflict.status).toBe(409);
+    expect(saved.body.conversation).toMatchObject({ key, agentId: "codex" });
 
     const transcript = [{ id: "u1", message: { role: "user", content: "hi" } }];
     await api(`/api/conversations/${encodeURIComponent(key)}/transcript`, {
@@ -126,7 +91,6 @@ describe("gateway HTTP API", () => {
 
     await api(`/api/conversations/${encodeURIComponent(key)}/archive`, { method: "POST" });
     expect((await api("/api/conversations")).body.conversations).toEqual([]);
-    expect((await api(`/api/tasks/${task.id}`)).body.task.sessionKeys).toEqual([]);
   });
 
   it("returns masked provider keys only", async () => {
@@ -169,13 +133,12 @@ describe("gateway HTTP API", () => {
 
     const imported = await api("/api/workspace/import-legacy", {
       method: "POST",
-      json: { tasks: [{ id: "legacy-1", title: "旧任务" }], projectPaths: ["/legacy"] },
+      json: { projectPaths: ["/legacy"] },
     });
-    expect(imported.body.imported).toMatchObject({ tasks: 1, projectPaths: 1 });
+    expect(imported.body.imported).toMatchObject({ projectPaths: 1 });
 
     const info = await api("/api/workspace/info");
     expect(info.body).toMatchObject({ databasePath: ":memory:", schemaVersion: 1 });
-    expect(info.body.counts.tasks).toBeGreaterThan(0);
   });
 
   it("answers unknown API routes and malformed JSON with JSON errors", async () => {
@@ -183,8 +146,8 @@ describe("gateway HTTP API", () => {
     expect(missing.status).toBe(404);
     expect(missing.body.error.code).toBe("not_found");
 
-    const malformed = await fetch(`${baseUrl}/api/tasks`, {
-      method: "POST",
+    const malformed = await fetch(`${baseUrl}/api/preferences`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json", Cookie: cookie },
       body: "{oops",
     });

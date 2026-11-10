@@ -1,5 +1,5 @@
 /**
- * 浏览器旧数据一次性迁移：早期版本把会话、任务、服务商等存在 IndexedDB（库名
+ * 浏览器旧数据一次性迁移：早期版本把会话、服务商等存在 IndexedDB（库名
  * `open-chat`）与 localStorage。启动时读出全部旧数据提交给网关合并进 SQLite，
  * 成功后删除本地副本——之后浏览器不再保存任何工作区数据。
  *
@@ -10,13 +10,11 @@ import { workspaceApi } from "./workspaceApi";
 
 const LEGACY_DB_NAME = "open-chat";
 const LEGACY_KV_STORE = "app-state";
-const LEGACY_TASK_STORE = "tasks";
 
 /** 旧 IndexedDB 键值仓库中的键 → 导入载荷字段。 */
 const LEGACY_KV_KEYS: Record<string, keyof LegacyImportPayload> = {
   "chat-state-v1": "chatState",
   "providers-v1": "providers",
-  "board-assistant-v1": "boardAssistant",
   "open-chat-project-paths-v1": "projectPaths",
 };
 
@@ -77,7 +75,7 @@ function readStore(db: IDBDatabase, storeName: string, mode: "all" | "entries"):
 }
 
 /**
- * @description 汇总旧 IndexedDB 中的数据（任务优先取独立仓库，其次取更早的 tasks-v1 键）。
+ * @description 汇总旧 IndexedDB 中的数据。
  * @param {IDBDatabase} db - 数据库连接
  * @returns {Promise<LegacyImportPayload>} 导入载荷
  */
@@ -90,9 +88,6 @@ async function readLegacyDatabase(db: IDBDatabase): Promise<LegacyImportPayload>
   for (const [key, field] of Object.entries(LEGACY_KV_KEYS)) {
     if (entries[key] !== undefined && entries[key] !== null) payload[field] = entries[key];
   }
-  const tasks = await readStore(db, LEGACY_TASK_STORE, "all");
-  if (Array.isArray(tasks) && tasks.length > 0) payload.tasks = tasks;
-  else if (Array.isArray(entries["tasks-v1"])) payload.tasks = entries["tasks-v1"];
   return payload;
 }
 

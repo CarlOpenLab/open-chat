@@ -55,7 +55,6 @@ export function useSessionErrors(deps: UseSessionErrorsDeps) {
     const conv = deps.conversationList.value.find((item) => String(item.key) === conversationKey);
     if (!conv) return;
     conv.lastError = errorMessage.trim() ? errorMessage.trim().slice(0, 2000) : "请求失败";
-    if (conv.statusOverride) conv.statusOverride = "";
     // 确保抽屉打开时能看到与聊天一致的红色错误条：给最后一条 assistant 消息补 chatError
     if (conv.messages?.length) {
       const lastAssistant = [...conv.messages]

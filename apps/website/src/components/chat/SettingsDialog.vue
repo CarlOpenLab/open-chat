@@ -180,15 +180,15 @@ const navItems = [
           <section v-else-if="activeTab === 'data'" aria-label="数据设置">
             <h3 class="settings-section-title">工作区数据</h3>
             <p class="settings-section-desc">
-              任务、会话与消息都保存在网关的 SQLite 数据库中，同一网关下的所有浏览器共享； 服务商
-              API Key 只以掩码形式保存，不会明文返回给前端。
+              会话与消息都保存在网关的 SQLite 数据库中，同一网关下的所有浏览器共享； 服务商 API Key
+              只以掩码形式保存，不会明文返回给前端。
             </p>
             <div class="settings-card">
               <div class="settings-row settings-card-row">
                 <div class="min-w-0">
                   <div class="settings-label">导出备份</div>
                   <p class="settings-hint">
-                    下载工作区完整备份（任务、会话、消息、偏好；API Key 只含掩码）
+                    下载工作区完整备份（会话、消息、偏好；API Key 只含掩码）
                   </p>
                 </div>
                 <Button @click="emit('exportHistory')">
@@ -198,7 +198,7 @@ const navItems = [
               <div class="settings-row settings-card-row">
                 <div class="min-w-0">
                   <div class="settings-label text-brand-danger">清空历史</div>
-                  <p class="settings-hint">删除网关中保存的全部会话与消息（任务保留），无法恢复</p>
+                  <p class="settings-hint">删除网关中保存的全部会话与消息，无法恢复</p>
                 </div>
                 <Button danger @click="emit('clearHistory')">
                   <Trash2 class="!h-[14px] !w-[14px]" />清空历史

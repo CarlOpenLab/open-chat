@@ -255,26 +255,25 @@ The website is split into a container layer, presentational components, and a
 Storybook workbench. Presentational components take props, emit events, and
 never import a service.
 
-| Module                                                                                                   | Responsibility                                                                                                                |
-| -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `pages/WorkspacePage.vue`                                                                                | Container: owns conversation/session/task state, assembles and provides `workspace`                                           |
-| `pages/workspace.ts`                                                                                     | The `Workspace` injection contract every page consumes                                                                        |
-| `composables/workspace/*.ts`                                                                             | Container domains lifted out of the page (layout, message timings, notifications, session errors, project path, message view) |
-| `components/chat/ConversationPanel.vue`                                                                  | Chat surface glue: header + messages + composer                                                                               |
-| `components/chat/ChatMessages.vue`                                                                       | Message-list composition, activity grouping, per-turn UI state                                                                |
-| `components/chat/UserMessageBubble.vue`                                                                  | User bubble and image attachments                                                                                             |
-| `components/chat/AssistantBubble.vue`                                                                    | Assistant bubble plus copy/reload actions                                                                                     |
-| `components/chat/AssistantMessageContent.vue`                                                            | Markdown answer, notices, error, sources                                                                                      |
-| `components/chat/ActivityList.vue`                                                                       | Activity summary and entry list (reasoning/tool/plan/workspace)                                                               |
-| `components/chat/ActivityEntryRow.vue`                                                                   | One activity row and its expanded detail (tool params/output, diff)                                                           |
-| `components/chat/activityEntry.ts`                                                                       | Pure activity derivation from transcript messages                                                                             |
-| `components/chat/WorkingIndicator.vue`                                                                   | Column-tail "工作中 · Xs" indicator                                                                                           |
-| `components/chat/MarkdownCodeRenderer.vue`                                                               | x-markdown code fence to CodeHighlighter/Mermaid                                                                              |
-| `components/sender/*`                                                                                    | Composer shell (`SenderLayout`) plus toolbar, model picker, bottom bar                                                        |
-| `components/chat/Board*.vue`, `TaskBoardView.vue`, `TaskCard.vue`, `TaskDetail*.vue`, `TaskSession*.vue` | Task board and task-detail surfaces                                                                                           |
-| `services/acp.ts`                                                                                        | Session endpoint transport                                                                                                    |
-| `services/OpenChatProvider.ts`                                                                           | SSE protocol transformation only                                                                                              |
-| `services/transcript.ts`                                                                                 | Transcript-to-model and model-to-bubble mapping                                                                               |
+| Module                                        | Responsibility                                                                                                                |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `pages/WorkspacePage.vue`                     | Container: owns conversation/session state, assembles and provides `workspace`                                                |
+| `pages/workspace.ts`                          | The `Workspace` injection contract every page consumes                                                                        |
+| `composables/workspace/*.ts`                  | Container domains lifted out of the page (layout, message timings, notifications, session errors, project path, message view) |
+| `components/chat/ConversationPanel.vue`       | Chat surface glue: header + messages + composer                                                                               |
+| `components/chat/ChatMessages.vue`            | Message-list composition, activity grouping, per-turn UI state                                                                |
+| `components/chat/UserMessageBubble.vue`       | User bubble and image attachments                                                                                             |
+| `components/chat/AssistantBubble.vue`         | Assistant bubble plus copy/reload actions                                                                                     |
+| `components/chat/AssistantMessageContent.vue` | Markdown answer, notices, error, sources                                                                                      |
+| `components/chat/ActivityList.vue`            | Activity summary and entry list (reasoning/tool/plan/workspace)                                                               |
+| `components/chat/ActivityEntryRow.vue`        | One activity row and its expanded detail (tool params/output, diff)                                                           |
+| `components/chat/activityEntry.ts`            | Pure activity derivation from transcript messages                                                                             |
+| `components/chat/WorkingIndicator.vue`        | Column-tail "工作中 · Xs" indicator                                                                                           |
+| `components/chat/MarkdownCodeRenderer.vue`    | x-markdown code fence to CodeHighlighter/Mermaid                                                                              |
+| `components/sender/*`                         | Composer shell (`SenderLayout`) plus toolbar, model picker, bottom bar                                                        |
+| `services/acp.ts`                             | Session endpoint transport                                                                                                    |
+| `services/OpenChatProvider.ts`                | SSE protocol transformation only                                                                                              |
+| `services/transcript.ts`                      | Transcript-to-model and model-to-bubble mapping                                                                               |
 
 ## Component Workbench
 

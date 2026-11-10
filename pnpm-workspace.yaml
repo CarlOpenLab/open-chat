@@ -5,6 +5,8 @@ packages:
   # Vendored acp-hub (git submodule, see .gitmodules). Its packages are
   # workspace members so their internal `workspace:*` links resolve here.
   - vendor/acp-hub/packages/*
+allowBuilds:
+  esbuild: false
 
 catalog:
   "@agentclientprotocol/sdk": ^1.3.0

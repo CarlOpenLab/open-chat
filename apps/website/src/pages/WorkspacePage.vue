@@ -1,23 +1,19 @@
 <script setup lang="ts">
 /**
  * 工作区容器（状态层）：
- * - 持有全部会话 / 任务 / 供应商状态与业务逻辑；
- * - 通过 provideWorkspace 把状态下发到 BoardPage / ChatPage 展示层；
- * - 顶部 TopTabBar 负责两种布局的切换。
+ * - 持有全部会话 / 供应商状态与业务逻辑；
+ * - 通过 provideWorkspace 把状态下发到 ChatPage 展示层。
  */
-import type { ConversationsProps } from "@antdv-next/x";
 import type { DefaultMessageInfo } from "@antdv-next/x-sdk";
 import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest } from "@antdv-next/x-sdk";
+import type { QueuedMessage as QueuedChatMessage } from "@cc-heart/open-chat-types";
 import { message } from "antdv-next";
 import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from "vue";
-import {
-  API_BASE_URL,
-  GATEWAY_API_KEY,
-  aiService,
-  type UploadedAttachment,
-  type WebSearchSourceItem,
-} from "../services/ai";
+import type { UploadedAttachment, WebSearchSourceItem } from "../services/ai";
+import { API_BASE_URL, GATEWAY_API_KEY } from "../services/http";
+import { migrateLegacyBrowserData } from "../services/legacyBrowserData";
+import { conversationsApi } from "../services/workspaceApi";
 import {
   OpenChatProvider,
   WEB_SEARCHING_MARKER,
@@ -25,11 +21,8 @@ import {
   type OpenChatParams,
   type PermissionRequest,
 } from "../services/OpenChatProvider";
-import { uniqueDirectoryPaths } from "../utils/projectPath";
 import { FILE_WORKSPACE_SYSTEM_PROMPT } from "../prompts/fileWorkspace";
-import { deriveBoardStatus, hasPersistedError, type SessionStatus } from "../utils/sessionStatus";
-import { loadChatState, type QueuedChatMessage } from "../services/chatStorage";
-import { useNow } from "../composables/useNow";
+import { hasPersistedError } from "../utils/chatError";
 import {
   API_AGENT,
   cancelAcpTurn,
@@ -58,31 +51,31 @@ import {
 import { useMessageTimings } from "../composables/workspace/useMessageTimings";
 import { useMessageView } from "../composables/workspace/useMessageView";
 import { useNotifications } from "../composables/workspace/useNotifications";
+import {
+  useActiveSessionRuns,
+  type ActiveSessionRun,
+} from "../composables/workspace/useActiveSessionRuns";
 import { useProjectPath } from "../composables/workspace/useProjectPath";
 import { useSessionErrors } from "../composables/workspace/useSessionErrors";
 import { useWorkspaceLayout } from "../composables/workspace/useWorkspaceLayout";
 import {
+  PINNED_GROUP,
   getMessagePreview,
   useChatPersistence,
   type OpenChatConversation,
 } from "../composables/useChatPersistence";
 import { useCoalescedUpdater } from "../composables/useCoalescedUpdater";
+import { useWorkspacePreferences } from "../composables/useWorkspacePreferences";
 import CommandPalette from "../components/chat/CommandPalette.vue";
 import DeleteConversationModal from "../components/chat/DeleteConversationModal.vue";
 import SettingsDialog from "../components/chat/SettingsDialog.vue";
-import TopTabBar from "../components/layout/TopTabBar.vue";
-import BoardPage from "./BoardPage.vue";
 import ChatPage from "./ChatPage.vue";
-import { provideWorkspace, type SubmitMessageOptions, type Workspace } from "./workspace";
 import {
-  loadTasks,
-  saveTasks,
-  createTaskInput,
-  updateTaskInList,
-  duplicateTask,
-  type Task,
-} from "../services/taskStorage";
-import { TASK_STATUS_META, type TaskStatus } from "../utils/taskStatus";
+  provideWorkspace,
+  type ConversationsActiveChange,
+  type SubmitMessageOptions,
+  type Workspace,
+} from "./workspace";
 interface Props {
   dark: boolean;
   /** 主题模式：跟随系统 / 浅色 / 深色 */
@@ -101,47 +94,11 @@ const emit = defineEmits<Emits>();
 
 const content = ref("");
 
-/** 草稿会话在抽屉中的占位 key：不对应任何真实会话。 */
-const DRAFT_BOARD_KEY = "__draft__";
-/** 看板抽屉当前打开的会话；空串表示看板态（无聊天面板）。 */
-const boardOpenKey = ref("");
-/** 布局状态（侧栏 / 抽屉 / 浮层开关）：窄屏折叠时需要同步关闭看板抽屉。 */
-const { conversationsOpen, sidebarWidth, drawerWidth, commandPaletteOpen, settingsOpen } =
-  useWorkspaceLayout({ boardOpenKey });
-/** 任务详情抽屉：打开的任务 id，空串表示未打开。 */
-const openTaskId = ref("");
-/** 任务列表（全局跨项目），与会话解耦。 */
-const taskList = ref<Task[]>([]);
-/** 任务列表防抖持久化：批量变更（创建/拖拽/删除）只落一次 IndexedDB。 */
-let persistTasksTimer: ReturnType<typeof setTimeout> | null = null;
-const schedulePersistTasks = () => {
-  if (persistTasksTimer) clearTimeout(persistTasksTimer);
-  persistTasksTimer = setTimeout(() => {
-    persistTasksTimer = null;
-    void saveTasks(taskList.value);
-  }, 200);
-};
-/** 看板 AI 助手回合结束后调用：先 flush 挂起的本地保存，再从网关重载任务，
- *  保证看板与（可能被助手改过的）服务端状态一致。 */
-const refreshTasksFromServer = async () => {
-  if (persistTasksTimer) {
-    clearTimeout(persistTasksTimer);
-    persistTasksTimer = null;
-    await saveTasks(taskList.value);
-  }
-  taskList.value = await loadTasks();
-};
+/** 布局状态（侧栏 / 浮层开关）。 */
+const { conversationsOpen, sidebarWidth, commandPaletteOpen, settingsOpen } = useWorkspaceLayout();
+/** 工作区偏好（当前 agent / 各 agent 默认模型 / Model API 当前模型），保存在网关。 */
+const workspacePreferences = useWorkspacePreferences();
 const pendingPermissions = reactive(new Map<string, PermissionRequest>());
-/** 出错 / 手动停止后未恢复的会话：驱动「已终止」列。 */
-const stoppedConversationKeys = ref<Set<string>>(new Set());
-const boardStatusSignals = computed(
-  () =>
-    ({
-      busyStates: conversationBusyStates.value,
-      permissionKeys: new Set(pendingPermissions.keys()),
-      stoppedKeys: stoppedConversationKeys.value,
-    }) satisfies import("../utils/sessionStatus").SessionStatusSignals,
-);
 const deleteOpen = ref(false);
 const deleteTargetKey = ref("");
 const currentConversationKey = ref<string>("");
@@ -153,15 +110,6 @@ const pendingSearchSources = ref<WebSearchSourceItem[] | null>(null);
 const showWelcome = ref(true);
 const isHydrating = ref(true);
 let componentUnmounted = false;
-const activeRequestConversationKey = ref<string>("");
-/** 请求开始时间，供侧栏「工作中」条目计时 */
-const requestStartedAt = ref(0);
-/**
- * Provider history often omits a transient turn.failed assistant message.
- * Keep the live message authoritative until the user explicitly acts.
- */
-const failedHistoryRefreshLocks = new Set<string>();
-const manuallyStoppedConversationKeys = new Set<string>();
 let scheduleNextQueuedMessage: (conversationKey: string) => void = () => {};
 const { persistMessageTimings } = useMessageTimings();
 
@@ -176,15 +124,10 @@ const acpStreamController = ref<AbortController | null>(null);
 let acpStreamMessageSeq = 0;
 const draftConversationKey = ref("");
 
-// 会话历史导航（◀ ▶）
-const historyBack = ref<string[]>([]);
-const historyForward = ref<string[]>([]);
-const historyLocked = ref(false);
-
 // ============ URL 会话路由 ============
 // URL 格式：/chat/{agentId}/{sessionId}，sessionId 优先用供应商真实会话 id（ACP），
 // 其次用本地会话 key。复制链接即可直达对应供应商的会话。
-// 会话路由只属于对话视图：看板页不写路由，地址栏保持根路径 /。
+// 会话路由只属于对话视图：地址栏与当前会话保持同步。
 
 const safeDecode = (value: string): string => {
   try {
@@ -196,8 +139,6 @@ const safeDecode = (value: string): string => {
 
 /** 将当前打开的会话同步到 URL（push 记历史 / replace 原地替换）。 */
 const syncConversationRoute = (mode: "push" | "replace") => {
-  // 看板页不写 /chat/... 路由：会话路由只属于对话视图
-  if (viewMode.value !== "chat") return;
   const conversation = getCurrentConversation();
   const sessionPart = conversation?.providerSessionId?.trim() || currentConversationKey.value || "";
   const path = sessionPart
@@ -221,14 +162,15 @@ const createNewConversation = (
   modelId: string = "",
 ): OpenChatConversation => {
   const key = preferredKey || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const now = Date.now();
 
   return {
     key,
     label: "新对话",
     group: "今天",
-    updatedAt: Date.now(),
+    createdAt: now,
+    updatedAt: now,
     messages: [],
-    workspaceDrafts: [],
     queuedMessages: [],
     queuePaused: false,
     systemPrompt,
@@ -243,6 +185,30 @@ const activeAgent = computed(
 );
 const isAcpAgent = computed(() => activeAgent.value.kind === "acp");
 const usesAcpProtocol = computed(() => activeAgent.value.protocol === "ACP");
+
+// ============ 多会话并发运行管理 (Multi-Session Run Manager) ============
+
+const {
+  activeSessionRuns,
+  failedHistoryRefreshLocks,
+  manuallyStoppedConversationKeys,
+  getRun,
+  setRun,
+  clearRun,
+  restoreActiveRun,
+  dropRestoredRun,
+  isConversationRunning,
+  isCurrentConversationRunning,
+  conversationBusyStates,
+  currentConversationBusyState,
+} = useActiveSessionRuns({
+  conversationList,
+  currentConversationKey,
+  activeAgentId,
+  usesAcpProtocol,
+  acpRunState,
+});
+
 // pi / omp（Oh My Pi）走原生 RPC，无权限事件，权限固定为完全访问。
 const isPiAgent = computed(() => {
   const id = activeAgent.value.id.toLowerCase();
@@ -254,12 +220,9 @@ const effectivePermissionMode = computed(() => (isPiAgent.value ? "full" : permi
 const {
   projectPath,
   draftProjectPath,
-  defaultProjectPath,
-  projectPathHistory,
   projectPathOptions,
   normalizeProjectPath,
   loadProjectPathHistory,
-  saveProjectPathHistory,
   rememberProjectPath,
   lastProjectPath,
   handleProjectPathChange,
@@ -274,8 +237,6 @@ const {
     failedHistoryRefreshLocks.delete(conversationKey),
 });
 
-loadProjectPathHistory();
-
 const resetPermissionForAgentSwitch = () => {
   permissionMode.value = "full";
 };
@@ -287,44 +248,21 @@ const {
   modelCatalog,
   currentModelLabel,
   reconcileCurrentModel,
-  getForwardProvider,
-  isLocalModel,
+  getForwardProviderId,
   loadModels,
 } = useChatModels();
 
 loadModels();
 
+// Model API 当前模型记入工作区偏好（水合期间的自动校正不写回）
+watch(currentModel, (model) => {
+  if (!isHydrating.value && model) workspacePreferences.update({ currentModel: model });
+});
+
 // ============ 每个供应商记住的默认模型 ============
 // 切换供应商时，新会话默认用上次为该供应商选择的模型，而不是 CLI 自带的默认模型
-// （如 codex 的 sol）。存 localStorage，仅前端偏好，不影响服务端。
-const AGENT_DEFAULT_MODEL_KEY = "open-chat-agent-default-models";
-
-const loadAgentDefaultModels = (): Record<string, string> => {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(AGENT_DEFAULT_MODEL_KEY);
-    const parsed = raw ? (JSON.parse(raw) as unknown) : {};
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const result: Record<string, string> = {};
-    for (const [agentId, model] of Object.entries(parsed)) {
-      if (typeof model === "string" && model) result[agentId] = model;
-    }
-    return result;
-  } catch {
-    return {};
-  }
-};
-const agentDefaultModels = ref<Record<string, string>>(loadAgentDefaultModels());
-
-const rememberAgentDefaultModel = (agentId: string, model: string) => {
-  if (!agentId || !model) return;
-  agentDefaultModels.value = { ...agentDefaultModels.value, [agentId]: model };
-  try {
-    localStorage.setItem(AGENT_DEFAULT_MODEL_KEY, JSON.stringify(agentDefaultModels.value));
-  } catch {
-    // 隐私模式下 localStorage 可能不可用，仅在内存中保留本次会话的偏好。
-  }
-};
+// （如 codex 的 sol）。保存在工作区偏好（网关），换设备打开保持一致。
+const agentDefaultModels = computed(() => workspacePreferences.preferences.agentDefaultModels);
 
 const activeAcpModelOption = computed(() =>
   acpSession.value?.configOptions.find(
@@ -370,8 +308,8 @@ const inputCurrentModelLabel = computed(() => {
 /** 项目目录与模型/供应商解耦：始终可用，由用户显式选择 */
 const projectPathEnabled = computed(() => true);
 
-// 侧栏聚合展示：所有本地 IndexedDB 会话（全供应商聚合），不再按 activeAgent 过滤。
-// 只有本地创建过的会话 id 才会出现在侧栏，避免全量拉取供应商侧历史。
+// 侧栏聚合展示：网关里的全部会话（全供应商聚合），不再按 activeAgent 过滤。
+// 只有创建过的会话才会出现在侧栏，避免全量拉取供应商侧历史。
 const visibleConversationList = computed(() => [...conversationList.value]);
 
 const ensureDraftConversationKey = (): string => {
@@ -464,10 +402,19 @@ const refreshAcpSession = async (force = false) => {
       if (sequence !== acpSessionLoadSequence) return;
       acpSession.value = sessionWithDefault;
     }
-    // 以服务端 activeRuns 为准；若回合恰在本次加载后结束，下次状态刷新会兜底纠正。
-    // native（pi/omp）的 running 由流事件活跃度推断（touchNativeStreamActivity），不在此设置。
-    if (usesAcpProtocol.value) {
-      acpRunState.value = acpSession.value.running ? { state: "running" } : null;
+    // 以服务端运行注册表为准；若回合恰在本次加载后结束，下次状态刷新会兜底纠正。
+    // 刷新页面后本地 activeSessionRuns 是空的，运行中的会话只能靠这里恢复：
+    //   - ACP / native 都读同一个 `running`；
+    //   - `startedAt` 用于恢复计时，避免刷新后显示从 0 开始。
+    if (session.running) {
+      acpRunState.value = { state: "running" };
+      if (session.startedAt) restoreActiveRun(conversationId, session.startedAt);
+    } else {
+      acpRunState.value = null;
+      // 服务端确认该会话已无运行回合：清掉「刷新后恢复」的本地运行记录（provider
+      // 为空的那些），避免「工作中」永远挂着。带本地 XRequest 句柄的运行不能动：
+      // 那是本页发起的真实回合，服务端可能还没登记上，删掉会让指示器闪断。
+      dropRestoredRun(conversationId);
     }
     if (conversation && conversation.agentId === activeAgentId.value) {
       if (
@@ -598,25 +545,11 @@ const updateConversationMessages = (
   }
 };
 
-/** 布局视图：看板页 / 对话页（TopTabBar 切换，持久化到 localStorage）。 */
-const viewMode = ref<"board" | "chat">(
-  localStorage.getItem("open-chat-view") === "chat" ? "chat" : "board",
-);
-watch(viewMode, (mode) => {
-  localStorage.setItem("open-chat-view", mode);
-  // 路由跟随视图：对话视图写 /chat/...，看板视图归零到根路径
-  if (mode === "chat") {
-    syncConversationRoute("replace");
-  } else {
-    window.history.replaceState({}, "", "/");
-  }
-});
-
-/** 侧栏导航切换布局视图（与顶栏 TopTabBar 同一状态，watch 负责持久化/路由）。 */
-const handleViewModeChange = (mode: "board" | "chat") => {
-  if (mode === viewMode.value) return;
-  viewMode.value = mode;
-};
+/** 会话切换历史（供展示层的前进/后退指示），容器层只增不清。 */
+const historyBack = ref<string[]>([]);
+const historyForward = ref<string[]>([]);
+/** 水合期间禁止写入切换历史。 */
+const historyLocked = ref(true);
 
 const resetToDraftConversation = () => {
   draftProjectPath.value = lastProjectPath();
@@ -633,10 +566,6 @@ const handleNewConversation = () => {
     showWelcome.value = true;
     return;
   }
-  if (viewMode.value === "board") {
-    // 看板主页：新任务直接以抽屉形态打开草稿会话
-    boardOpenKey.value = DRAFT_BOARD_KEY;
-  }
   resetToDraftConversation();
 };
 
@@ -646,7 +575,7 @@ const pushHistory = (key: string) => {
   historyForward.value = [];
 };
 
-const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
+const handleActiveChange: ConversationsActiveChange = (key) => {
   const targetKey = String(key);
   const targetConversation = conversationList.value.find((item) => String(item.key) === targetKey);
   // 聚合侧栏：点击不同供应商的会话时，自动切换供应商与模型
@@ -658,6 +587,7 @@ const handleActiveChange: ConversationsProps["onActiveChange"] = (key) => {
       acpSession.value = null;
       activeAgentId.value = targetAgent.id;
       localStorage.setItem("open-chat-agent", targetAgent.id);
+      workspacePreferences.update({ activeAgentId: targetAgent.id });
       if (
         targetAgent.kind !== "acp" &&
         typeof targetConversation.modelId === "string" &&
@@ -705,6 +635,7 @@ const handleAgentChange = (agentId: string) => {
   // 项目与供应商解耦：切换供应商不重置项目目录，保留当前选择供新会话复用
   activeAgentId.value = next.id;
   localStorage.setItem("open-chat-agent", next.id);
+  workspacePreferences.update({ activeAgentId: next.id });
   currentConversationKey.value = "";
   showWelcome.value = true;
   historyBack.value = [];
@@ -719,20 +650,8 @@ const closeSidebar = () => {
   conversationsOpen.value = false;
 };
 
-// ============ 多会话并发运行管理 (Multi-Session Run Manager) ============
+// ============ 会话运行（见 useActiveSessionRuns） ============
 
-interface ActiveSessionRun {
-  conversationKey: string;
-  agentId: string;
-  modelId: string;
-  startedAt: number;
-  provider: OpenChatProvider;
-  abort: () => void;
-  outcome: "pending" | "error" | "abort" | null;
-  errorText: string | null;
-}
-
-const activeSessionRuns = reactive(new Map<string, ActiveSessionRun>());
 const pendingSearchSourcesMap = reactive(new Map<string, WebSearchSourceItem[]>());
 
 const createProvider = () => {
@@ -749,7 +668,7 @@ const createProvider = () => {
 
 const provider = createProvider();
 
-const createSessionProvider = (convKey: string, agentId: string) => {
+const createSessionProvider = (convKey: string, _agentId: string) => {
   const p = new OpenChatProvider({
     request: XRequest<OpenChatParams, XModelResponse>(`${API_BASE_URL}/api/chat/completions`, {
       manual: true,
@@ -813,23 +732,6 @@ const setMessages = (
   schedulePersistState();
 };
 
-const isConversationRunning = (key: string): boolean => {
-  if (!key) return false;
-  if (activeSessionRuns.has(key)) return true;
-  if (
-    key === currentConversationKey.value &&
-    usesAcpProtocol.value &&
-    acpRunState.value?.state === "running"
-  ) {
-    return true;
-  }
-  return false;
-};
-
-const isCurrentConversationRunning = computed(() =>
-  isConversationRunning(currentConversationKey.value),
-);
-
 /** 兼容旧代码与 ChatHeader 中的 syncing 标记 */
 const isRequesting = isCurrentConversationRunning;
 
@@ -840,53 +742,58 @@ const pendingPermission = computed(() =>
     : null,
 );
 
-const pendingChatError = computed(() => {
-  if (!currentConversationKey.value) return null;
-  return activeSessionRuns.get(currentConversationKey.value)?.errorText ?? null;
-});
-
 /** 当前会话正在生成；输入仍可提交，但新消息会进入该会话专属队列 */
 const inputRunning = computed(() => isConversationRunning(currentConversationKey.value));
 /** 初始化期间无法可靠确定目标会话，此时才真正禁用输入。 */
 const inputUnavailable = computed(() => isAcpAgent.value && isHydrating.value);
 const inputBusy = computed(() => inputUnavailable.value || inputRunning.value);
 
-const conversationBusyStates = computed<Record<string, { startedAt: number }>>(() => {
-  const states: Record<string, { startedAt: number }> = {};
-  for (const [key, run] of activeSessionRuns.entries()) {
-    states[key] = { startedAt: run.startedAt };
-  }
-  return states;
-});
-
-/** 当前会话的运行起点；聊天区与侧栏共用这一份时间。 */
-const currentConversationBusyState = computed(() =>
-  currentConversationKey.value
-    ? conversationBusyStates.value[currentConversationKey.value]
-    : undefined,
-);
-/** 共享计时 tick：驱动任务卡片/抽屉内会话的耗时显示 */
-const hasTaskBusy = computed(() => Object.keys(conversationBusyStates.value).length > 0);
-const taskNowTick = useNow(hasTaskBusy);
-
 // ============ 会话持久化 ============
 
 const {
-  applyPersistedState,
+  hydrate,
+  markArchived,
   schedulePersistState,
+  saveTranscript,
+  loadTranscript,
   handleExportLocalHistory,
   handleClearLocalHistory,
 } = useChatPersistence({
   conversationList,
-  currentConversationKey,
-  currentModel,
-  showWelcome,
   isHydrating,
-  activeRequestConversationKey,
   isRequesting,
-  setMessages,
-  reconcileCurrentModel,
-  onResetToDraft: () => syncConversationRoute("replace"),
+  onCleared: () => resetAfterRemovingConversation(),
+});
+
+/**
+ * Model API 会话的消息正文不进索引记录：首次打开会话时从网关 transcript 恢复一次。
+ * ACP 会话的正文由 agent 自己的历史提供（refreshAcpSession），不走这里。
+ */
+const transcriptLoadedKeys = new Set<string>();
+const ensureTranscriptLoaded = async (conversationKey: string) => {
+  if (!conversationKey || transcriptLoadedKeys.has(conversationKey)) return;
+  const conversation = conversationList.value.find((item) => String(item.key) === conversationKey);
+  if (!conversation) return;
+  const conversationAgent = agents.value.find(
+    (agent) => agent.id === (conversation.agentId || "api"),
+  );
+  if (conversationAgent?.kind === "acp") return;
+  transcriptLoadedKeys.add(conversationKey);
+  if (conversation.messages?.length) return;
+  try {
+    const messages = await loadTranscript(conversationKey);
+    const target = conversationList.value.find((item) => String(item.key) === conversationKey);
+    if (!target || target.messages?.length) return;
+    target.messages = persistMessageTimings(conversationKey, messages);
+    if (conversationKey === currentConversationKey.value) setMessages(target.messages);
+    if (messages.length) showWelcome.value = false;
+  } catch (error) {
+    console.error("Failed to load conversation transcript:", error);
+  }
+};
+
+watch(currentConversationKey, (key) => {
+  void ensureTranscriptLoaded(key);
 });
 
 const handleVisibilityChange = () => {
@@ -928,6 +835,7 @@ const restoreRouteConversation = async (
     // 项目与供应商解耦：不清空 draftProjectPath，保留全局项目选择
     activeAgentId.value = targetAgent.id;
     localStorage.setItem("open-chat-agent", targetAgent.id);
+    workspacePreferences.update({ activeAgentId: targetAgent.id });
   }
 
   // 2) 会话：精确 key → ACP 重建 key → providerSessionId 匹配；找不到则落到草稿
@@ -952,12 +860,13 @@ const restoreRouteConversation = async (
       acpSession.value = null;
       activeAgentId.value = conversation.agentId;
       localStorage.setItem("open-chat-agent", conversation.agentId);
+      workspacePreferences.update({ activeAgentId: conversation.agentId });
     }
     currentConversationKey.value = String(conversation.key);
     showWelcome.value = (conversation.messages?.length ?? 0) === 0;
     return true;
   }
-  // 本地找不到：仅展示本地 IndexedDB 会话，不再等待供应商侧同步创建
+  // 本地找不到：仅展示网关已有的会话，不再等待供应商侧同步创建
   draftProjectPath.value = lastProjectPath();
   currentConversationKey.value = "";
   setMessages([]);
@@ -965,17 +874,9 @@ const restoreRouteConversation = async (
   return true;
 };
 
-/** 浏览器前进/后退：按路由恢复会话，并让视图跟随路由（/chat/... → 对话，/ → 看板）。 */
+/** 浏览器前进/后退：按路由恢复会话。 */
 const handleRoutePopState = () => {
-  void restoreRouteConversation().then((isChatRoute) => {
-    if (isChatRoute) {
-      // 会话路由只属于对话视图
-      if (viewMode.value !== "chat") viewMode.value = "chat";
-    } else if (window.location.pathname === "/") {
-      // 根路径即看板视图
-      if (viewMode.value !== "board") viewMode.value = "board";
-    }
-  });
+  void restoreRouteConversation();
 };
 
 const {
@@ -1061,7 +962,9 @@ const handleAcpStreamEvent = (event: string | null, data: string) => {
   if (event === "transcript_message") {
     try {
       const parsed = JSON.parse(data) as TranscriptMessage;
-      if (parsed.role === "user" || parsed.role === "assistant") {
+      // 流片段角色只有 user / content（assistant 正文以 content 片段到达），
+      // 其余（reasoning/tool/plan/...）走活动行渲染，不进正文流。
+      if (parsed.role === "user" || parsed.role === "content") {
         touchNativeStreamActivity();
         showWelcome.value = false;
         setMessages(
@@ -1142,17 +1045,16 @@ const startAcpLiveStream = () => {
       const manuallyStopped = manuallyStoppedConversationKeys.delete(conversationId);
       if (outcome === "failed") {
         failedHistoryRefreshLocks.add(conversationId);
-        // 持久化已终止：保证看板归入已终止且刷新后不消失
+        // 持久化已终止：保证刷新后仍能识别失败状态
         const errorText = getConversationErrorMessage(conversationId);
         setConversationLastError(conversationId, errorText);
-      } else if (outcome === "completed" && !manuallyStopped) {
+      } else if (manuallyStopped) {
+        // completed 且被手动停止：标记「已手动停止」
+        failedHistoryRefreshLocks.delete(conversationId);
+        setConversationLastError(conversationId, "已手动停止");
+      } else {
         failedHistoryRefreshLocks.delete(conversationId);
         clearConversationLastError(conversationId);
-      } else {
-        if (outcome !== "failed") failedHistoryRefreshLocks.delete(conversationId);
-        if (manuallyStopped) {
-          setConversationLastError(conversationId, "已手动停止");
-        }
       }
       // A failed retry already has its error attached to the live assistant
       // message. Do not reload history here: providers generally do not
@@ -1222,62 +1124,55 @@ onMounted(async () => {
   window.addEventListener("popstate", handleRoutePopState);
   document.addEventListener("visibilitychange", handleVisibilityChange);
   const initialChatPath = window.location.pathname;
-  const [persistedState, loadedAgents, loadedDefaultProjectPath, loadedTasks] = await Promise.all([
-    loadChatState(),
+  // 一次性迁移浏览器旧数据（IndexedDB / localStorage → 网关），完成后本地删除；
+  // 没有旧数据时立即返回。失败不阻塞启动（旧数据保留，下次启动重试）。
+  try {
+    await migrateLegacyBrowserData();
+  } catch (error) {
+    console.error("Legacy browser data migration failed (will retry next launch):", error);
+  }
+  const [, loadedAgents] = await Promise.all([
+    loadProjectPathHistory(),
     loadAcpAgents().catch((error) => {
       console.error("Failed to load local agents:", error);
       return [API_AGENT];
     }),
-    aiService.getDefaultProjectPath().catch(() => ""),
-    loadTasks().catch(() => [] as Task[]),
+    workspacePreferences.load().catch((error) => {
+      console.error("Failed to load workspace preferences:", error);
+    }),
   ]);
-  defaultProjectPath.value = loadedDefaultProjectPath;
-  if (loadedDefaultProjectPath) {
-    projectPathHistory.value = uniqueDirectoryPaths(
-      projectPathHistory.value.map(normalizeProjectPath),
-    ).slice(0, 20);
-    saveProjectPathHistory();
-  }
   agents.value = loadedAgents;
-  const storedAgentId = localStorage.getItem("open-chat-agent") || "";
-  const storedAgent = loadedAgents.find((agent) => agent.id === storedAgentId);
+  // 打开的供应商：工作区偏好 → localStorage 兜底 → 首个可用 ACP → Model API
+  const preferredAgentId =
+    workspacePreferences.preferences.activeAgentId || localStorage.getItem("open-chat-agent") || "";
+  const preferredAgent = loadedAgents.find((agent) => agent.id === preferredAgentId);
   const firstAvailableAcp = loadedAgents.find((agent) => agent.kind === "acp" && agent.available);
-  activeAgentId.value = storedAgent?.id ?? firstAvailableAcp?.id ?? "api";
-
-  if (persistedState && persistedState.conversationList.length > 0) {
-    applyPersistedState(persistedState);
+  activeAgentId.value = preferredAgent?.id ?? firstAvailableAcp?.id ?? "api";
+  // Model API 上次使用的模型
+  if (!isAcpAgent.value && workspacePreferences.preferences.currentModel) {
+    currentModel.value = workspacePreferences.preferences.currentModel;
+    reconcileCurrentModel();
+  }
+  // 水合会话索引；Model API 会话的正文在会话打开时按需从 transcript 恢复
+  try {
+    conversationList.value = hydrate(await conversationsApi.list());
     for (const conversation of conversationList.value) {
       conversation.projectPath = normalizeProjectPath(conversation.projectPath);
     }
-  } else {
+  } catch (error) {
+    console.error("Failed to load conversations:", error);
     conversationList.value = [];
-    currentConversationKey.value = "";
-    showWelcome.value = true;
   }
-  taskList.value = loadedTasks;
-  // 清理悬空会话引用（会话已被删除）
-  const validKeys = new Set(conversationList.value.map((c) => String(c.key)));
-  let tasksChanged = false;
-  for (const task of taskList.value) {
-    const before = task.sessionKeys.length;
-    task.sessionKeys = task.sessionKeys.filter((k) => validKeys.has(k));
-    if (task.sessionKeys.length !== before) tasksChanged = true;
-  }
-  if (tasksChanged) void saveTasks(taskList.value);
   if (componentUnmounted) return;
   // URL 直达：打开复制的链接时恢复对应供应商与会话（仅本地会话，不再预拉供应商全量）
   await restoreRouteConversation(initialChatPath);
   if (componentUnmounted) return;
-  // 会话直达链接（/chat/...）强制进入对话视图；地址栏随后与当前会话对齐
-  if (parseChatRoute(initialChatPath)) {
-    viewMode.value = "chat";
-  }
-  if (viewMode.value === "chat") {
-    syncConversationRoute("replace");
-  }
+  // 地址栏随后与当前会话对齐
+  syncConversationRoute("replace");
   // Release session/config watchers only after the final route conversation
   // is known. Releasing earlier creates a throwaway draft session request.
   isHydrating.value = false;
+  historyLocked.value = false;
 });
 
 onBeforeUnmount(() => {
@@ -1287,23 +1182,16 @@ onBeforeUnmount(() => {
   document.removeEventListener("visibilitychange", handleVisibilityChange);
   stopAcpLiveStream();
   if (queuedMessageTimer) clearTimeout(queuedMessageTimer);
-  // 卸载前把尚未落盘的任务变更刷进 IndexedDB
-  if (persistTasksTimer) {
-    clearTimeout(persistTasksTimer);
-    persistTasksTimer = null;
-    void saveTasks(taskList.value);
-  }
 });
 
 // ============ 消息转换 ============
 
-const { optimisticMessages, optimisticMessage, hasAcknowledgedOptimisticMessage, bubbleItems } =
-  useMessageView({
-    currentConversationKey,
-    currentConversationMessages,
-    currentConversationBusyState,
-    isConversationRunning,
-  });
+const { optimisticMessages, hasAcknowledgedOptimisticMessage, bubbleItems } = useMessageView({
+  currentConversationKey,
+  currentConversationMessages,
+  currentConversationBusyState,
+  isConversationRunning,
+});
 
 // ============ 事件处理 ============
 
@@ -1331,9 +1219,10 @@ const handleCancel = () => {
     run.abort();
   }
 
-  // ACP：断连不再自动取消回合，停止必须先调服务端取消接口
-  if (isAcpAgent.value) {
-    void cancelAcpTurn(activeAgentId.value, conversationId);
+  // 服务端取消：ACP 断连不会自动中止回合，刷新后恢复的运行也没有本地
+  // XRequest 句柄。凡是本地没有 provider 的运行，都必须走这个接口。
+  if (isAcpAgent.value || !run?.provider) {
+    void cancelAcpTurn(run?.agentId ?? activeAgentId.value, conversationId);
   }
   if (acpStreamController.value && acpStreamConversationKey.includes(conversationId)) {
     stopAcpLiveStream();
@@ -1417,7 +1306,7 @@ const ensureActiveConversation = (systemPrompt = ""): OpenChatConversation | und
 };
 
 const finalizeSessionRun = (convKey: string, outcome: "success" | "error" | "abort") => {
-  const run = activeSessionRuns.get(convKey);
+  const run = getRun(convKey);
   if (!run) return; // 已 finalize 或从未启动（幂等守卫）
   const startedAt = run.startedAt;
   const runAgentId = run?.agentId ?? activeAgentId.value;
@@ -1443,7 +1332,7 @@ const finalizeSessionRun = (convKey: string, outcome: "success" | "error" | "abo
   attachPendingSearchSources(convKey);
   pendingPermissions.delete(convKey);
   optimisticMessages.delete(convKey);
-  activeSessionRuns.delete(convKey);
+  clearRun(convKey);
 
   if (outcome === "success" && !manuallyStopped) {
     notifyTaskCompletion({
@@ -1464,6 +1353,12 @@ const finalizeSessionRun = (convKey: string, outcome: "success" | "error" | "abo
       conversation.queuePaused = false;
       schedulePersistState();
     }
+    // Model API 会话：回合结束后把消息正文整体落网关 transcript（索引字段由
+    // 持久化层同步）；ACP 会话正文保存在 agent 侧，不走 transcript。
+    const conversationAgent = agents.value.find(
+      (agent) => agent.id === (conversation.agentId || activeAgentId.value),
+    );
+    if (conversationAgent?.kind !== "acp") saveTranscript(convKey);
   }
 
   schedulePersistState();
@@ -1540,7 +1435,7 @@ const runSessionRequest = (
     outcome: "pending",
     errorText: null,
   };
-  activeSessionRuns.set(convKey, runEntry);
+  setRun(convKey, runEntry);
 
   // ACP agent：乐观设置 running 状态，让 watcher 立即启动副路径流
   // （/api/acp/session/stream）。否则副路径被 activeSessionRuns 守卫阻塞，
@@ -1589,8 +1484,8 @@ const runSessionRequest = (
       if (pending && hasAcknowledgedOptimisticMessage(msgs, pending)) {
         optimisticMessages.delete(convKey);
       }
-      // 不再逐 chunk 持久化：回合运行期间跳过（见 useChatPersistence deep watch），
-      // finalizeSessionRun 在回合结束时统一落盘，避免流式长回合打爆 IndexedDB 队列。
+      // 不再逐 chunk 持久化：回合运行期间跳过索引同步，
+      // finalizeSessionRun 在回合结束时统一写 transcript，避免流式长回合打爆请求队列。
     },
     onSuccess: (chunks: XModelResponse[], responseHeaders: Headers) => {
       // 先落掉最后一批未应用的 chunk，再基于最新会话状态生成最终消息。
@@ -1701,10 +1596,8 @@ const sendMessageNow = (
 
   failedHistoryRefreshLocks.delete(conversationKey);
   const hadError = Boolean(conversation.lastError);
-  const hadOverride = Boolean(conversation.statusOverride);
   if (conversation.lastError) delete conversation.lastError;
-  if (conversation.statusOverride) conversation.statusOverride = "";
-  if (hadError || hadOverride) schedulePersistState();
+  if (hadError) schedulePersistState();
   if (options.systemPrompt !== undefined) {
     conversation.systemPrompt = options.systemPrompt.trim();
   }
@@ -1753,7 +1646,7 @@ const sendMessageNow = (
   ]);
   schedulePersistState();
 
-  const forwardProvider = getForwardProvider(conversation.modelId || currentModel.value);
+  const forwardProviderId = getForwardProviderId(conversation.modelId || currentModel.value);
   try {
     runSessionRequest(
       conversationKey,
@@ -1781,7 +1674,7 @@ const sendMessageNow = (
         ...(conversation.projectPath?.trim() || projectPath.value.trim()
           ? { projectPath: (conversation.projectPath || projectPath.value).trim() }
           : {}),
-        ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
+        ...(!isAcpAgent.value && forwardProviderId ? { provider: forwardProviderId } : {}),
       },
       requestExtraInfo,
     );
@@ -2029,7 +1922,7 @@ const handleModelChange = async (key: string) => {
       conversation.modelId = key;
       schedulePersistState();
     }
-    rememberAgentDefaultModel(activeAgentId.value, key);
+    workspacePreferences.rememberAgentModel(activeAgentId.value, key);
     message.success(`已切换到 ${inputCurrentModelLabel.value}`);
   } catch (error) {
     message.error(error instanceof Error ? error.message : "Agent 模型切换失败");
@@ -2081,11 +1974,10 @@ const handleReloadMessage = (messageId: string | number) => {
 
   failedHistoryRefreshLocks.delete(conversationKey);
   if (currentConversation.lastError) delete currentConversation.lastError;
-  if (currentConversation.statusOverride) currentConversation.statusOverride = "";
   schedulePersistState();
 
   const baseSystemPrompt = currentConversation.systemPrompt ?? "";
-  const forwardProvider = getForwardProvider(currentConversation.modelId || currentModel.value);
+  const forwardProviderId = getForwardProviderId(currentConversation.modelId || currentModel.value);
 
   runSessionRequest(
     conversationKey,
@@ -2110,7 +2002,7 @@ const handleReloadMessage = (messageId: string | number) => {
       ...(currentConversation.projectPath?.trim() || projectPath.value.trim()
         ? { projectPath: (currentConversation.projectPath || projectPath.value).trim() }
         : {}),
-      ...(!isAcpAgent.value && forwardProvider ? { provider: forwardProvider } : {}),
+      ...(!isAcpAgent.value && forwardProviderId ? { provider: forwardProviderId } : {}),
     },
     undefined,
     true,
@@ -2128,7 +2020,7 @@ const handleRenameConversation = (title: string) => {
 const handlePinConversation = (conversationKey: string = currentConversationKey.value) => {
   const conversation = conversationList.value.find((item) => String(item.key) === conversationKey);
   if (!conversation) return;
-  conversation.group = conversation.group === "置顶" ? "今天" : "置顶";
+  conversation.group = conversation.group === PINNED_GROUP ? "今天" : PINNED_GROUP;
   schedulePersistState();
   message.success(conversation.group === "置顶" ? "对话已置顶" : "已取消置顶");
 };
@@ -2144,19 +2036,12 @@ const resetAfterRemovingConversation = () => {
 
 const handleArchiveConversation = (conversationKey: string = currentConversationKey.value) => {
   if (!conversationKey) return;
+  // 以归档方式移出列表：持久化层发归档请求而非删除，数据保留在网关
+  markArchived(conversationKey);
   conversationList.value = conversationList.value.filter(
     (conversation) => String(conversation.key) !== conversationKey,
   );
-  // 清理任务中的会话引用（归档对话从侧栏移除，任务侧也移除以保持一致）
-  let tasksPruned = false;
-  for (const task of taskList.value) {
-    if (task.sessionKeys.includes(conversationKey)) {
-      task.sessionKeys = task.sessionKeys.filter((k) => k !== conversationKey);
-      task.updatedAt = Date.now();
-      tasksPruned = true;
-    }
-  }
-  if (tasksPruned) schedulePersistTasks();
+  // 会话移出后同步收起当前会话
   if (conversationKey === currentConversationKey.value) {
     resetAfterRemovingConversation();
   } else {
@@ -2178,21 +2063,8 @@ const confirmDeleteConversation = () => {
   conversationList.value = conversationList.value.filter(
     (conversation) => String(conversation.key) !== conversationKey,
   );
-  // 同步清理任务中的悬空会话引用
-  let tasksPruned = false;
-  for (const task of taskList.value) {
-    if (task.sessionKeys.includes(conversationKey)) {
-      task.sessionKeys = task.sessionKeys.filter((k) => k !== conversationKey);
-      task.updatedAt = Date.now();
-      tasksPruned = true;
-    }
-  }
-  if (tasksPruned) schedulePersistTasks();
   deleteOpen.value = false;
   deleteTargetKey.value = "";
-  if (conversationKey === boardOpenKey.value) {
-    boardOpenKey.value = "";
-  }
   if (conversationKey === currentConversationKey.value) {
     resetAfterRemovingConversation();
   } else {
@@ -2207,211 +2079,6 @@ const handleSidebarRename = (conversationKey: string, title: string) => {
   conversation.label = title;
   schedulePersistState();
   message.success("对话名称已更新");
-};
-
-// ============ 看板 ============
-
-/** 看板卡片点击：切换到对应供应商并打开抽屉（复用 handleActiveChange 的供应商切换逻辑）。 */
-const handleBoardOpenConversation = (key: string) => {
-  boardOpenKey.value = key;
-  if (key !== currentConversationKey.value) {
-    handleActiveChange(key);
-  }
-};
-
-const closeBoardDrawer = () => {
-  boardOpenKey.value = "";
-  syncConversationRoute("replace");
-};
-
-/** 拖拽归列 / 抽屉改列：写入覆盖标记，真实活动信号仍优先（见 deriveBoardStatus）。 */
-const handleBoardMoveConversation = (key: string, status: SessionStatus) => {
-  const conversation = conversationList.value.find((item) => String(item.key) === key);
-  if (!conversation) return;
-  // 从已终止拖出视为用户已确认该错误，清除持久错误标记以允许归列生效
-  if (conversation.lastError && status !== "stopped") {
-    delete conversation.lastError;
-  }
-  conversation.statusOverride = status === "done" ? "" : status;
-  // 若仍为已终止列，保持 lastError；否则已在上方清除
-  schedulePersistState();
-};
-
-const handleBoardPinConversation = (key: string) => {
-  handlePinConversation(key);
-};
-
-const handleBoardArchiveConversation = (key: string) => {
-  handleArchiveConversation(key);
-};
-
-const handleBoardDeleteConversation = (key: string) => {
-  if (!key) return;
-  // 复用删除逻辑但走侧栏的确认流：直接删
-  handleDeleteConversation(key);
-};
-
-// ============ 任务看板（Task — 人） ============
-
-const handleTaskOpen = (id: string) => {
-  openTaskId.value = id;
-};
-
-const closeTaskDrawer = () => {
-  openTaskId.value = "";
-  // 任务抽屉关闭时同步收起其中的会话抽屉：若 boardOpenKey 残留，
-  // 独立会话抽屉（v-if="!openTaskId"）会在任务抽屉收起后弹出来。
-  boardOpenKey.value = "";
-  syncConversationRoute("replace");
-};
-
-const handleTaskMove = (id: string, status: TaskStatus) => {
-  try {
-    taskList.value = updateTaskInList(taskList.value, id, { status });
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : "移动失败");
-    return;
-  }
-  schedulePersistTasks();
-  message.success(`已移至 ${TASK_STATUS_META[status].name}`);
-};
-
-const handleTaskCreate = (payload: {
-  title: string;
-  projectPath: string | null;
-  templateId?: string;
-  status?: TaskStatus;
-}) => {
-  const normalizedPath =
-    payload.projectPath !== null && payload.projectPath !== undefined
-      ? normalizeProjectPath(String(payload.projectPath)) || null
-      : null;
-  if (normalizedPath) rememberProjectPath(normalizedPath);
-  const task = createTaskInput({
-    title: payload.title || undefined,
-    projectPath: normalizedPath,
-    status: payload.status,
-    templateId: payload.templateId as unknown as
-      | import("../services/taskStorage").TaskTemplateId
-      | undefined,
-  });
-  taskList.value = [task, ...taskList.value];
-  schedulePersistTasks();
-  openTaskId.value = task.id;
-  message.success("任务已创建");
-};
-
-const handleTaskUpdateTitle = (id: string, title: string) => {
-  try {
-    taskList.value = updateTaskInList(taskList.value, id, { title });
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : "更新失败");
-    return;
-  }
-  schedulePersistTasks();
-};
-
-const handleTaskUpdate = (id: string, patch: Partial<Task>) => {
-  try {
-    if (patch.projectPath !== undefined) {
-      if (patch.projectPath === null || patch.projectPath === "") {
-        patch.projectPath = null;
-      } else {
-        const normalized = normalizeProjectPath(String(patch.projectPath));
-        patch.projectPath = normalized || null;
-        if (patch.projectPath) rememberProjectPath(patch.projectPath);
-      }
-    }
-    taskList.value = updateTaskInList(taskList.value, id, patch);
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : "更新失败");
-    return;
-  }
-  schedulePersistTasks();
-};
-
-const handleTaskArchive = (id: string) => {
-  handleTaskMove(id, "archived");
-};
-
-const handleTaskDuplicate = (id: string) => {
-  const task = taskList.value.find((t) => t.id === id);
-  if (!task) return;
-  const dup = duplicateTask(task);
-  taskList.value = [dup, ...taskList.value];
-  schedulePersistTasks();
-  message.success("已基于此再建");
-};
-
-const handleTaskDelete = (id: string) => {
-  taskList.value = taskList.value.filter((t) => t.id !== id);
-  if (openTaskId.value === id) closeTaskDrawer();
-  schedulePersistTasks();
-  message.success("任务已删除");
-};
-
-const currentTask = computed(() => taskList.value.find((t) => t.id === openTaskId.value) ?? null);
-
-const handleCreateSessionForTask = (taskId: string) => {
-  const task = taskList.value.find((t) => t.id === taskId);
-  if (!task) return;
-  const targetProject = task.projectPath ?? projectPath.value.trim() ?? "";
-  if (targetProject) {
-    projectPath.value = targetProject;
-  }
-  const newKey = `acp:${activeAgentId.value}:${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  const newConversation: OpenChatConversation = {
-    key: newKey,
-    label: task.title.slice(0, 40) || "新对话",
-    group: "今天",
-    updatedAt: Date.now(),
-    agentId: activeAgentId.value,
-    // 与草稿落地（ensureActiveConversation / sendMessageNow）一致：ACP 代理下
-    // currentModel 是残留的 API 模型，必须用 inputCurrentModel 记录真实模型。
-    modelId: inputCurrentModel.value,
-    messages: [],
-    projectPath: targetProject,
-  } as OpenChatConversation;
-  conversationList.value.unshift(newConversation);
-  try {
-    taskList.value = updateTaskInList(taskList.value, taskId, {
-      sessionKeys: [...task.sessionKeys, String(newKey)],
-    });
-  } catch {
-    // ignore
-  }
-  schedulePersistTasks();
-  schedulePersistState();
-  boardOpenKey.value = String(newKey);
-  currentConversationKey.value = String(newKey);
-  // 新会话无消息：立即显示欢迎态，避免聊天区短暂空白看起来像没有切换
-  showWelcome.value = true;
-  // 同步 URL，避免停留在上一个会话的路径（刷新后会恢复到错误会话）。
-  syncConversationRoute("push");
-};
-
-const handleOpenSessionFromTask = (sessionKey: string) => {
-  boardOpenKey.value = sessionKey;
-  if (sessionKey !== currentConversationKey.value) handleActiveChange(sessionKey);
-};
-
-const handleRetrySessionForTask = (taskId: string, _sessionKey: string) => {
-  // 重试仅新建空会话，不自动发送，原会话内容由用户自行决定
-  handleCreateSessionForTask(taskId);
-};
-
-const handleRemoveSessionLink = (taskId: string, sessionKey: string) => {
-  const task = taskList.value.find((t) => t.id === taskId);
-  if (!task) return;
-  try {
-    taskList.value = updateTaskInList(taskList.value, taskId, {
-      sessionKeys: task.sessionKeys.filter((k) => k !== sessionKey),
-    });
-  } catch {
-    return;
-  }
-  schedulePersistTasks();
-  message.success("已移除关联");
 };
 
 // ============ 命令面板 / 设置 ============
@@ -2475,20 +2142,9 @@ const workspace = reactive({
   projectPathOptions,
   projectPathEnabled,
 
-  // 布局视图
-  viewMode,
-  handleViewModeChange,
-
-  // 会话与任务集合
+  // 会话集合
   conversationList,
   visibleConversationList,
-  taskList,
-  openTaskId,
-  currentTask,
-  boardOpenKey,
-  drawerWidth,
-  taskNowTick,
-  boardStatusSignals,
 
   // 浮层
   conversationsOpen,
@@ -2513,7 +2169,6 @@ const workspace = reactive({
   handleAgentChange,
   handleCommandPaletteSelectConversation,
   openCommandPalette,
-  closeBoardDrawer,
 
   // 消息输入 / 请求
   handleChange,
@@ -2549,22 +2204,6 @@ const workspace = reactive({
   // 设置 / 通知
   handleTaskCompletionNotificationsChange,
   handleTestTaskCompletionNotification,
-
-  // 任务看板
-  handleTaskOpen,
-  handleTaskMove,
-  handleTaskCreate,
-  handleTaskUpdateTitle,
-  handleTaskUpdate,
-  handleTaskArchive,
-  handleTaskDuplicate,
-  handleTaskDelete,
-  handleCreateSessionForTask,
-  handleOpenSessionFromTask,
-  handleRetrySessionForTask,
-  handleRemoveSessionLink,
-  closeTaskDrawer,
-  refreshTasksFromServer,
 }) satisfies Workspace;
 
 provideWorkspace(workspace);
@@ -2573,14 +2212,10 @@ provideWorkspace(workspace);
   <div
     class="workspace-root chat-app relative flex h-screen min-h-[100dvh] flex-col overflow-hidden bg-brand-background text-brand-foreground selection:bg-brand-surface-subtle selection:text-brand-foreground"
   >
-    <!-- 顶部布局切换：横线 hover 唤起居中 Segmented -->
-    <TopTabBar v-model="viewMode" />
-
     <a class="skip-link" href="#chat-content">跳到消息内容</a>
 
     <div class="relative min-h-0 flex-1 overflow-hidden">
-      <BoardPage v-if="viewMode === 'board'" />
-      <ChatPage v-else id="chat-content" />
+      <ChatPage id="chat-content" />
     </div>
 
     <!-- 全局浮层：两个页面共用 -->

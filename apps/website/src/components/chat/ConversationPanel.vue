@@ -1,8 +1,7 @@
 <script setup lang="ts">
 /**
  * 会话面板（展示层）：头部 + 消息流 + 输入区的固定组合。
- * 状态全部来自 `useWorkspace()`，本组件不持有业务状态；
- * 看板抽屉与对话页共用同一实例结构，保证两处行为一致。
+ * 状态全部来自 `useWorkspace()`，本组件不持有业务状态。
  */
 import { useWorkspace } from "../../pages/workspace";
 import ChatHeader from "./ChatHeader.vue";
@@ -20,14 +19,12 @@ const ws = useWorkspace();
       :syncing="ws.isRequesting"
       :can-go-back="ws.historyBack.length > 0"
       :can-go-forward="ws.historyForward.length > 0"
-      :show-close="true"
       @toggle-sidebar="ws.handleSidebarToggle()"
       @export="ws.handleExportLocalHistory()"
       @rename="ws.handleRenameConversation($event)"
       @pin="ws.handlePinConversation(ws.currentConversationKey)"
       @archive="ws.handleArchiveConversation(ws.currentConversationKey)"
       @delete="ws.handleDeleteConversation(ws.currentConversationKey)"
-      @close="ws.closeBoardDrawer()"
     />
     <div class="relative min-h-0 flex-1 overflow-hidden">
       <ChatMessages

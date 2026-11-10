@@ -1,5 +1,5 @@
 /**
- * 工作区数据 API：任务、会话索引、服务商、偏好、项目目录历史与数据库概况。
+ * 工作区数据 API：会话索引、服务商、偏好、项目目录历史与数据库概况。
  * 数据全部保存在网关的 SQLite，浏览器不再落任何本地存储。
  */
 import type {
@@ -7,70 +7,12 @@ import type {
   LegacyImportPayload,
   LegacyImportResult,
   ProviderView,
-  Task,
-  TaskCreateInput,
-  TaskInput,
   WorkspaceInfo,
   WorkspacePreferences,
 } from "@cc-heart/open-chat-types";
 import { apiRequest, apiUrl } from "./http";
 
 const encode = encodeURIComponent;
-
-export const tasksApi = {
-  /**
-   * @description 读取全部任务（按更新时间倒序）。
-   * @returns {Promise<Task[]>} 任务列表
-   */
-  async list(): Promise<Task[]> {
-    return (await apiRequest<{ tasks: Task[] }>("/api/tasks", { errorMessage: "任务加载失败" }))
-      .tasks;
-  },
-
-  /**
-   * @description 新建任务（可带客户端 id，支持乐观更新）。
-   * @param {TaskCreateInput} input - 任务字段
-   * @returns {Promise<Task>} 网关保存后的任务
-   */
-  async create(input: TaskCreateInput): Promise<Task> {
-    return (
-      await apiRequest<{ task: Task }>("/api/tasks", {
-        method: "POST",
-        json: input,
-        errorMessage: "任务创建失败",
-      })
-    ).task;
-  },
-
-  /**
-   * @description 局部更新任务。
-   * @param {string} id - 任务 id
-   * @param {TaskInput} patch - 需要修改的字段
-   * @returns {Promise<Task>} 更新后的任务
-   */
-  async update(id: string, patch: TaskInput): Promise<Task> {
-    return (
-      await apiRequest<{ task: Task }>(`/api/tasks/${encode(id)}`, {
-        method: "PATCH",
-        json: patch,
-        errorMessage: "任务保存失败",
-      })
-    ).task;
-  },
-
-  /**
-   * @description 删除任务（界面已完成二次确认，携带 confirmed 标记）。
-   * @param {string} id - 任务 id
-   * @returns {Promise<void>}
-   */
-  async remove(id: string): Promise<void> {
-    await apiRequest(`/api/tasks/${encode(id)}`, {
-      method: "DELETE",
-      json: { confirmed: true },
-      errorMessage: "任务删除失败",
-    });
-  },
-};
 
 export const conversationsApi = {
   /**
@@ -123,7 +65,7 @@ export const conversationsApi = {
   },
 
   /**
-   * @description 清空全部会话（任务保留）。
+   * @description 清空全部会话。
    * @returns {Promise<void>}
    */
   async clear(): Promise<void> {

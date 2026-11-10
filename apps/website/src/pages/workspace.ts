@@ -2,8 +2,8 @@
  * 工作区上下文（容器 → 页面 的唯一状态通道）。
  *
  * 分层约定：
- * - `WorkspacePage`（容器）持有全部会话/任务状态与业务逻辑；
- * - `BoardPage` / `ChatPage` / `ConversationPanel` 是纯展示层，
+ * - `WorkspacePage`（容器）持有全部会话状态与业务逻辑；
+ * - `ChatPage` / `ConversationPanel` 是纯展示层，
  *   通过 `useWorkspace()` 注入读取状态、调用 handler；
  * - 页面之间不互相引用，一切协作都经由容器状态完成。
  */
@@ -17,10 +17,7 @@ import type { GitWorkspaceInfo, SkillsIndex, WebSearchSourceItem } from "../serv
 import type { AcpRunStateNotice, PermissionRequest } from "../services/OpenChatProvider";
 import type { AgentView } from "../services/acp";
 import type { QueuedMessage as QueuedChatMessage } from "@cc-heart/open-chat-types";
-import type { Task } from "@cc-heart/open-chat-types";
 import type { modelMessagesToBubbleItems } from "../services/transcript";
-import type { SessionStatus, SessionStatusSignals } from "../utils/sessionStatus";
-import type { TaskStatus } from "../utils/taskStatus";
 
 /** ChatInput 提交选项（goal / instruction 等扩展通道）。 */
 export interface SubmitMessageOptions {
@@ -32,7 +29,6 @@ export interface SubmitMessageOptions {
 }
 
 export type BubbleItems = ReturnType<typeof modelMessagesToBubbleItems>;
-export type WorkspaceViewMode = "board" | "chat";
 
 /**
  * 容器暴露给展示层的工作区对象。
@@ -82,17 +78,9 @@ export interface Workspace {
   projectPathOptions: string[];
   projectPathEnabled: boolean;
 
-  // ===== 会话与任务集合 =====
+  // ===== 会话集合 =====
   conversationList: OpenChatConversation[];
   visibleConversationList: OpenChatConversation[];
-  taskList: Task[];
-  openTaskId: string;
-  currentTask: Task | null;
-  boardOpenKey: string;
-  drawerWidth: number;
-  taskNowTick: number;
-  isHydrating: boolean;
-  boardStatusSignals: SessionStatusSignals;
 
   // ===== 浮层 =====
   conversationsOpen: boolean;
@@ -117,7 +105,6 @@ export interface Workspace {
   handleAgentChange: (agentId: string) => void;
   handleCommandPaletteSelectConversation: (key: string) => void;
   openCommandPalette: () => void;
-  closeBoardDrawer: () => void;
 
   // ===== 消息输入 / 请求 =====
   handleChange: (value: string) => void;
@@ -159,34 +146,10 @@ export interface Workspace {
   // ===== 设置 / 通知 =====
   handleTaskCompletionNotificationsChange: (enabled: boolean) => Promise<void>;
   handleTestTaskCompletionNotification: () => void;
-
-  // ===== 任务看板 =====
-  handleTaskOpen: (id: string) => void;
-  handleTaskMove: (id: string, status: TaskStatus) => void;
-  handleTaskCreate: (payload: {
-    title: string;
-    projectPath: string | null;
-    templateId?: string;
-    status?: TaskStatus;
-  }) => void;
-  handleTaskUpdateTitle: (id: string, title: string) => void;
-  handleTaskUpdate: (id: string, patch: Partial<Task>) => void;
-  handleTaskArchive: (id: string) => void;
-  handleTaskDuplicate: (id: string) => void;
-  handleTaskDelete: (id: string) => void;
-  handleCreateSessionForTask: (taskId: string) => void;
-  handleOpenSessionFromTask: (sessionKey: string) => void;
-  handleRetrySessionForTask: (taskId: string, sessionKey: string) => void;
-  handleRemoveSessionLink: (taskId: string, sessionKey: string) => void;
-  closeTaskDrawer: () => void;
-  /** 看板 AI 助手回合结束后从网关重载任务（flush 挂起的本地保存后拉取）。 */
-  refreshTasksFromServer: () => Promise<void>;
 }
 
 /** Conversations 组件 onActiveChange 的 key 是 string | number，内部统一转 string。 */
 export type ConversationsActiveChange = (key: string | number) => void;
-
-export type WorkspaceSessionStatus = SessionStatus;
 
 const WORKSPACE_KEY: InjectionKey<Workspace> = Symbol("open-chat-workspace");
 

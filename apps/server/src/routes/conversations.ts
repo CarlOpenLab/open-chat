@@ -21,7 +21,7 @@ export function createConversationRouter(store: WorkspaceStore): Router {
     res.json({ conversations: store.conversations.list() });
   });
 
-  // 清空全部会话（设置页「清空历史」）：任务保留，关联自动解除
+  // 清空全部会话（设置页「清空历史」）
   router.delete("/", (_req, res) => {
     res.json({ ok: true, deleted: store.conversations.deleteAll() });
   });

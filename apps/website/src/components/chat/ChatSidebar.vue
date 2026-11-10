@@ -133,8 +133,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleShortcut));
       </button>
     </div>
 
-    <!-- 会话列表已迁移至看板主页；此处留白让底栏贴底 -->
-    <div class="min-h-0 flex-1"></div>
+    <!-- 会话列表插槽：由页面按需填充（对话页在此渲染会话列表），留空时保持贴底 -->
+    <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <slot />
+    </div>
 
     <!-- 底栏：设置在左，主题切换在右，两端平衡 -->
     <div class="flex h-[40px] flex-none items-center px-[10px]">

@@ -11,7 +11,6 @@ import { ConversationStore } from "./conversations";
 import { PreferenceStore } from "./preferences";
 import { ProjectPathStore } from "./projectPaths";
 import { ProviderStore, toProviderView } from "./providers";
-import { TaskStore } from "./tasks";
 
 export const DATABASE_FILE_NAME = "open-chat.db";
 
@@ -27,7 +26,6 @@ export function defaultDatabasePath(): string {
 export interface WorkspaceExport {
   version: 1;
   exportedAt: string;
-  tasks: ReturnType<TaskStore["list"]>;
   conversations: ReturnType<ConversationStore["list"]>;
   transcripts: Record<string, unknown[]>;
   providers: ReturnType<typeof toProviderView>[];
@@ -36,7 +34,6 @@ export interface WorkspaceExport {
 }
 
 export class WorkspaceStore {
-  readonly tasks: TaskStore;
   readonly conversations: ConversationStore;
   readonly providers: ProviderStore;
   readonly projectPaths: ProjectPathStore;
@@ -46,7 +43,6 @@ export class WorkspaceStore {
     readonly db: Database,
     readonly databasePath: string,
   ) {
-    this.tasks = new TaskStore(db);
     this.conversations = new ConversationStore(db);
     this.providers = new ProviderStore(db);
     this.projectPaths = new ProjectPathStore(db);
@@ -82,7 +78,6 @@ export class WorkspaceStore {
       sizeBytes,
       schemaVersion: schemaVersion(this.db),
       counts: {
-        tasks: this.tasks.count(),
         conversations: this.conversations.count(),
         providers: this.providers.count(),
         projectPaths: this.projectPaths.count(),
@@ -105,7 +100,6 @@ export class WorkspaceStore {
     return {
       version: 1,
       exportedAt: new Date().toISOString(),
-      tasks: this.tasks.list(),
       conversations,
       transcripts,
       providers: this.providers.list().map(toProviderView),

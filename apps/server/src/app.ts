@@ -31,7 +31,6 @@ import { createChatRouter, createModelsRouter } from "./routes/chat";
 import { createConversationRouter } from "./routes/conversations";
 import { createProjectPathRouter, createSkillsRouter } from "./routes/projects";
 import { createProviderRouter } from "./routes/providers";
-import { createTaskRouter } from "./routes/tasks";
 import { createPreferenceRouter, createWorkspaceRouter } from "./routes/workspace";
 import { createSearchProvider, type SearchProvider } from "./search";
 import { importLegacyStateDirectory } from "./store/legacyImport";
@@ -123,10 +122,6 @@ export function createGatewayApp(
   });
 
   // 工作区数据（SQLite）
-  const taskRouter = createTaskRouter(store);
-  app.use("/api/tasks", taskRouter);
-  // 看板 AI 助手的系统指令使用该路径（已持久化的助手会话上下文里也是它）
-  app.use("/api/board/tasks", taskRouter);
   app.use("/api/conversations", createConversationRouter(store));
   app.use("/api/providers", createProviderRouter(store));
   app.use("/api/preferences", createPreferenceRouter(store));

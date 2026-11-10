@@ -10,7 +10,6 @@ import { parseConversationRecord } from "./conversations";
 import { importLegacyPayload, importLegacyStateDirectory } from "./legacyImport";
 import { parsePreferencesPatch } from "./preferences";
 import { parseProviderInput, toProviderView } from "./providers";
-import { parseTaskCreateInput, parseTaskInput } from "./tasks";
 import { WorkspaceStore } from "./workspace";
 
 /** 构造一条最小会话记录。 */
@@ -32,91 +31,6 @@ describe("WorkspaceStore", () => {
     it("migrates a fresh database to the latest version and is idempotent", () => {
       expect(schemaVersion(store.db)).toBe(MIGRATIONS.length);
       expect(migrate(store.db)).toBe(MIGRATIONS.length);
-    });
-  });
-
-  describe("tasks", () => {
-    it("creates with defaults, assigns id and timestamps", () => {
-      const task = store.tasks.create(parseTaskCreateInput({ title: "修复登录页样式" }), 1000);
-      expect(task).toMatchObject({
-        title: "修复登录页样式",
-        status: "todo",
-        priority: null,
-        tags: [],
-        dueAt: null,
-        description: "",
-        projectPath: null,
-        createdAt: 1000,
-        updatedAt: 1000,
-        sessionKeys: [],
-      });
-      expect(task.id).toHaveLength(12);
-      expect(store.tasks.list()).toHaveLength(1);
-    });
-
-    it("normalizes messy but valid input", () => {
-      const input = parseTaskCreateInput({
-        title: "  任务  ",
-        tags: [" x ", "x", 42, "", "a".repeat(40)],
-        dueAt: -5,
-        description: "d".repeat(9000),
-        projectPath: "",
-      });
-      expect(input).toEqual({
-        title: "任务",
-        tags: ["x", "a".repeat(30)],
-        dueAt: null,
-        description: "d".repeat(8000),
-        projectPath: null,
-      });
-    });
-
-    it("rejects bodies without a title, invalid enums and malformed ids", () => {
-      expect(() => parseTaskCreateInput({})).toThrow(GatewayError);
-      expect(() => parseTaskCreateInput(null)).toThrow(GatewayError);
-      expect(() => parseTaskCreateInput("nope")).toThrow(GatewayError);
-      expect(() => parseTaskCreateInput({ title: "x", status: "bogus" })).toThrow(GatewayError);
-      expect(() => parseTaskCreateInput({ title: "x", priority: "P9" })).toThrow(GatewayError);
-      expect(() => parseTaskCreateInput({ title: "x", id: "../etc" })).toThrow(GatewayError);
-      expect(() => parseTaskInput({ tags: "bug" })).toThrow(GatewayError);
-    });
-
-    it("accepts a client id and rejects duplicates with 409", () => {
-      store.tasks.create(parseTaskCreateInput({ id: "client-1", title: "A" }));
-      expect(store.tasks.get("client-1")?.title).toBe("A");
-      expect(() =>
-        store.tasks.create(parseTaskCreateInput({ id: "client-1", title: "B" })),
-      ).toThrow(expect.objectContaining({ status: 409 }));
-    });
-
-    it("patches only provided fields; id and createdAt are immutable", () => {
-      const task = store.tasks.create(parseTaskCreateInput({ title: "原始" }), 1000);
-      const patched = store.tasks.update(
-        task.id,
-        parseTaskInput({ title: "改名", status: "doing", priority: "P1", tags: ["bug"] }),
-        2000,
-      );
-      expect(patched).toMatchObject({
-        id: task.id,
-        title: "改名",
-        status: "doing",
-        priority: "P1",
-        tags: ["bug"],
-        description: "",
-        createdAt: 1000,
-        updatedAt: 2000,
-      });
-      expect(store.tasks.update("missing", {}, 3000)).toBeNull();
-    });
-
-    it("lists by updatedAt desc and deletes", () => {
-      const a = store.tasks.create(parseTaskCreateInput({ title: "A" }), 1000);
-      const b = store.tasks.create(parseTaskCreateInput({ title: "B" }), 2000);
-      store.tasks.update(a.id, { title: "A2" }, 3000);
-      expect(store.tasks.list().map((task) => task.id)).toEqual([a.id, b.id]);
-      expect(store.tasks.delete(a.id)).toBe(true);
-      expect(store.tasks.delete(a.id)).toBe(false);
-      expect(store.tasks.list().map((task) => task.id)).toEqual([b.id]);
     });
   });
 
@@ -160,33 +74,6 @@ describe("WorkspaceStore", () => {
       expect(store.conversations.upsert(record).queuedMessages).toEqual(record.queuedMessages);
     });
 
-    it("derives task sessionKeys from conversation.taskId and unlinks on task delete", () => {
-      const task = store.tasks.create(parseTaskCreateInput({ title: "任务" }));
-      store.conversations.upsert(conversation("c1", { taskId: task.id, createdAt: 1 }));
-      store.conversations.upsert(conversation("c2", { taskId: task.id, createdAt: 2 }));
-      store.conversations.upsert(conversation("c3"));
-      expect(store.tasks.get(task.id)?.sessionKeys).toEqual(["c1", "c2"]);
-      expect(store.tasks.list()[0].sessionKeys).toEqual(["c1", "c2"]);
-
-      store.conversations.archive("c2");
-      expect(store.tasks.get(task.id)?.sessionKeys).toEqual(["c1"]);
-      expect(
-        store.conversations
-          .list()
-          .map((item) => item.key)
-          .sort(),
-      ).toEqual(["c1", "c3"]);
-
-      store.tasks.delete(task.id);
-      expect(store.conversations.get("c1")?.taskId).toBeNull();
-    });
-
-    it("rejects a taskId that does not exist (foreign key)", () => {
-      expect(() => store.conversations.upsert(conversation("c", { taskId: "ghost" }))).toThrow(
-        /FOREIGN KEY/,
-      );
-    });
-
     it("stores transcripts and cascades them on delete", () => {
       store.conversations.upsert(conversation("api-1"));
       expect(store.conversations.getTranscript("api-1")).toBeNull();
@@ -197,11 +84,10 @@ describe("WorkspaceStore", () => {
       expect(() => store.conversations.saveTranscript("missing", [])).toThrow(/FOREIGN KEY/);
     });
 
-    it("deleteAll removes every conversation but keeps tasks", () => {
-      const task = store.tasks.create(parseTaskCreateInput({ title: "任务" }));
-      store.conversations.upsert(conversation("c1", { taskId: task.id }));
+    it("deleteAll removes every conversation", () => {
+      store.conversations.upsert(conversation("c1"));
       expect(store.conversations.deleteAll()).toBe(1);
-      expect(store.tasks.get(task.id)?.sessionKeys).toEqual([]);
+      expect(store.conversations.list()).toEqual([]);
     });
   });
 
@@ -258,7 +144,6 @@ describe("WorkspaceStore", () => {
         activeAgentId: "",
         agentDefaultModels: {},
         currentModel: "",
-        boardAssistant: null,
       });
       store.preferences.update(parsePreferencesPatch({ activeAgentId: "codex" }));
       const next = store.preferences.update(
@@ -292,43 +177,23 @@ describe("WorkspaceStore", () => {
           { key: "acp:codex:1760000000001-def", label: "默认对话", agentId: "codex" },
         ],
       },
-      tasks: [
-        {
-          id: "t1",
-          title: "旧任务",
-          status: "doing",
-          dueAt: Date.UTC(2026, 0, 2),
-          sessionKeys: ["acp:codex:1760000000001-def", "gone"],
-        },
-        { title: "缺少 id" },
-      ],
       projectPaths: { codex: ["/repo/a/", "/repo/b"] },
       providers: {
         version: 1,
         providers: [{ id: "p1", name: "OR", baseUrl: "https://x.ai/v1", apiKey: "k", models: [] }],
       },
-      boardAssistant: { agentId: "omp", providerSessionId: "s-1" },
       activeAgentId: "codex",
     });
 
     it("merges every legacy category and is idempotent", () => {
       const first = importLegacyPayload(store, legacyPayload());
       expect(first).toEqual({
-        tasks: 1,
         conversations: 2,
         transcripts: 1,
         providers: 1,
         projectPaths: 2,
-        preferences: 3,
+        preferences: 2,
       });
-
-      const task = store.tasks.get("t1")!;
-      expect(task.sessionKeys).toEqual(["acp:codex:1760000000001-def"]);
-      // UTC 零点截止日迁移为本地当天 23:59:59.999
-      const due = new Date(task.dueAt!);
-      expect([due.getFullYear(), due.getMonth(), due.getDate(), due.getHours()]).toEqual([
-        2026, 0, 2, 23,
-      ]);
 
       const [pinned, other] = store.conversations.list();
       expect(pinned).toMatchObject({ key: "1760000000000-abc", pinned: true, modelId: "gpt-4o" });
@@ -338,11 +203,9 @@ describe("WorkspaceStore", () => {
       expect(store.preferences.get()).toMatchObject({
         activeAgentId: "codex",
         currentModel: "gpt-4o",
-        boardAssistant: { agentId: "omp", providerSessionId: "s-1" },
       });
 
       expect(importLegacyPayload(store, legacyPayload())).toEqual({
-        tasks: 0,
         conversations: 0,
         transcripts: 0,
         providers: 0,
@@ -352,10 +215,8 @@ describe("WorkspaceStore", () => {
     });
 
     it("never overwrites data that already exists in the gateway", () => {
-      store.tasks.create(parseTaskCreateInput({ id: "t1", title: "网关版本" }));
       store.preferences.update({ activeAgentId: "claude" });
       importLegacyPayload(store, legacyPayload());
-      expect(store.tasks.get("t1")?.title).toBe("网关版本");
       expect(store.preferences.get().activeAgentId).toBe("claude");
     });
 
@@ -366,12 +227,10 @@ describe("WorkspaceStore", () => {
         fs.mkdirSync(stateDir);
         const write = (name: string, data: unknown) =>
           fs.writeFileSync(path.join(stateDir, name), JSON.stringify({ updatedAt: 1, data }));
-        write("tasks.json", [{ id: "t9", title: "文件任务" }]);
         write("project-paths.json", ["/x"]);
         fs.writeFileSync(path.join(stateDir, "chat-state.json"), "not-json{{");
 
         expect(importLegacyStateDirectory(store, stateDir)).toMatchObject({
-          tasks: 1,
           projectPaths: 1,
         });
         expect(fs.existsSync(stateDir)).toBe(false);
@@ -387,7 +246,6 @@ describe("WorkspaceStore", () => {
 
   describe("info and export", () => {
     it("reports counts and exports without plain provider keys", () => {
-      store.tasks.create(parseTaskCreateInput({ title: "A" }));
       store.conversations.upsert(conversation("c1"));
       store.conversations.saveTranscript("c1", [{ id: "x" }]);
       const plainKey = ["export", "secret", "value"].join("-");
@@ -395,7 +253,6 @@ describe("WorkspaceStore", () => {
         parseProviderInput({ name: "P", baseUrl: "https://p.ai", apiKey: plainKey }, "create"),
       );
       expect(store.info().counts).toEqual({
-        tasks: 1,
         conversations: 1,
         providers: 1,
         projectPaths: 0,
@@ -413,10 +270,10 @@ describe("WorkspaceStore on disk", () => {
     const file = path.join(dir, "open-chat.db");
     try {
       const first = WorkspaceStore.open(file);
-      first.tasks.create(parseTaskCreateInput({ title: "持久化" }));
+      first.conversations.upsert(conversation("persisted"));
       first.close();
       const second = WorkspaceStore.open(file);
-      expect(second.tasks.list().map((task) => task.title)).toEqual(["持久化"]);
+      expect(second.conversations.list().map((item) => item.key)).toEqual(["persisted"]);
       expect(second.info().sizeBytes).toBeGreaterThan(0);
       second.close();
     } finally {

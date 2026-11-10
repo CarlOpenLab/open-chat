@@ -17,8 +17,8 @@
     "build:package": "vp run website#build && vp run @cc-heart/open-chat#build && node tools/open-chat/scripts/stage-package.mjs",
     "prepare": "vp config && node tools/ensure-vendor.mjs && pnpm run build:vendor",
     "build:vendor": "pnpm --filter 'acp-hub-*' run build",
-    "kill": "lsof -ti :3000 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :8082 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :4311 -sTCP:LISTEN | xargs kill -9 2>/dev/null; echo \"ports 3000/8082/4311 cleaned\"",
-    "kill:all": "lsof -ti :3000 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :8082 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :5173 -sTCP:LISTEN | xargs kill -9 2>/dev/null; lsof -ti :4311 -sTCP:LISTEN | xargs kill -9 2>/dev/null; echo \"all dev ports cleaned\""
+    "kill": "node tools/clean-ports.mjs 3000 8082 4311",
+    "kill:all": "node tools/clean-ports.mjs 3000 8082 5173 4311"
   },
   "dependencies": {
     "@antdv-next/x-sdk": "catalog:",

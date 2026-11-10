@@ -28,6 +28,10 @@ export interface OpenCodeSessionStateView {
   configOptions: SessionConfigOption[];
   modes: null;
   messages?: TranscriptMessage[];
+  /** 由 AgentManager 依据运行注册表补齐：该会话是否有回合正在运行。 */
+  running?: boolean;
+  /** 运行中回合的起始时间（毫秒）；未运行时缺省。 */
+  startedAt?: number;
 }
 
 interface OpenCodeSession {

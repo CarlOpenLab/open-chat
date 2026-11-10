@@ -1,10 +1,9 @@
 /**
  * 工作区偏好（preferences 表，每个偏好一行 JSON）：当前 agent、各 agent 默认模型、
- * Model API 当前模型、看板助手会话。主题等纯显示偏好按设备保存在浏览器，不在这里。
+ * Model API 当前模型。主题等纯显示偏好按设备保存在浏览器，不在这里。
  */
 import {
   DEFAULT_WORKSPACE_PREFERENCES,
-  type BoardAssistantSession,
   type WorkspacePreferences,
 } from "@cc-heart/open-chat-types";
 import { GatewayError } from "../error";
@@ -13,23 +12,6 @@ import { transaction, type Database } from "../db/database";
 type PreferenceKey = keyof WorkspacePreferences;
 
 const PREFERENCE_KEYS = Object.keys(DEFAULT_WORKSPACE_PREFERENCES) as PreferenceKey[];
-
-/**
- * @description 规范化看板助手会话；agentId 为空时视为未设置。
- * @param {unknown} value - 原始值
- * @returns {BoardAssistantSession | null} 会话或 null
- */
-function normalizeBoardAssistant(value: unknown): BoardAssistantSession | null {
-  if (!value || typeof value !== "object") return null;
-  const obj = value as Record<string, unknown>;
-  const agentId = typeof obj.agentId === "string" ? obj.agentId.trim() : "";
-  if (!agentId) return null;
-  return {
-    agentId,
-    providerSessionId:
-      typeof obj.providerSessionId === "string" ? obj.providerSessionId.trim() : "",
-  };
-}
 
 /**
  * @description 规范化 agent → 默认模型映射，丢弃非字符串值。
@@ -66,9 +48,6 @@ export function parsePreferencesPatch(body: unknown): Partial<WorkspacePreferenc
         break;
       case "agentDefaultModels":
         patch.agentDefaultModels = normalizeModelMap(value);
-        break;
-      case "boardAssistant":
-        patch.boardAssistant = normalizeBoardAssistant(value);
         break;
       default:
         throw GatewayError.invalidRequest(`未知的偏好项：${key}`);

@@ -18,20 +18,16 @@ import { transaction } from "../db/database";
 import { parseConversationRecord } from "./conversations";
 import { parsePreferencesPatch } from "./preferences";
 import { normalizeLegacyProvider } from "./providers";
-import { normalizeLegacyTask } from "./tasks";
 import type { WorkspaceStore } from "./workspace";
 
 /** 旧版网关状态文件名 → 导入载荷字段。 */
 const STATE_FILES: Record<string, keyof LegacyImportPayload> = {
   "chat-state.json": "chatState",
-  "tasks.json": "tasks",
   "project-paths.json": "projectPaths",
   "providers.json": "providers",
-  "board-assistant.json": "boardAssistant",
 };
 
 const EMPTY_RESULT: LegacyImportResult = {
-  tasks: 0,
   conversations: 0,
   transcripts: 0,
   providers: 0,
@@ -121,7 +117,6 @@ function convertLegacyConversation(
     providerSessionId: obj.providerSessionId,
     projectPath: obj.projectPath,
     systemPrompt: obj.systemPrompt,
-    statusOverride: obj.statusOverride,
     lastError: obj.lastError,
     queuePaused: obj.queuePaused,
     queuedMessages: obj.queuedMessages,
@@ -163,19 +158,6 @@ export function importLegacyPayload(
     const currentModel =
       typeof chatState?.currentModel === "string" ? chatState.currentModel.trim() : "";
 
-    // 任务先于会话写入：会话的 task_id 外键需要任务已存在
-    const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-    const sessionOwners = new Map<string, string>();
-    for (const raw of tasks) {
-      const task = normalizeLegacyTask(raw);
-      if (!task) continue;
-      if (store.tasks.insertIfAbsent(task)) result.tasks += 1;
-      const keys = (raw as { sessionKeys?: unknown }).sessionKeys;
-      if (Array.isArray(keys)) {
-        for (const key of keys) if (typeof key === "string") sessionOwners.set(key, task.id);
-      }
-    }
-
     const conversations = Array.isArray(chatState?.conversationList)
       ? chatState.conversationList
       : [];
@@ -183,8 +165,6 @@ export function importLegacyPayload(
       const converted = convertLegacyConversation(raw, currentModel);
       if (!converted) continue;
       const { record, messages } = converted;
-      const owner = sessionOwners.get(record.key);
-      if (owner && store.tasks.exists(owner)) record.taskId = owner;
       if (!store.conversations.insertIfAbsent(record)) continue;
       result.conversations += 1;
       if (record.agentId === "api" && messages.length > 0) {
@@ -207,9 +187,6 @@ export function importLegacyPayload(
     }
 
     const preferencePatch: Record<string, unknown> = {};
-    if (payload.boardAssistant && !store.preferences.has("boardAssistant")) {
-      preferencePatch.boardAssistant = payload.boardAssistant;
-    }
     if (typeof payload.activeAgentId === "string" && !store.preferences.has("activeAgentId")) {
       preferencePatch.activeAgentId = payload.activeAgentId;
     }

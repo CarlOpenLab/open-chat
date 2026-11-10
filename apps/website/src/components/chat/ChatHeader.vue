@@ -10,7 +10,6 @@ import {
   Pin,
   PanelLeftOpen,
   Trash2,
-  X,
 } from "@lucide/vue";
 import { Button, Dropdown, Tooltip, message, type MenuProps } from "antdv-next";
 import { computed, h, nextTick, ref, watch } from "vue";
@@ -21,8 +20,6 @@ interface Props {
   syncing?: boolean;
   canGoBack?: boolean;
   canGoForward?: boolean;
-  /** 是否显示右上角关闭抽屉按钮 */
-  showClose?: boolean;
 }
 interface Emits {
   (e: "toggleSidebar"): void;
@@ -33,13 +30,11 @@ interface Emits {
   (e: "pin"): void;
   (e: "archive"): void;
   (e: "delete"): void;
-  (e: "close"): void;
 }
 const props = withDefaults(defineProps<Props>(), {
   syncing: false,
   canGoBack: false,
   canGoForward: false,
-  showClose: false,
 });
 const emit = defineEmits<Emits>();
 
@@ -86,14 +81,18 @@ const cancelRename = () => {
   editing.value = false;
 };
 
+/** 与侧栏会话菜单一致：14px 等比图标，删除行只换色不换形。 */
+const headerMenuIcon = (component: typeof Pencil) =>
+  h(component, { class: "header-menu-icon", size: 14, "stroke-width": 1.8 });
+
 const titleMenu = computed<MenuProps>(() => ({
   items: [
-    { key: "rename", label: "重命名", icon: h(Pencil) },
-    { key: "pin", label: "置顶对话", icon: h(Pin) },
-    { key: "archive", label: "归档对话", icon: h(Archive) },
-    { key: "export", label: "导出聊天记录", icon: h(Download) },
+    { key: "rename", label: "重命名", icon: headerMenuIcon(Pencil) },
+    { key: "pin", label: "置顶对话", icon: headerMenuIcon(Pin) },
+    { key: "archive", label: "归档对话", icon: headerMenuIcon(Archive) },
+    { key: "export", label: "导出聊天记录", icon: headerMenuIcon(Download) },
     { type: "divider" },
-    { key: "delete", label: "删除对话", icon: h(Trash2), danger: true },
+    { key: "delete", label: "删除对话", icon: headerMenuIcon(Trash2), danger: true },
   ],
   onClick: ({ key }) => {
     if (key === "rename") beginRename();
@@ -186,20 +185,18 @@ const titleMenu = computed<MenuProps>(() => ({
         @click="handleCopyLink"
       />
     </Tooltip>
-    <Tooltip v-if="showClose" title="关闭抽屉">
-      <Button
-        type="text"
-        size="small"
-        :icon="h(X)"
-        class="!w-[26px] !h-[26px] !p-0 !ml-1 !text-brand-muted-strong hover:!text-brand-foreground hover:!bg-brand-surface-subtle"
-        aria-label="关闭抽屉"
-        @click="emit('close')"
-      />
-    </Tooltip>
   </header>
 </template>
 
 <style scoped>
+/* 菜单渲染在 body 下（teleport），用 :global 命中；图标固定 14px 保持等比。 */
+:global(.header-menu-icon) {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+}
+
 .sync-dot {
   width: 6px;
   height: 6px;

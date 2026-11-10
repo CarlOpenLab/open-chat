@@ -44,7 +44,37 @@ export class AgentManager {
     });
   }
 
-  getSessionState(
+  /**
+   * @description 读取会话状态，并附上网关注册表的真实运行信息。
+   *   `running` / `startedAt` 是刷新页面后恢复「工作中」的唯一可信来源：
+   *   ACP 自己也有 activeRuns，但 native（opencode）路径完全依赖运行注册表。
+   * @param {string} agentId - agent id
+   * @param {string} conversationId - 前端会话 key
+   * @param {string} projectPath - 项目目录
+   * @param {string} providerSessionId - 供应商真实会话 id
+   * @returns {Promise<AgentSessionStateView>} 会话状态（含运行标记）
+   */
+  async getSessionState(
+    agentId: string,
+    conversationId: string,
+    projectPath?: string,
+    providerSessionId?: string,
+  ): Promise<AgentSessionStateView> {
+    const state = await this.loadSessionState(
+      agentId,
+      conversationId,
+      projectPath,
+      providerSessionId,
+    );
+    const run = this.runs.findRun(agentId, conversationId);
+    return {
+      ...state,
+      running: run ? true : "running" in state && state.running === true,
+      ...(run ? { startedAt: run.startedAt } : {}),
+    };
+  }
+
+  private loadSessionState(
     agentId: string,
     conversationId: string,
     projectPath?: string,
