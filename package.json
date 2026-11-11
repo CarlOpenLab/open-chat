@@ -16,7 +16,7 @@
     "build:cli": "vp run @cc-heart/open-chat#build",
     "build:package": "vp run website#build && vp run @cc-heart/open-chat#build && node tools/open-chat/scripts/stage-package.mjs",
     "prepare": "vp config && node tools/ensure-vendor.mjs && pnpm run build:vendor",
-    "build:vendor": "pnpm --filter 'acp-hub-*' run build",
+    "build:vendor": "pnpm --filter '@cc-heart/acp-hub-*' run build",
     "kill": "node tools/clean-ports.mjs 3000 8082 4311",
     "kill:all": "node tools/clean-ports.mjs 3000 8082 5173 4311"
   },

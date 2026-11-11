@@ -21,6 +21,9 @@ catalogs:
     '@antdv-next/x-markdown':
       specifier: ^0.1.4
       version: 0.1.4
+    '@antdv-next/x-pro':
+      specifier: ^0.0.1
+      version: 0.0.1
     '@antdv-next/x-sdk':
       specifier: ^0.0.2
       version: 0.0.2
@@ -226,6 +229,9 @@ importers:
       '@antdv-next/x-markdown':
         specifier: 'catalog:'
         version: 0.1.4(vue@3.5.31(typescript@5.9.3))
+      '@antdv-next/x-pro':
+        specifier: 'catalog:'
+        version: 0.0.1(vue@3.5.31(typescript@5.9.3))
       '@antdv-next/x-sdk':
         specifier: 'catalog:'
         version: 0.0.2(vue@3.5.31(typescript@5.9.3))
@@ -496,6 +502,11 @@ packages:
 
   '@antdv-next/x-markdown@0.1.4':
     resolution: {integrity: sha512-P7HFanpLrxmUYIj1DDuiKoz4oKJRoBJlQOX4IiKtnxRjEmYFrBFFRl3CKrLOkgKYIVCBWeWboJlJeGd4efT7SA==}
+    peerDependencies:
+      vue: '>=3.5.0'
+
+  '@antdv-next/x-pro@0.0.1':
+    resolution: {integrity: sha512-/QMJncMbxLQ5TQ+764sts4y25t61WJ9UrbeuWT/zothYWf1FPmBD4e16DoxKnm4tktRwlvVpaCu6rMbf4wXs2g==}
     peerDependencies:
       vue: '>=3.5.0'
 
@@ -4448,6 +4459,17 @@ snapshots:
       katex: 0.16.47
       marked: 12.0.2
       vue: 3.5.31(typescript@5.9.3)
+
+  '@antdv-next/x-pro@0.0.1(vue@3.5.31(typescript@5.9.3))':
+    dependencies:
+      '@antdv-next/cssinjs': 1.0.6(vue@3.5.31(typescript@5.9.3))
+      '@v-c/util': 1.0.21(vue@3.5.31(typescript@5.9.3))
+      antdv-next: 1.4.4(vue@3.5.31(typescript@5.9.3))
+      vue: 3.5.31(typescript@5.9.3)
+    transitivePeerDependencies:
+      - date-fns
+      - luxon
+      - moment
 
   '@antdv-next/x-sdk@0.0.2(vue@3.5.31(typescript@5.9.3))':
     dependencies:

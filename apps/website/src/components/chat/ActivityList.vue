@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, ref } from "vue";
 import { ChevronDown, ChevronRight } from "@lucide/vue";
+import { TodoList } from "@antdv-next/x-pro";
+import type { TodoItem, TodoItemStatus, TodoListStylesType } from "@antdv-next/x-pro";
 import { formatActivitySummary, summarizeMessages } from "@cc-heart/open-chat-types";
-import type { TranscriptMessage } from "@cc-heart/open-chat-types";
+import type { PlanMessage, TranscriptMessage } from "@cc-heart/open-chat-types";
 import { useMarkdownStreaming } from "../../composables/useMarkdownStreaming";
 import { markdownThemeKey, type MarkdownTheme } from "./markdownTheme";
 import ActivityEntryRow from "./ActivityEntryRow.vue";
@@ -45,6 +47,35 @@ const entries = computed<ActivityEntry[]>(() =>
     reasoningDurationMs: props.reasoningDurationMs,
   }),
 );
+
+/**
+ * Agent 计划消息 → x-pro TodoList 条目。
+ * 流式中同一回合会连续推送多条 plan 消息，取最后一条作为当前计划快照。
+ */
+const planItems = computed<TodoItem[]>(() => {
+  const plans = props.messages.filter((message): message is PlanMessage => message.role === "plan");
+  const latest = plans.at(-1);
+  if (!latest) return [];
+  const statusMap: Record<string, TodoItemStatus> = {
+    pending: "pending",
+    in_progress: "in-progress",
+    completed: "completed",
+  };
+  return (latest.entries ?? []).map((entry, index) => ({
+    id: `plan-${index}`,
+    title: entry.content || `步骤 ${index + 1}`,
+    status: statusMap[entry.status] ?? "pending",
+  }));
+});
+
+/** 计划已由 TodoList 单独呈现，活动行里不再重复列出 plan 条目。 */
+const timelineEntries = computed<ActivityEntry[]>(() =>
+  entries.value.filter((entry) => entry.kind !== "plan"),
+);
+
+const todoStyles: TodoListStylesType = {
+  root: { marginTop: "6px", marginLeft: "15px" },
+};
 
 /** 最后一条思考条目的内容（流式中只有它会持续增长）。 */
 const lastReasoningId = computed(() => {
@@ -131,9 +162,20 @@ onBeforeUnmount(() => {
       <ChevronDown v-else class="h-2.5 w-2.5 flex-none text-brand-ghost" />
     </button>
 
+    <!-- Agent 任务计划：x-pro TodoList，常驻显示，全部进入终态后自动收起 -->
+    <TodoList
+      v-if="planItems.length"
+      :items="planItems"
+      title="任务计划"
+      :default-open="true"
+      :collapse-on-complete="true"
+      :max-height="220"
+      :styles="todoStyles"
+    />
+
     <div v-if="summaryExpanded" class="flex w-full min-w-0 flex-col pl-[15px]">
       <ActivityEntryRow
-        v-for="entry in entries"
+        v-for="entry in timelineEntries"
         :key="entry.id"
         :entry="entry"
         :expanded="isItemExpanded(entry.id)"

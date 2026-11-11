@@ -2,6 +2,9 @@
 import { ThemeProvider } from "antdv-style";
 import { XProvider } from "@antdv-next/x";
 import type { XProviderProps } from "@antdv-next/x";
+// x-pro 的语言包在 antdv-next 基础文案上补齐了 MessageScroller / Questionnaire / TodoList，
+// 合并进 XProvider.locale 即可，无需再叠一层 ConfigProvider（避免两套 theme 上下文）。
+import { enUS as xProEnUS, zhCN as xProZhCN } from "@antdv-next/x-pro";
 import {
   computed,
   defineAsyncComponent,
@@ -111,7 +114,11 @@ const dark = computed(() =>
 );
 
 const locale = computed<XProviderProps["locale"]>(() => {
-  return localeType.value === "zh" ? zhCN : enUS;
+  const xLocale = localeType.value === "zh" ? zhCN : enUS;
+  const proLocale = localeType.value === "zh" ? xProZhCN : xProEnUS;
+  // proLocale 自带 antdv-next 基础文案，xLocale 覆盖 X 组件（Bubble / Sender / …）文案，
+  // 三者合并后由 XProvider 透传给内部 ConfigProvider。
+  return { ...proLocale, ...xLocale } as XProviderProps["locale"];
 });
 const appTheme = computed(() => (dark.value ? shadcnDarkTheme : shadcnTheme));
 const currentPage = computed<"chat" | "code-highlight-demo">(() => {

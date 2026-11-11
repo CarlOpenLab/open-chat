@@ -6,6 +6,8 @@ import type {
   XRequestConfigOptions,
 } from "@antdv-next/x-sdk";
 import { DeepSeekChatProvider } from "@antdv-next/x-sdk";
+import { validateQuestionnaire } from "@antdv-next/x-pro";
+import type { QuestionnairePayload } from "@antdv-next/x-pro";
 import {
   activityToMessages,
   applyMessageDelta,
@@ -126,6 +128,9 @@ export class OpenChatProvider extends DeepSeekChatProvider<
   /** Called when the gateway emits a `chat_permission` event（opencode 权限询问）。 */
   onPermissionRequest?: (request: PermissionRequest) => void;
 
+  /** Called when the gateway emits a `chat_question` event（Agent 结构化提问）。 */
+  onQuestionRequest?: (payload: QuestionnairePayload) => void;
+
   /** Called when a native provider assigns its real persistent session id. */
   onProviderSession?: (session: ProviderSessionNotice) => void;
 
@@ -240,6 +245,19 @@ export class OpenChatProvider extends DeepSeekChatProvider<
         };
       } catch (err) {
         console.error("Failed to parse chat_permission event:", err);
+      }
+      return info.originMessage ?? { content: "", role: "assistant" };
+    }
+
+    // Agent 发问：问卷只走回调交给工作区，不写进消息流（回执由提问卡自己保留）。
+    if (chunk?.event === "chat_question" && parsedChunk) {
+      try {
+        const validation = validateQuestionnaire(parsedChunk);
+        if (validation.valid && !validation.empty) {
+          this.onQuestionRequest?.(parsedChunk as unknown as QuestionnairePayload);
+        }
+      } catch (err) {
+        console.error("Failed to parse chat_question event:", err);
       }
       return info.originMessage ?? { content: "", role: "assistant" };
     }

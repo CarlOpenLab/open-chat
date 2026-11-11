@@ -14,6 +14,7 @@
     "@antdv-next/x": "catalog:",
     "@antdv-next/x-card": "catalog:",
     "@antdv-next/x-markdown": "catalog:",
+    "@antdv-next/x-pro": "catalog:",
     "@antdv-next/x-sdk": "catalog:",
     "@cc-heart/open-chat-types": "workspace:*",
     "@codemirror/lang-css": "catalog:",

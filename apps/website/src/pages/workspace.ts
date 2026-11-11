@@ -15,6 +15,8 @@ import type { ModelCatalogEntry } from "../composables/useChatModels";
 import type { StagedAttachment } from "../composables/useComposerData";
 import type { GitWorkspaceInfo, SkillsIndex, WebSearchSourceItem } from "../services/ai";
 import type { AcpRunStateNotice, PermissionRequest } from "../services/OpenChatProvider";
+import type { QuestionnaireSubmission } from "@antdv-next/x-pro";
+import type { QuestionCardState } from "../composables/workspace/agentQuestions";
 import type { AgentView } from "../services/acp";
 import type { QueuedMessage as QueuedChatMessage } from "@cc-heart/open-chat-types";
 import type { modelMessagesToBubbleItems } from "../services/transcript";
@@ -64,6 +66,8 @@ export interface Workspace {
   effectivePermissionMode: "supervised" | "auto" | "full";
   isPiAgent: boolean;
   pendingPermission: PermissionRequest | null;
+  /** 当前会话的 Agent 提问卡（结构化问卷 + 回执）；与权限审批相互独立。 */
+  pendingQuestion: QuestionCardState | null;
   fileModeEnabled: boolean;
   historyBack: string[];
   historyForward: string[];
@@ -125,6 +129,12 @@ export interface Workspace {
   handleModeChange: (value: "build" | "plan") => void;
   handlePermissionChange: (value: "supervised" | "auto" | "full") => void;
   handlePermissionResponse: (response: "once" | "always" | "reject") => Promise<void>;
+  // ===== Agent 提问卡（x-pro Questionnaire） =====
+  startClarifyQuestionnaire: () => void;
+  handleQuestionSubmit: (submission: QuestionnaireSubmission) => void;
+  handleQuestionRetry: () => void;
+  handleQuestionSkip: () => void;
+  handleQuestionDismiss: () => void;
   handleFileModeChange: (value: boolean) => void;
   handleProjectPathChange: (value: string) => void;
   handleProjectPathRemove: (value: string) => void;

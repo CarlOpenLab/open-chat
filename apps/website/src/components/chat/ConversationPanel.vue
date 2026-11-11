@@ -31,7 +31,8 @@ const ws = useWorkspace();
         :show-welcome="
           ws.showWelcome &&
           ws.currentConversationMessages.length === 0 &&
-          !ws.currentConversationBusyState
+          !ws.currentConversationBusyState &&
+          !ws.pendingQuestion
         "
         :bubble-items="ws.bubbleItems"
         :dark="ws.dark"
@@ -41,10 +42,17 @@ const ws = useWorkspace();
         :working-started-at-ms="ws.currentConversationBusyState?.startedAt"
         :project-path="ws.projectPath"
         :project-path-options="ws.projectPathOptions"
+        :question-card="ws.pendingQuestion"
+        :question-disabled="ws.inputUnavailable"
         @reload="ws.handleReloadMessage($event)"
         @prompt-click="ws.handlePromptClick($event)"
         @project-path-change="ws.handleProjectPathChange($event)"
         @project-path-remove="ws.handleProjectPathRemove($event)"
+        @question-start="ws.startClarifyQuestionnaire()"
+        @question-submit="ws.handleQuestionSubmit($event)"
+        @question-retry="ws.handleQuestionRetry()"
+        @question-skip="ws.handleQuestionSkip()"
+        @question-dismiss="ws.handleQuestionDismiss()"
       />
     </div>
     <ChatInput

@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import type { BubbleItemType } from "@antdv-next/x";
+import { MessageScroller } from "@antdv-next/x-pro";
+import type {
+  MessageScrollerItem,
+  MessageScrollerStylesType,
+  QuestionnaireSubmission,
+} from "@antdv-next/x-pro";
 import { computed, provide } from "vue";
+import type { QuestionCardState } from "../../composables/workspace/agentQuestions";
+import AgentQuestionCard from "./AgentQuestionCard.vue";
 import type { WebSearchSourceItem, UploadedAttachment } from "../../services/ai";
 import { attachmentUrl } from "../../services/ai";
 import type { TranscriptMessage } from "@cc-heart/open-chat-types";
@@ -53,6 +61,10 @@ interface Props {
   /** 空状态标题中的项目目录（由外层 Chat 传入） */
   projectPath?: string;
   projectPathOptions?: string[];
+  /** 当前会话的 Agent 提问卡（结构化问卷 + 回执） */
+  questionCard?: QuestionCardState | null;
+  /** 会话未就绪时锁住提问卡 */
+  questionDisabled?: boolean;
 }
 
 interface Emits {
@@ -60,12 +72,18 @@ interface Emits {
   (e: "promptClick", info: { data: { key: string; description: string } }): void;
   (e: "projectPathChange", value: string): void;
   (e: "projectPathRemove", value: string): void;
+  (e: "questionStart"): void;
+  (e: "questionSubmit", submission: QuestionnaireSubmission): void;
+  (e: "questionRetry"): void;
+  (e: "questionSkip"): void;
+  (e: "questionDismiss"): void;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   searchResultsByMessageId: () => ({}),
   workingStartedAtMs: undefined,
   working: false,
+  questionDisabled: false,
 });
 const emit = defineEmits<Emits>();
 
@@ -193,6 +211,28 @@ const {
   conversationKey: () => props.conversationKey,
   workingStartedAtMs: () => props.workingStartedAtMs,
 });
+
+/** x-pro MessageScroller：替代手写滚动容器，跟随流式内容 + 消息导航导轨 + 回到最新。 */
+const scrollerStyles: MessageScrollerStylesType = {
+  root: { height: "100%", minHeight: 0 },
+  content: { minHeight: "100%" },
+};
+
+/** 导轨刻度元数据：id 必须与消息节点的 data-message-id 一致。 */
+const scrollerItems = computed<MessageScrollerItem[]>(() =>
+  displayItems.value.map((item) => {
+    const isActivity = item.extraInfo?.messageRole === "activities";
+    const text = String(item.content ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+    return {
+      id: String(item.key),
+      title: item.role === "user" ? "你" : isActivity ? "执行过程" : "助手",
+      description: text || (isActivity ? "思考 / 工具 / 计划" : "…"),
+    };
+  }),
+);
 </script>
 
 <template>
@@ -221,52 +261,88 @@ const {
             {{ prompt.label }}
           </button>
         </div>
+        <!-- 提问环节入口：开一张结构化问卷，答案会整理成需求发回会话 -->
+        <button
+          v-if="!questionCard"
+          type="button"
+          class="clarify-entry"
+          @click="emit('questionStart')"
+        >
+          先回答几个问题，让 AI 更懂你的需求
+        </button>
       </EmptyState>
     </section>
 
-    <div v-else class="chat-scroll-box h-full min-h-0 overflow-y-auto overscroll-contain">
+    <MessageScroller
+      v-else
+      class="chat-scroller"
+      navigation="rail"
+      :items="scrollerItems"
+      :styles="scrollerStyles"
+      :busy="working"
+      back-to-bottom
+    >
       <div
         class="chat-list mx-auto flex w-full min-w-0 max-w-[min(100%,820px)] flex-col gap-2 px-[clamp(4px,1.5vw,16px)] py-6"
       >
         <template v-for="item in displayItems" :key="item.key">
-          <!-- 用户消息气泡（Bubble 组件） -->
-          <UserMessageBubble
-            v-if="item.role === 'user'"
-            :content="String(item.content ?? '')"
-            :attachments="userAttachmentsByItemKey[String(item.key)]"
-          />
-
-          <!-- 正文气泡（assistant content → markdown） -->
-          <AssistantBubble
-            v-else-if="item.extraInfo?.messageRole === 'content'"
-            :item="item"
-            :content="String(item.content ?? '')"
-            :markdown-class-name="markdownClassName"
-            :streaming="isStreamingStatus(item.status)"
-            :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
-            :show-actions="item.status === 'success' && item.key === lastAssistantMessageKey"
-            @reload="emit('reload', $event)"
-          />
-
-          <!-- 活动行（思考/工具/计划/文件/工作区）：非气泡，平铺展示 -->
-          <div v-else class="activity-row w-full min-w-0 max-w-full">
-            <ActivityList
-              :messages="activityMessages(item)"
-              :streaming="isStreamingStatus(item.status)"
-              :reasoning-done="item.extraInfo?.reasoningDone !== false"
-              :summary-expanded="isSummaryExpanded(item.key, isStreamingStatus(item.status))"
-              :item-expanded-ids="isItemExpandedIds(item)"
-              :reasoning-duration-ms="getReasoningDurationMs(item.key)"
-              @update:summary-expanded="setSummaryExpanded(item.key, $event)"
-              @update:item-expanded-ids="setItemExpandedIds(item.key, $event)"
+          <!-- 统一包一层：MessageScroller 导轨按 data-message-id 定位消息节点 -->
+          <div class="chat-message-row" :data-message-id="String(item.key)">
+            <!-- 用户消息气泡（Bubble 组件） -->
+            <UserMessageBubble
+              v-if="item.role === 'user'"
+              :content="String(item.content ?? '')"
+              :attachments="userAttachmentsByItemKey[String(item.key)]"
             />
+
+            <!-- 正文气泡（assistant content → markdown） -->
+            <AssistantBubble
+              v-else-if="item.extraInfo?.messageRole === 'content'"
+              :item="item"
+              :content="String(item.content ?? '')"
+              :markdown-class-name="markdownClassName"
+              :streaming="isStreamingStatus(item.status)"
+              :search-results="searchResultsByMessageId?.[String(item.key)] ?? []"
+              :show-actions="item.status === 'success' && item.key === lastAssistantMessageKey"
+              @reload="emit('reload', $event)"
+            />
+
+            <!-- 活动行（思考/工具/计划/文件/工作区）：非气泡，平铺展示 -->
+            <div v-else class="activity-row w-full min-w-0 max-w-full">
+              <ActivityList
+                :messages="activityMessages(item)"
+                :streaming="isStreamingStatus(item.status)"
+                :reasoning-done="item.extraInfo?.reasoningDone !== false"
+                :summary-expanded="isSummaryExpanded(item.key, isStreamingStatus(item.status))"
+                :item-expanded-ids="isItemExpandedIds(item)"
+                :reasoning-duration-ms="getReasoningDurationMs(item.key)"
+                @update:summary-expanded="setSummaryExpanded(item.key, $event)"
+                @update:item-expanded-ids="setItemExpandedIds(item.key, $event)"
+              />
+            </div>
           </div>
         </template>
+
+        <!-- Agent 提问卡：结构化作答 → 原地回执 → 答案发回会话 -->
+        <div v-if="questionCard" class="chat-message-row">
+          <AgentQuestionCard
+            :key="`${questionCard.payload.id}:${questionCard.payload.revision}`"
+            :payload="questionCard.payload"
+            :status="questionCard.status"
+            :result="questionCard.result"
+            :error="questionCard.error"
+            :disabled="questionDisabled"
+            @submit="emit('questionSubmit', $event)"
+            @retry="emit('questionRetry')"
+            @skip="emit('questionSkip')"
+            @dismiss="emit('questionDismiss')"
+          />
+        </div>
 
         <!-- 进行中指示：会话运行中（与侧栏 busy 状态同源），列尾常驻显示 -->
         <WorkingIndicator :working="working" :working-started-at-ms="workingStartedAtMs" />
       </div>
-    </div>
+    </MessageScroller>
   </main>
 </template>
 
@@ -304,9 +380,42 @@ const {
   outline-offset: 2px;
 }
 
-.chat-scroll-box {
-  scrollbar-width: thin;
-  overscroll-behavior-y: contain;
+/* 提问环节入口：与起步提示词同一行节奏，用虚线边框区分「不是直接发送」 */
+.clarify-entry {
+  margin-top: 14px;
+  padding: 6px 14px;
+  border: 1px dashed var(--brand-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--brand-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    background 150ms ease;
+}
+
+.clarify-entry:hover {
+  border-color: var(--brand-accent);
+  background: var(--brand-surface);
+  color: var(--brand-foreground);
+}
+
+.clarify-entry:focus-visible {
+  outline: 2px solid var(--brand-accent);
+  outline-offset: 2px;
+}
+
+.chat-scroller {
+  height: 100%;
+  min-height: 0;
+}
+
+.chat-message-row {
+  width: 100%;
+  min-width: 0;
 }
 
 .chat-list {

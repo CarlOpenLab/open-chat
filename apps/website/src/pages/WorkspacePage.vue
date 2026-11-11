@@ -9,6 +9,13 @@ import type { XModelMessage, XModelResponse } from "@antdv-next/x-sdk";
 import { XRequest } from "@antdv-next/x-sdk";
 import type { QueuedMessage as QueuedChatMessage } from "@cc-heart/open-chat-types";
 import { message } from "antdv-next";
+import type { QuestionnaireSubmission } from "@antdv-next/x-pro";
+import {
+  createClarifyQuestionnaire,
+  createQuestionCard,
+  formatQuestionnaireAnswer,
+  type QuestionCardState,
+} from "../composables/workspace/agentQuestions";
 import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import type { UploadedAttachment, WebSearchSourceItem } from "../services/ai";
 import { API_BASE_URL, GATEWAY_API_KEY } from "../services/http";
@@ -99,6 +106,12 @@ const { conversationsOpen, sidebarWidth, commandPaletteOpen, settingsOpen } = us
 /** 工作区偏好（当前 agent / 各 agent 默认模型 / Model API 当前模型），保存在网关。 */
 const workspacePreferences = useWorkspacePreferences();
 const pendingPermissions = reactive(new Map<string, PermissionRequest>());
+/** 每会话一张提问卡：Agent 发问或空状态入口触发，答案回执原地保留。 */
+const questionCards = reactive(new Map<string, QuestionCardState>());
+/** 草稿态（欢迎页）还没有会话 key，用固定占位 key 挂卡片。 */
+const DRAFT_QUESTION_KEY = "__draft_question__";
+const questionCardKey = () => currentConversationKey.value || DRAFT_QUESTION_KEY;
+let clarifyRevision = 0;
 const deleteOpen = ref(false);
 const deleteTargetKey = ref("");
 const currentConversationKey = ref<string>("");
@@ -692,6 +705,10 @@ const createSessionProvider = (convKey: string, _agentId: string) => {
   p.onPermissionRequest = (request) => {
     pendingPermissions.set(convKey, request);
   };
+  // Agent 结构化提问：与权限审批互不干扰，走 QuestionCard 自己的状态机。
+  p.onQuestionRequest = (payload) => {
+    questionCards.set(convKey, createQuestionCard(payload));
+  };
   p.onChatError = (message: string) => {
     const run = activeSessionRuns.get(convKey);
     if (run) {
@@ -741,6 +758,9 @@ const pendingPermission = computed(() =>
     ? (pendingPermissions.get(currentConversationKey.value) ?? null)
     : null,
 );
+
+/** 当前激活会话的提问卡（含已提交回执；切换会话互不串卡）。 */
+const pendingQuestion = computed(() => questionCards.get(questionCardKey()) ?? null);
 
 /** 当前会话正在生成；输入仍可提交，但新消息会进入该会话专属队列 */
 const inputRunning = computed(() => isConversationRunning(currentConversationKey.value));
@@ -1261,6 +1281,65 @@ const handlePermissionResponse = async (response: "once" | "always" | "reject"):
   } catch (err) {
     message.error(err instanceof Error ? err.message : "权限回复失败，请重试");
   }
+};
+
+// ============ Agent 提问卡（x-pro Questionnaire） ============
+
+/** 空状态入口：开一张前端自带的澄清问卷，不依赖服务端事件。 */
+const startClarifyQuestionnaire = () => {
+  const key = questionCardKey();
+  if (questionCards.has(key)) return;
+  clarifyRevision += 1;
+  questionCards.set(key, createQuestionCard(createClarifyQuestionnaire(clarifyRevision)));
+};
+
+/** 结构化答案 → 一条自然语言需求，复用现有发送链路；失败保留答案与幂等键。 */
+const respondQuestion = (submission: QuestionnaireSubmission) => {
+  const originKey = questionCardKey();
+  const card = questionCards.get(originKey);
+  if (!card || card.status === "submitting" || card.status === "submitted") return;
+  card.lastSubmission = submission;
+  if (inputUnavailable.value || !activeAgent.value.available) {
+    card.status = "error";
+    card.error = "会话尚未就绪，答案已保留，请稍后重试。";
+    return;
+  }
+  card.status = "submitting";
+  try {
+    const text = formatQuestionnaireAnswer(submission, card.payload);
+    handleSubmit(text);
+    // 欢迎页提交时 handleSubmit 会同步创建新会话，把回执迁到新 key，否则卡片会凭空消失。
+    const nextKey = questionCardKey();
+    if (nextKey !== originKey) {
+      questionCards.delete(originKey);
+      questionCards.set(nextKey, card);
+    }
+    card.status = "submitted";
+    card.result = "已把答案整理成一条需求发给 Agent。";
+    card.error = "";
+  } catch (err) {
+    card.status = "error";
+    card.error = err instanceof Error ? err.message : "提交失败，答案已保留，可重试。";
+  }
+};
+
+const handleQuestionSubmit = (submission: QuestionnaireSubmission) => respondQuestion(submission);
+
+/** 重试复用同一 submissionId，避免把同一份答案发两遍。 */
+const handleQuestionRetry = () => {
+  const card = questionCards.get(questionCardKey());
+  if (card?.lastSubmission && card.status === "error") respondQuestion(card.lastSubmission);
+};
+
+const handleQuestionSkip = () => {
+  const card = questionCards.get(questionCardKey());
+  if (!card) return;
+  card.status = "cancelled";
+  card.result = "已跳过提问，可以直接在输入框里描述需求。";
+};
+
+const handleQuestionDismiss = () => {
+  questionCards.delete(questionCardKey());
 };
 
 const handleChange = (value: string) => {
@@ -2128,6 +2207,7 @@ const workspace = reactive({
   effectivePermissionMode,
   isPiAgent,
   pendingPermission,
+  pendingQuestion,
   fileModeEnabled,
   historyBack,
   historyForward,
@@ -2185,6 +2265,11 @@ const workspace = reactive({
   handleModeChange,
   handlePermissionChange,
   handlePermissionResponse,
+  startClarifyQuestionnaire,
+  handleQuestionSubmit,
+  handleQuestionRetry,
+  handleQuestionSkip,
+  handleQuestionDismiss,
   handleFileModeChange,
   handleProjectPathChange,
   handleProjectPathRemove,
