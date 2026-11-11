@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import type { BubbleItemType } from "@antdv-next/x";
 import { MessageScroller } from "@antdv-next/x-pro";
-import type {
-  MessageScrollerItem,
-  MessageScrollerStylesType,
-  QuestionnaireSubmission,
-} from "@antdv-next/x-pro";
+import type { MessageScrollerStylesType, QuestionnaireSubmission } from "@antdv-next/x-pro";
 import { computed, provide } from "vue";
 import type { QuestionCardState } from "../../composables/workspace/agentQuestions";
+import {
+  buildMessageScrollerItems,
+  messageRailAnchorId,
+} from "../../composables/workspace/messageScrollerRail";
 import AgentQuestionCard from "./AgentQuestionCard.vue";
 import type { WebSearchSourceItem, UploadedAttachment } from "../../services/ai";
 import { attachmentUrl } from "../../services/ai";
@@ -218,21 +218,8 @@ const scrollerStyles: MessageScrollerStylesType = {
   content: { minHeight: "100%" },
 };
 
-/** 导轨刻度元数据：id 必须与消息节点的 data-message-id 一致。 */
-const scrollerItems = computed<MessageScrollerItem[]>(() =>
-  displayItems.value.map((item) => {
-    const isActivity = item.extraInfo?.messageRole === "activities";
-    const text = String(item.content ?? "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 80);
-    return {
-      id: String(item.key),
-      title: item.role === "user" ? "你" : isActivity ? "执行过程" : "助手",
-      description: text || (isActivity ? "思考 / 工具 / 计划" : "…"),
-    };
-  }),
-);
+/** 导轨刻度只标注用户自己发送的消息；执行过程与助手正文不作为跳转节点。 */
+const scrollerItems = computed(() => buildMessageScrollerItems(displayItems.value));
 </script>
 
 <template>
@@ -286,8 +273,8 @@ const scrollerItems = computed<MessageScrollerItem[]>(() =>
         class="chat-list mx-auto flex w-full min-w-0 max-w-[min(100%,820px)] flex-col gap-2 px-[clamp(4px,1.5vw,16px)] py-6"
       >
         <template v-for="item in displayItems" :key="item.key">
-          <!-- 统一包一层：MessageScroller 导轨按 data-message-id 定位消息节点 -->
-          <div class="chat-message-row" :data-message-id="String(item.key)">
+          <!-- 导轨只锚定用户消息行；执行过程与助手正文不挂 data-message-id -->
+          <div class="chat-message-row" :data-message-id="messageRailAnchorId(item)">
             <!-- 用户消息气泡（Bubble 组件） -->
             <UserMessageBubble
               v-if="item.role === 'user'"
