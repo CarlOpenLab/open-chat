@@ -1,0 +1,49 @@
+<doc>
+  <h1 id="7y_qos9J">Claude 问答卡片 + ACP 审批卡片</h1>
+  <p id="vAL-dyQs">回答方式：改掉你认为不对的建议，或直接在段落上评论；没动的我按“同意”处理。这一轮看完，在终端里说一声“这轮完了”。</p>
+  <h2 id="vwbpuRkb">我目前理解的</h2>
+  <p id="7n_a0X6p">open-chat 通过网关启动 Claude Code CLI，中间隔着一层 ACP 桥接。桥接把 CLI 的事件转成 ACP 事件，网关再把事件以 SSE 推给浏览器。现在这条链上有两个断点，对应你看到的两种“没有卡片”。</p>
+  <p id="zMlWMzbK"><b>问答：</b>当前用的是已废弃的 <code>@zed-industries/claude-code-acp@0.16.2</code>，它把 Claude 的 <code>AskUserQuestion</code> 工具写死禁用了。所以 Claude 只能把问题写成普通文本 —— 你会话里 11:41 那条 A/B 问题就是这种退路。维护中的 <code>@agentclientprotocol/claude-agent-acp@0.106.0</code> 已经支持把 <code>AskUserQuestion</code> 映射成 ACP form elicitation，但它要求客户端声明并处理 <code>clientCapabilities.elicitation.form</code>；acp-hub core 里 elicitation 仍是 roadmap，网关也没声明。要拿到卡片，需要把这三段接起来。</p>
+  <p id="GQx-11tE"><b>权限：</b>网关其实会发 <code>chat_permission</code>，但 ACP 会话的前端处理会在 <code>onUpdate</code> 里提前 return，副路径又把事件交给一个没挂 <code>onPermissionRequest</code> 的全局 provider，所以 <code>pendingPermissions</code> 永远是空的，黄色审批卡不会渲染。这是本仓库内可独立修掉的 bug。</p>
+  <p id="0tG687Js"><b>另外：</b>你的 <code>~/.claude/settings.json</code> 里 <code>permissions.defaultMode</code> 是 <code>bypassPermissions</code>。我用“有监督”模式实测跑了一条 Bash，命令直接执行，没有任何 <code>chat_permission</code>。也就是说当前“有监督”对 Claude 实际是假的。测试用的临时会话我已经删除，没有动你正在跑的会话。</p>
+  <mermaid id="B-cK8f1v">sequenceDiagram
+  participant C as Claude CLI
+  participant B as ACP 桥接
+  participant G as open-chat 网关
+  participant U as 浏览器
+  C-&gt;&gt;B: AskUserQuestion（0.106 才支持）
+  B-&gt;&gt;G: elicitation/create（需要客户端声明 capability）
+  G--&gt;&gt;U: SSE chat_question（待实现）
+  U--&gt;&gt;G: 提交答案
+  G-&gt;&gt;B: elicitation 响应
+  B-&gt;&gt;C: 把答案作为工具结果返回</mermaid>
+  <h2 id="rlCa-7aM">已定</h2>
+  <ul id="d1mKkhHN">
+    <li>两项都做：先修 ACP 审批卡片接线，再做 Claude 问答卡片。<b>你的决定</b></li>
+    <li>临时测试会话已从网关删除；没有改动你在跑的会话。<b>我的处理</b></li>
+    <li>ACP 权限卡不出现的前端断点：<code>WorkspacePage.vue:1451</code> 提前 return，<code>WorkspacePage.vue:983</code> 走全局 provider。这是确定的 bug。<b>我的调查</b></li>
+    <li>旧桥接写死禁用 <code>AskUserQuestion</code>；维护中的桥接支持 elicitation/form；acp-hub core 尚未接 elicitation。<b>我的调查</b></li>
+    <li>你全局 Claude 配置是 <code>bypassPermissions</code>，所以“有监督”目前不会产生权限请求。<b>我的调查</b></li>
+  </ul>
+  <h2 id="VDyD0evH">第 1 轮</h2>
+  <h3 id="MBDw3gpZ">1. 分叉：Claude 桥接怎么换？</h3>
+  <p id="wmOTH8Su">这个答案决定后面还有哪些问题。</p>
+  <p id="4xpMGV8c"><b>建议 A：</b>切到维护中的 <code>@agentclientprotocol/claude-agent-acp</code>，锁版本，并用 <code>CLAUDE_AGENT_ACP_PROTOCOL=v1</code> 保持与现有 acp-hub 协议兼容；先做一个兼容性 spike 再正式改。</p>
+  <p id="nyYs1A5N">理由：旧包已废弃且没有上游修复；本地 patch 依赖 npx 缓存位置，升级或换机器就会漂。B（本地 patch 旧包）也能短期出卡片，但后面每一层都要自己维护。C（只修权限卡）就无法实现问答卡片。</p>
+  <h3 id="Egaf3fFl">2. 问答卡片出现在哪里？</h3>
+  <p id="u3WFhecG"><b>建议 A：</b>内嵌在对话流里，跟在 Agent 的问题/工具活动位置，像 Claude Code 的问答卡。</p>
+  <p id="0vIb7G3Y">理由：你正在读对话上下文，卡片跟着问题走最不容易错过。B（输入框上方，复用现有黄色权限面板）实现最快，但消息一滚就走；C（内嵌主卡 + 输入框上方提醒）更稳，但第一版会多一套状态同步。</p>
+  <h3 id="21HuLePs">3. 问题表单支持到哪一步？</h3>
+  <p id="XQqWL_TC"><b>建议 A：</b>完整支持单选、多选、每题“其他”自由输入、多题一次提交、取消。</p>
+  <p id="96VDXFB6">理由：新桥接给出的 schema 本来就包含这些，只做单选会让卡片和实际能力不符。B（单选 + 自由输入）能覆盖大多数场景，但多选题会被压扁。C（只做单选选项）最省事，但用户想补一句“都不是”时没有入口。</p>
+  <h3 id="LmLOOhbR">4. acp-hub 子模块的改动归谁？</h3>
+  <p id="Imz3gxis"><b>建议 A：</b>直接在 <code>vendor/acp-hub</code> 里实现 elicitation 支持，提交到 acp-hub 仓库，再更新 open-chat 的子模块指针。</p>
+  <p id="mTs5q7bg">理由：elicitation 是 ACP 客户端能力，属于 acp-hub core 的职责，放在 open-chat 里包装会让两边长期分叉。选 A 需要你确认这个子模块仓库你有提交/推送权限，以及这次愿意一起改。B 是在 open-chat 里做本地 patch；C 是等上游，问答卡片会一直缺席。</p>
+  <h3 id="5NBw699k">5. “有监督”要真正生效吗？</h3>
+  <p id="Xf8L0_fM"><b>建议 A：</b>要。网关按 UI 的选择同步 ACP 会话模式（supervised → <code>default</code>，auto → <code>acceptEdits</code>，full → <code>bypassPermissions</code>），让工具执行前真的询问，而不是被 <code>~/.claude/settings.json</code> 的 bypass 静默吞掉。</p>
+  <p id="SwBY11Lh">理由：现在的选择器是“假”的，用户以为在监督，实际全放行。B 只修卡片接线，CLI 层维持现状，你当前的全局 bypass 会继续生效。C 以 UI 为准但保留“继承 CLI 设置”开关，灵活但多一个概念。选 A 我会先做一次 CLI 模式 spike，确认 <code>setMode</code> 能压过全局设置。</p>
+  <h3 id="zAl662zY">6. 未回答问题的生命周期？</h3>
+  <p id="4t5oqr_i"><b>建议 A：</b>跟回合走：刷新页面、多标签重连后仍能恢复；回答、取消或停止回合才消失。</p>
+  <p id="4yLlFx-0">理由：问答往往需要想一会儿，刷新丢问题会让 Agent 永久卡住。B（只在当前页面内存）实现最简单，但刷新即丢。C（5 分钟超时）会复用现有权限超时，对问答偏短，且超时后 Agent 收到的是拒绝而非“还没想好”。</p>
+</doc>
+
