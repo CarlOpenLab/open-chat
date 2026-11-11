@@ -16,6 +16,12 @@ import {
   formatQuestionnaireAnswer,
   type QuestionCardState,
 } from "../composables/workspace/agentQuestions";
+import { createAcpControlEventRouter } from "../composables/workspace/acpControlEvents";
+import {
+  elicitationAnswerFromSubmission,
+  questionnaireFromElicitation,
+  type ElicitationQuestionPayload,
+} from "../composables/workspace/elicitationQuestions";
 import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import type { UploadedAttachment, WebSearchSourceItem } from "../services/ai";
 import { API_BASE_URL, GATEWAY_API_KEY } from "../services/http";
@@ -210,6 +216,7 @@ const {
   clearRun,
   restoreActiveRun,
   dropRestoredRun,
+  settleAcpRunState,
   isConversationRunning,
   isCurrentConversationRunning,
   conversationBusyStates,
@@ -706,8 +713,11 @@ const createSessionProvider = (convKey: string, _agentId: string) => {
     pendingPermissions.set(convKey, request);
   };
   // Agent 结构化提问：与权限审批互不干扰，走 QuestionCard 自己的状态机。
+  // ACP 走控制事件分流（见 startAcpLiveStream）；这里保留给普通 provider 帧。
   p.onQuestionRequest = (payload) => {
-    questionCards.set(convKey, createQuestionCard(payload));
+    const existing = questionCards.get(convKey);
+    if (existing?.payload.id === payload.id && existing.status === "pending") return;
+    questionCards.set(convKey, createQuestionCard(payload, "agent"));
   };
   p.onChatError = (message: string) => {
     const run = activeSessionRuns.get(convKey);
@@ -952,8 +962,15 @@ const finalizeAcpStreamMessages = () => {
 };
 
 /** 复用 OpenChatProvider.transformMessage 累积当前回合输出，与常规请求同一渲染管线。 */
-const handleAcpStreamEvent = (event: string | null, data: string) => {
+const handleAcpStreamEvent = (
+  event: string | null,
+  data: string,
+  routeControlEvent: (event: string | null, data: string) => boolean,
+) => {
   if (data === "[DONE]") return;
+  // chat_permission 等控制事件必须先分流：交给 transformMessage 只会生成空气泡，
+  // pendingPermissions 永远是空的，审批卡也就不可能出现。
+  if (routeControlEvent(event, data)) return;
   if (event === "snapshot") {
     try {
       const parsed = JSON.parse(data) as { messages?: unknown };
@@ -1040,11 +1057,17 @@ const startAcpLiveStream = () => {
   if (acpStreamController.value && acpStreamConversationKey === streamKey) return;
   stopAcpLiveStream();
   acpStreamConversationKey = streamKey;
+  // 权限 / 提问等控制事件按本条流所属会话归档，切会话后旧流残留的事件不会串到新会话。
+  const routeControlEvent = createAcpControlEventRouter({
+    onPermission: (request) => pendingPermissions.set(conversationId, request),
+    onQuestion: (payload) => upsertAgentQuestion(conversationId, payload),
+    onQuestionResolved: (id) => resolveAgentQuestion(conversationId, id),
+  });
   const controller = subscribeAcpSessionStream(
     activeAgentId.value,
     streamConversationId,
     conversation.projectPath ?? projectPath.value,
-    handleAcpStreamEvent,
+    (event, data) => handleAcpStreamEvent(event, data, routeControlEvent),
     (outcome) => {
       if (acpStreamController.value !== controller) return;
       acpStreamController.value = null;
@@ -1285,20 +1308,111 @@ const handlePermissionResponse = async (response: "once" | "always" | "reject"):
 
 // ============ Agent 提问卡（x-pro Questionnaire） ============
 
+/** 把结构化答案 / 跳过 / 取消回传给网关里的 elicitation 请求。 */
+const postQuestionReply = async (
+  questionId: string,
+  action: "accept" | "decline" | "cancel",
+  content?: Record<string, string | string[]>,
+): Promise<void> => {
+  const res = await fetch(`${API_BASE_URL}/api/chat/question`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(GATEWAY_API_KEY ? { Authorization: `Bearer ${GATEWAY_API_KEY}` } : {}),
+    },
+    body: JSON.stringify({ questionId, action, ...(content ? { content } : {}) }),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+    throw new Error(data.error?.message || `提问回复失败（HTTP ${res.status}）`);
+  }
+};
+
+/** 服务端 elicitation → 卡片；同一条流重复到达时保留用户已填的答案。 */
+const upsertAgentQuestion = (convKey: string, event: ElicitationQuestionPayload) => {
+  const payload = questionnaireFromElicitation(event);
+  if (!payload) {
+    // 目前没有 url elicitation 的界面：立刻取消，避免 Agent 永远等待。
+    void postQuestionReply(event.id, "cancel").catch((err) => {
+      console.error("取消无法渲染的 elicitation 失败:", err);
+    });
+    return;
+  }
+  const existing = questionCards.get(convKey);
+  if (
+    existing?.source === "agent" &&
+    existing.payload.id === payload.id &&
+    existing.status === "pending"
+  ) {
+    return;
+  }
+  questionCards.set(convKey, createQuestionCard(payload, "agent"));
+};
+
+/** 其他标签页作答 / 回合结束时撤卡；本标签页刚提交的回执保留原地。 */
+const resolveAgentQuestion = (convKey: string, id: string) => {
+  const card = questionCards.get(convKey);
+  if (!card || card.source !== "agent" || card.payload.id !== id) return;
+  if (card.status === "submitting" || card.status === "submitted") return;
+  questionCards.delete(convKey);
+};
+
+/** 跳过 / 取消服务端提问；失败时保留卡片与错误信息。 */
+const settleAgentQuestion = async (card: QuestionCardState, action: "decline" | "cancel") => {
+  if (card.status === "submitting" || card.status === "submitted") return;
+  card.status = "submitting";
+  card.error = "";
+  try {
+    await postQuestionReply(card.payload.id, action);
+    card.status = "submitted";
+    card.result = action === "decline" ? "已跳过本次提问。" : "已取消本次提问。";
+  } catch (err) {
+    card.status = "error";
+    card.error = err instanceof Error ? err.message : "提问回复失败，请重试。";
+  }
+};
+
 /** 空状态入口：开一张前端自带的澄清问卷，不依赖服务端事件。 */
 const startClarifyQuestionnaire = () => {
   const key = questionCardKey();
   if (questionCards.has(key)) return;
   clarifyRevision += 1;
-  questionCards.set(key, createQuestionCard(createClarifyQuestionnaire(clarifyRevision)));
+  questionCards.set(
+    key,
+    createQuestionCard(createClarifyQuestionnaire(clarifyRevision), "clarify"),
+  );
 };
 
-/** 结构化答案 → 一条自然语言需求，复用现有发送链路；失败保留答案与幂等键。 */
-const respondQuestion = (submission: QuestionnaireSubmission) => {
+/**
+ * 提交问答卡：
+ * - agent 卡把结构化答案回传给 elicitation（不新起一轮对话）；
+ * - 欢迎页的 clarify 卡仍整理成一条自然语言需求走发送链路。
+ */
+const respondQuestion = async (submission: QuestionnaireSubmission) => {
   const originKey = questionCardKey();
   const card = questionCards.get(originKey);
   if (!card || card.status === "submitting" || card.status === "submitted") return;
   card.lastSubmission = submission;
+  card.error = "";
+
+  if (card.source === "agent") {
+    const answer = elicitationAnswerFromSubmission(submission, card.payload);
+    card.status = "submitting";
+    try {
+      await postQuestionReply(
+        card.payload.id,
+        answer.action,
+        answer.action === "accept" ? answer.content : undefined,
+      );
+      card.status = "submitted";
+      card.result = answer.action === "accept" ? "已回答，Agent 继续执行。" : "已跳过本次提问。";
+    } catch (err) {
+      card.status = "error";
+      card.error = err instanceof Error ? err.message : "提交失败，答案已保留，可重试。";
+    }
+    return;
+  }
+
   if (inputUnavailable.value || !activeAgent.value.available) {
     card.status = "error";
     card.error = "会话尚未就绪，答案已保留，请稍后重试。";
@@ -1323,23 +1437,37 @@ const respondQuestion = (submission: QuestionnaireSubmission) => {
   }
 };
 
-const handleQuestionSubmit = (submission: QuestionnaireSubmission) => respondQuestion(submission);
+const handleQuestionSubmit = (submission: QuestionnaireSubmission) => {
+  void respondQuestion(submission);
+};
 
 /** 重试复用同一 submissionId，避免把同一份答案发两遍。 */
 const handleQuestionRetry = () => {
   const card = questionCards.get(questionCardKey());
-  if (card?.lastSubmission && card.status === "error") respondQuestion(card.lastSubmission);
+  if (card?.lastSubmission && card.status === "error") void respondQuestion(card.lastSubmission);
 };
 
 const handleQuestionSkip = () => {
   const card = questionCards.get(questionCardKey());
   if (!card) return;
+  if (card.source === "agent") {
+    void settleAgentQuestion(card, "decline");
+    return;
+  }
   card.status = "cancelled";
   card.result = "已跳过提问，可以直接在输入框里描述需求。";
 };
 
 const handleQuestionDismiss = () => {
-  questionCards.delete(questionCardKey());
+  const key = questionCardKey();
+  const card = questionCards.get(key);
+  if (card?.source === "agent" && (card.status === "pending" || card.status === "error")) {
+    void settleAgentQuestion(card, "cancel").finally(() => {
+      if (card.status === "submitted") questionCards.delete(key);
+    });
+    return;
+  }
+  questionCards.delete(key);
 };
 
 const handleChange = (value: string) => {
@@ -1410,7 +1538,15 @@ const finalizeSessionRun = (convKey: string, outcome: "success" | "error" | "abo
 
   attachPendingSearchSources(convKey);
   pendingPermissions.delete(convKey);
+  // 回合结束仍未回答的 agent 提问随回合消失；已提交的回执保留在对话流里。
+  const questionCard = questionCards.get(convKey);
+  if (questionCard?.source === "agent" && questionCard.status !== "submitted") {
+    questionCards.delete(convKey);
+  }
   optimisticMessages.delete(convKey);
+  // 发起回合的 XRequest 收尾会先停掉副路径流；副路径流的 onEnd 因此不再清理
+  // 「工作中」标记。这里补上，否则回合结束后指示器会一直挂到刷新页面。
+  settleAcpRunState(convKey);
   clearRun(convKey);
 
   if (outcome === "success" && !manuallyStopped) {
@@ -1523,11 +1659,20 @@ const runSessionRequest = (
     acpRunState.value = { state: "running" };
   }
 
+  const routeRunControlEvent = createAcpControlEventRouter({
+    onPermission: (request) => pendingPermissions.set(convKey, request),
+    onQuestion: (payload) => upsertAgentQuestion(convKey, payload),
+    onQuestionResolved: (id) => resolveAgentQuestion(convKey, id),
+  });
   sessionProvider.request.options.callbacks = {
     onUpdate: (chunk: XModelResponse, responseHeaders: Headers) => {
-      // ACP agent 的副路径流是主流式机制，跳过此处避免双重处理。
-      // XRequest 可能无法正确解析 native_event 帧（非标准 OpenAI 格式）。
-      if (isAcpAgent.value && usesAcpProtocol.value) return;
+      // ACP agent 的副路径流是主流式机制，跳过正文处理；但控制事件也可能只在
+      // 这条发起请求的 SSE 上到达（会话总线尚未订阅时），必须先分流。
+      if (isAcpAgent.value && usesAcpProtocol.value) {
+        const frame = chunk as { event?: string; data?: unknown };
+        routeRunControlEvent(frame.event ?? null, typeof frame.data === "string" ? frame.data : "");
+        return;
+      }
       const currentConv = conversationList.value.find((item) => String(item.key) === convKey);
       if (!currentConv || !currentConv.messages) return;
 

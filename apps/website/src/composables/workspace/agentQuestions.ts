@@ -24,6 +24,8 @@ export interface QuestionCardState {
   error: string;
   /** 最近一次提交，供失败重试复用同一个 submissionId（幂等）。 */
   lastSubmission: QuestionnaireSubmission | null;
+  /** agent：由服务端 elicitation 驱动；clarify：欢迎页自带的需求澄清问卷。 */
+  source: "agent" | "clarify";
 }
 
 /** 运行时校验：SSE 事件带来的 payload 可能不完整；空题目列表也不渲染。 */
@@ -34,8 +36,11 @@ export function isQuestionPayload(value: unknown): value is QuestionnairePayload
   );
 }
 
-export function createQuestionCard(payload: QuestionnairePayload): QuestionCardState {
-  return { payload, status: "pending", result: "", error: "", lastSubmission: null };
+export function createQuestionCard(
+  payload: QuestionnairePayload,
+  source: "agent" | "clarify" = "agent",
+): QuestionCardState {
+  return { payload, status: "pending", result: "", error: "", lastSubmission: null, source };
 }
 
 const CLARIFY_QUESTIONS: QuestionnaireQuestion[] = [

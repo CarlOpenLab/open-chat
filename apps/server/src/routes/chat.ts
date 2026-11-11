@@ -1,10 +1,12 @@
 /**
  * 聊天 REST：`/api/chat/completions`（本地 agent / 本地 opencode / OpenAI 兼容转发）、
- * `/api/chat/permission`（权限审批回复）与 `/api/models`（模型发现）。
+ * `/api/chat/permission`（权限审批回复）、`/api/chat/question`（结构化提问回复）
+ * 与 `/api/models`（模型发现）。
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Router, type Response } from "express";
+import type { ElicitationContentValue } from "@agentclientprotocol/sdk";
 import type { AcpPermissionMode } from "../acpManager";
 import type { AgentManager } from "../agentManager";
 import { ATTACHMENT_SCHEME, attachmentContentType, type AttachmentStore } from "../attachments";
@@ -151,6 +153,40 @@ export function createChatRouter(deps: ChatRouteDeps): Router {
       if (err instanceof GatewayError) throw err;
       console.error("Permission reply error:", err);
       throw GatewayError.upstream(err instanceof Error ? err.message : "权限回复失败");
+    }
+  });
+
+  // 回复 Agent 的结构化提问（accept / decline / cancel）。
+  router.post("/question", async (req, res) => {
+    const body = req.body as {
+      questionId?: unknown;
+      action?: unknown;
+      content?: unknown;
+    };
+    const questionId = typeof body.questionId === "string" ? body.questionId.trim() : "";
+    const action = body.action;
+    if (!questionId) throw GatewayError.invalidRequest("questionId 是必填项");
+    if (action !== "accept" && action !== "decline" && action !== "cancel") {
+      throw GatewayError.invalidRequest("action 必须是 accept / decline / cancel");
+    }
+    let content: Record<string, ElicitationContentValue> | undefined;
+    if (action === "accept" && body.content !== undefined) {
+      if (
+        typeof body.content !== "object" ||
+        body.content === null ||
+        Array.isArray(body.content)
+      ) {
+        throw GatewayError.invalidRequest("content 必须是对象");
+      }
+      content = body.content as Record<string, ElicitationContentValue>;
+    }
+    try {
+      await agentManager.respondQuestion(questionId, action, content);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err instanceof GatewayError) throw err;
+      console.error("Question reply error:", err);
+      throw GatewayError.upstream(err instanceof Error ? err.message : "提问回复失败");
     }
   });
 

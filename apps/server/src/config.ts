@@ -25,6 +25,8 @@ export interface AcpAgentConfig {
   enabled: boolean;
   command: string;
   args: string[];
+  /** 追加给桥接进程的环境变量（会覆盖同名继承值）。 */
+  env?: Record<string, string>;
   /** 原始 CLI，用于区分"CLI 已安装"和"ACP 适配器可用"。 */
   cliCommand: string;
   cwd: string;
@@ -91,7 +93,9 @@ const DEFAULT_LOCAL: LocalConfig = {
  * 适配器走 Agent Client Protocol：内置 CLI 由各自的 ACP 桥接包启动
  * （首次运行经 npx 自动获取，需本机已安装并登录对应的 CLI）：
  * - codex   → npx -y acp-extension-codex（内部 spawn codex app-server）
- * - claude  → npx -y @zed-industries/claude-code-acp（需 Claude Code CLI）
+ * - claude  → npx -y @agentclientprotocol/claude-agent-acp@0.106.0（需 Claude Code CLI）
+ *   `@zed-industries/claude-code-acp` 已废弃且写死禁用 AskUserQuestion；新桥接
+ *   支持 elicitation，并用 CLAUDE_AGENT_ACP_PROTOCOL=v1 与现有 acp-hub 保持协议一致。
  * - pi / omp → npx @mariozechner/pi --mode acp / oh-my-pi --mode acp
  * - opencode 保持原生本地 HTTP 服务（localProvider），不经 ACP。
  * `cliCommand` 仍指向原始 CLI，用于"CLI 已安装"检测；`command` 是 ACP 桥接启动命令。
@@ -125,10 +129,11 @@ const DEFAULT_ACP_AGENTS: AcpAgentConfig[] = [
   {
     id: "claude",
     name: "Claude Code",
-    description: "Claude Code CLI via ACP (claude-code-acp)",
+    description: "Claude Code CLI via ACP (claude-agent-acp)",
     enabled: true,
     command: "npx",
-    args: ["-y", "@zed-industries/claude-code-acp"],
+    args: ["-y", "@agentclientprotocol/claude-agent-acp@0.106.0"],
+    env: { CLAUDE_AGENT_ACP_PROTOCOL: "v1" },
     cliCommand: "claude",
     cwd: "",
     adapterHint: "请先安装并登录 Claude Code CLI",

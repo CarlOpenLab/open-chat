@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import type { ElicitationContentValue } from "@agentclientprotocol/sdk";
 import type { AcpConfig } from "./config";
 import type { LocalChatManager } from "./localProvider";
 import {
@@ -195,6 +196,15 @@ export class AgentManager {
   ): Promise<void> {
     if (this.acp.hasAgent(agentId)) return this.acp.replyPermission(permissionId, response);
     throw GatewayError.invalidRequest(`未知的本地 Agent：${agentId}`);
+  }
+
+  /** 回复结构化提问（目前只由 ACP elicitation 产生）。 */
+  respondQuestion(
+    questionId: string,
+    action: "accept" | "decline" | "cancel",
+    content?: Record<string, ElicitationContentValue>,
+  ): Promise<void> {
+    return this.acp.respondQuestion(questionId, action, content);
   }
 
   /** 订阅由网关启动的会话事件流（SSE）；本地 CLI 不通过文件轮询伪造实时事件。 */

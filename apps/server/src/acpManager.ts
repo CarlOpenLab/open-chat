@@ -3,9 +3,11 @@ import type {
   AgentCapabilities,
   AgentSession,
   AcpAgentAdapter,
+  ElicitationResponse,
   SessionEvent,
   ToolCall,
 } from "@cc-heart/acp-hub-core";
+import type { ElicitationContentValue } from "@agentclientprotocol/sdk";
 import { createAcpAgentAdapter } from "@cc-heart/acp-hub-core";
 import { createClaudeAdapter } from "@cc-heart/acp-hub-adapter-claude";
 import { createCodexAdapter } from "@cc-heart/acp-hub-adapter-codex";
@@ -13,6 +15,7 @@ import { createOhMyPiAdapter, createPiAdapter } from "@cc-heart/acp-hub-adapter-
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import type { AcpAgentConfig, AcpConfig } from "./config";
+import { permissionModeToAcpMode, toChatQuestionPayload } from "./acpSessionPolicy";
 import { cliProcessEnv, resolveExecutable } from "./commandEnv";
 import { GatewayError } from "./error";
 import { collectHubEvent, normalizeHubActivity, normalizeHubPlan } from "./transcript/adapters/hub";
@@ -98,6 +101,17 @@ interface PendingPermission {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * 未回答的结构化提问。不设独立超时：随回合结束 / 取消 / 用户作答而释放。
+ */
+interface PendingQuestion {
+  id: string;
+  agentId: string;
+  sessionId: string;
+  acpSession: AgentSession;
+  requestId: string;
+}
+
 /** 会话事件流缓冲条目（SSE 帧的序列化形态）。 */
 interface AcpBusEvent {
   /** SSE 事件名；null 表示普通 `data:` 帧。 */
@@ -124,6 +138,7 @@ export class AcpManager {
   private readonly sessionsByAcpId = new Map<string, AcpSessionEntry>();
   private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
+  private readonly pendingQuestions = new Map<string, PendingQuestion>();
   private readonly historyCollectors = new Map<string, TranscriptHistoryCollector>();
   private readonly busBuffers = new Map<string, AcpBusEvent[]>();
   private readonly busSubscribers = new Map<string, Set<ServerResponse>>();
@@ -259,6 +274,18 @@ export class AcpManager {
     this.activeRuns.set(session.sessionId, run);
     session.lastUsed = Date.now();
 
+    // UI 的权限档位要真正下发到 ACP 会话：Claude 桥接的初始模式来自
+    // ~/.claude/settings.json（可能是 bypassPermissions），只靠网关自动审批
+    // 会让“有监督”变成假选择器。仅在 agent 广告了目标模式时切换，其他
+    // transport 的模式 id 不同则保持原样。
+    const desiredMode = permissionModeToAcpMode(permissionMode);
+    const availableModes = session.acpSession.raw.modes?.availableModes?.map((item) => item.id);
+    if (session.acpSession.setMode && availableModes?.includes(desiredMode)) {
+      await session.acpSession.setMode(desiredMode).catch((error) => {
+        console.warn(`[acp:${agentId}] failed to switch session mode to ${desiredMode}:`, error);
+      });
+    }
+
     // 回合边界：清空事件缓冲（重放只覆盖当前回合），并把用户消息写入历史
     // （快照按 turnHistoryStart 截断，新订阅者以此重建会话视图）。
     this.busBuffers.delete(session.sessionId);
@@ -300,6 +327,7 @@ export class AcpManager {
       this.activeRuns.delete(session.sessionId);
       this.turnHistoryStart.delete(session.sessionId);
       this.cancelPermissionsForSession(session.sessionId);
+      this.cancelQuestionsForSession(session.sessionId, "turn-ended");
       this.endSessionStream(session.sessionId);
     }
   }
@@ -325,9 +353,51 @@ export class AcpManager {
     await pending.acpSession.respondPermission(pending.requestId, option.optionId);
   }
 
+  /**
+   * 回答一个未决的结构化提问。答案按 ACP elicitation 原样回传桥接，
+   * 由桥接折叠成 AskUserQuestion 的工具结果交给模型。
+   */
+  async respondQuestion(
+    questionId: string,
+    action: "accept" | "decline" | "cancel",
+    content?: Record<string, ElicitationContentValue>,
+  ): Promise<void> {
+    const pending = this.pendingQuestions.get(questionId);
+    if (!pending) {
+      throw GatewayError.invalidRequest("提问不存在、已处理或回合已结束");
+    }
+    this.pendingQuestions.delete(questionId);
+    const respond = pending.acpSession.respondElicitation?.bind(pending.acpSession);
+    if (!respond) {
+      throw GatewayError.invalidRequest("当前 Agent 不支持结构化提问");
+    }
+    const response: ElicitationResponse = {
+      action,
+      ...(action === "accept" && content ? { content } : {}),
+    };
+    try {
+      await respond(pending.requestId, response);
+    } catch (error) {
+      // 回合恰好结束时会与 cancelQuestionsForSession 竞态；对前端来说与“已处理”等价。
+      throw GatewayError.invalidRequest(
+        error instanceof Error ? error.message : "提问已失效，请重新发送消息",
+      );
+    }
+    this.publishToBus(pending.sessionId, "chat_question_resolved", {
+      id: questionId,
+      reason: action === "accept" ? "answered" : action,
+    });
+  }
+
   stop(): void {
     for (const pending of this.pendingPermissions.values()) clearTimeout(pending.timer);
     this.pendingPermissions.clear();
+    for (const pending of this.pendingQuestions.values()) {
+      void pending.acpSession
+        .cancelElicitation?.(pending.requestId, "gateway-stop")
+        .catch(() => {});
+    }
+    this.pendingQuestions.clear();
     this.historyCollectors.clear();
     this.activeRuns.clear();
     this.sessions.clear();
@@ -386,6 +456,7 @@ export class AcpManager {
     if (!run) return false;
     await session.acpSession.interrupt().catch(() => {});
     this.cancelPermissionsForSession(session.sessionId);
+    this.cancelQuestionsForSession(session.sessionId, "turn-cancelled");
     return true;
   }
 
@@ -410,6 +481,7 @@ export class AcpManager {
     const bridgeEnv: Record<string, string | undefined> = {
       PATH: cliProcessEnv(executable).PATH,
       ...(agent.transport === "claude" ? { CLAUDECODE: undefined } : {}),
+      ...agent.env,
     };
     // config.command/args 是桥接启动命令的唯一事实来源（见 config.ts 默认值），
     // 传给工厂即覆盖 acp-hub 的 npx 预设；留空时回落到工厂默认。
@@ -670,6 +742,11 @@ export class AcpManager {
           console.error(`[acp:${entry.agentId}] permission handling failed:`, error);
         });
         break;
+      case "elicitation_request":
+        this.handleQuestion(entry, event).catch((error) => {
+          console.error(`[acp:${entry.agentId}] question handling failed:`, error);
+        });
+        break;
       case "agent_error":
         console.error(`[acp:${entry.agentId}] agent error:`, event.message);
         break;
@@ -751,12 +828,55 @@ export class AcpManager {
     });
   }
 
+  private async handleQuestion(
+    entry: AcpSessionEntry,
+    event: Extract<SessionEvent, { type: "elicitation_request" }>,
+  ): Promise<void> {
+    const run = this.activeRuns.get(entry.sessionId);
+    if (!run) {
+      await entry.acpSession.cancelElicitation?.(event.requestId, "no-active-turn").catch(() => {});
+      return;
+    }
+    const id = randomUUID();
+    const payload = toChatQuestionPayload(event, {
+      id,
+      agentId: entry.agentId,
+      sessionId: entry.sessionId,
+    });
+    if (!payload) {
+      // 非 form 模式（如 MCP 的 url elicitation）目前没有前端载体：
+      // 立即取消，避免 Agent 永远挂起。
+      await entry.acpSession
+        .cancelElicitation?.(event.requestId, "unsupported-mode")
+        .catch(() => {});
+      return;
+    }
+    this.pendingQuestions.set(id, {
+      id,
+      agentId: entry.agentId,
+      sessionId: entry.sessionId,
+      acpSession: entry.acpSession,
+      requestId: event.requestId,
+    });
+    this.emitCustom(entry.sessionId, run.response, "chat_question", payload);
+  }
+
   private cancelPermissionsForSession(sessionId: string): void {
     for (const [id, pending] of this.pendingPermissions) {
       if (pending.sessionId !== sessionId) continue;
       clearTimeout(pending.timer);
       this.pendingPermissions.delete(id);
       void pending.acpSession.cancelPermission(pending.requestId).catch(() => {});
+    }
+  }
+
+  /** 回合结束 / 取消时释放该会话的全部未决提问，并通知所有订阅者撤卡。 */
+  private cancelQuestionsForSession(sessionId: string, reason: string): void {
+    for (const [id, pending] of this.pendingQuestions) {
+      if (pending.sessionId !== sessionId) continue;
+      this.pendingQuestions.delete(id);
+      void pending.acpSession.cancelElicitation?.(pending.requestId, reason).catch(() => {});
+      this.publishToBus(sessionId, "chat_question_resolved", { id, reason });
     }
   }
 

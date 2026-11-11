@@ -127,6 +127,20 @@ export function useActiveSessionRuns(deps: UseActiveSessionRunsDeps) {
     );
   };
 
+  /**
+   * @description 回合收尾时清除 ACP 运行标记。
+   *   发起回合的 XRequest 成功/失败会先取消副路径流，副路径流的 onEnd 看到
+   *   controller 已易主便直接返回，不再负责清标记；若这里不兜底，「工作中」
+   *   会一直挂到刷新页面。只处理当前会话：后台会话收尾不能抹掉前台会话的指示器。
+   * @param {string} conversationKey - 刚收尾的会话 key
+   * @returns {void}
+   */
+  const settleAcpRunState = (conversationKey: string): void => {
+    if (!usesAcpProtocol.value) return;
+    if (!conversationKey || conversationKey !== currentConversationKey.value) return;
+    acpRunState.value = null;
+  };
+
   const isCurrentConversationRunning = computed(() =>
     isConversationRunning(currentConversationKey.value),
   );
@@ -156,6 +170,7 @@ export function useActiveSessionRuns(deps: UseActiveSessionRunsDeps) {
     clearRun,
     restoreActiveRun,
     dropRestoredRun,
+    settleAcpRunState,
     isConversationRunning,
     isCurrentConversationRunning,
     conversationBusyStates,
