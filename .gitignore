@@ -7,3 +7,4 @@ internal/sidecar/dist/*
 !internal/sidecar/dist/.gitkeep
 *.log
 .DS_Store
+web/src/gen/
