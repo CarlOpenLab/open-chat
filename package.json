@@ -7,7 +7,7 @@
   "description": "A desktop workbench for the coding agents on your machine, over ACP.",
   "scripts": {
     "dev": "mygo dev",
-    "dev:web": "vite",
+    "dev:web": "pnpm build:sidecar && vite",
     "build": "mygo build",
     "build:web": "pnpm build:sidecar && vite build",
     "build:sidecar": "node scripts/build-sidecar.mjs",

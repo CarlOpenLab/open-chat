@@ -52,7 +52,8 @@ func demoEnabled() bool {
 }
 
 func main() {
-	if len(sidecar.Script()) == 0 {
+	// `mygo generate` runs the app to write the bindings; it needs no sidecar.
+	if len(sidecar.Script()) == 0 && os.Getenv("MYGO_GENERATE") == "" {
 		log.Fatal("sidecar 未构建：先运行 `pnpm build:sidecar`（`pnpm dev` 与 `pnpm build` 会先构建它）")
 	}
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
