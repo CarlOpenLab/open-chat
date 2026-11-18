@@ -1,0 +1,9 @@
+node_modules/
+build/
+.mygo/
+internal/webdist/dist/*
+!internal/webdist/dist/.gitkeep
+internal/sidecar/dist/*
+!internal/sidecar/dist/.gitkeep
+*.log
+.DS_Store

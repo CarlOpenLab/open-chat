@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>open-chat</title>
+    <link rel="icon" href="./favicon.svg" />
+    <script>
+      // Paint the right background before the bundle loads (no white flash in dark mode).
+      try {
+        var s = JSON.parse(localStorage.getItem("oc.theme") || '"system"');
+        var dark = s === "dark" || (s === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

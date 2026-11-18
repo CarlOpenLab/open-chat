@@ -1,0 +1,46 @@
+{
+  "name": "open-chat",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "A desktop workbench for the coding agents on your machine, over ACP.",
+  "scripts": {
+    "dev": "mygo dev",
+    "dev:web": "vite",
+    "build": "mygo build",
+    "build:web": "pnpm build:sidecar && vite build",
+    "build:sidecar": "node scripts/build-sidecar.mjs",
+    "serve": "pnpm build:web && go run . serve",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "test": "go test ./... && node --test sidecar/test/*.test.mjs"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.9.0",
+    "@antdv-next/icons": "^1.0.6",
+    "@antdv-next/x": "1.2.7",
+    "@antdv-next/x-markdown": "0.3.0",
+    "@cc-heart/acp-hub-adapter-claude": "0.0.1",
+    "@cc-heart/acp-hub-adapter-codex": "0.0.1",
+    "@cc-heart/acp-hub-adapter-pi": "0.0.1",
+    "@cc-heart/acp-hub-core": "0.0.1",
+    "antdv-next": "1.8.2",
+    "dayjs": "^1.11.19",
+    "mygo-runtime": "0.10.0",
+    "shiki": "^3.0.0",
+    "vue": "^3.5.31"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "esbuild": "^0.27.0",
+    "mygo-cli": "0.10.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.0",
+    "vue-tsc": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "packageManager": "pnpm@10.33.0"
+}

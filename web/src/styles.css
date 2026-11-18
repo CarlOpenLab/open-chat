@@ -1,0 +1,366 @@
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI",
+    "Microsoft YaHei", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
+  --titlebar: var(--mygo-titlebar-height, 52px);
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --radius: 10px;
+  --content-width: 780px;
+}
+
+:root[data-theme="light"] {
+  --bg: #fbfbfa;
+  --bg-sidebar: #f3f3f1;
+  --surface: #ffffff;
+  --surface-2: #f6f6f4;
+  --hover: rgba(15, 15, 20, 0.045);
+  --active: rgba(15, 15, 20, 0.075);
+  --border: rgba(15, 15, 20, 0.08);
+  --border-strong: rgba(15, 15, 20, 0.14);
+  --text: #1d1d1f;
+  --text-2: #5f5f66;
+  --text-3: #8e8e94;
+  --accent: #5b5bd6;
+  --accent-soft: rgba(91, 91, 214, 0.1);
+  --accent-text: #4747c2;
+  --ok: #1f9d63;
+  --warn: #c98219;
+  --warn-soft: rgba(201, 130, 25, 0.1);
+  --err: #d9473f;
+  --err-soft: rgba(217, 71, 63, 0.08);
+  --user-bubble: #efeff2;
+  --code-bg: #f6f6f8;
+  --diff-add: rgba(31, 157, 99, 0.1);
+  --diff-add-text: #17794c;
+  --diff-del: rgba(217, 71, 63, 0.09);
+  --diff-del-text: #b2342d;
+  --shadow-composer: 0 1px 2px rgba(20, 20, 40, 0.04), 0 8px 28px rgba(20, 20, 40, 0.07);
+  --shadow-pop: 0 12px 32px rgba(20, 20, 40, 0.12), 0 2px 6px rgba(20, 20, 40, 0.05);
+}
+
+:root[data-theme="dark"] {
+  --bg: #161617;
+  --bg-sidebar: #111112;
+  --surface: #1d1d1f;
+  --surface-2: #222225;
+  --hover: rgba(255, 255, 255, 0.05);
+  --active: rgba(255, 255, 255, 0.085);
+  --border: rgba(255, 255, 255, 0.075);
+  --border-strong: rgba(255, 255, 255, 0.13);
+  --text: #ececee;
+  --text-2: #a1a1a6;
+  --text-3: #6f6f75;
+  --accent: #8b8cff;
+  --accent-soft: rgba(139, 140, 255, 0.14);
+  --accent-text: #a5a6ff;
+  --ok: #3fb27f;
+  --warn: #e0a34a;
+  --warn-soft: rgba(224, 163, 74, 0.12);
+  --err: #ef6b6b;
+  --err-soft: rgba(239, 107, 107, 0.1);
+  --user-bubble: #2a2a2e;
+  --code-bg: #1a1a1c;
+  --diff-add: rgba(63, 178, 127, 0.14);
+  --diff-add-text: #5fd39e;
+  --diff-del: rgba(239, 107, 107, 0.13);
+  --diff-del-text: #ff8a85;
+  --shadow-composer: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 10px 30px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 10px 32px rgba(0, 0, 0, 0.5);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+/* ConfigProvider/App wrappers must not break the column of the shell. */
+#app > *,
+.ant-app {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Text the user may want to copy. */
+.selectable,
+.selectable * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+button {
+  font: inherit;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+.drag {
+  --app-region: drag;
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  --app-region: no-drag;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+/* Thin, quiet scrollbars. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+kbd,
+.kbd {
+  font-family: var(--font);
+  font-size: 11px;
+  line-height: 16px;
+  min-width: 18px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-3);
+  background: var(--hover);
+  border: 1px solid var(--border);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.muted {
+  color: var(--text-2);
+}
+
+.faint {
+  color: var(--text-3);
+}
+
+/* A breathing dot for "working". */
+@keyframes oc-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes oc-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer-text {
+  background: linear-gradient(90deg, var(--text-3) 0%, var(--text-3) 35%, var(--text) 50%, var(--text-3) 65%, var(--text-3) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: oc-shimmer 2.2s linear infinite;
+}
+
+@keyframes oc-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise {
+  animation: oc-rise 0.32s var(--ease) both;
+}
+
+/* ---------------------------------------------------------------- markdown */
+
+.oc-md {
+  font-size: 14.5px;
+  line-height: 1.72;
+  color: var(--text);
+  word-break: break-word;
+}
+.oc-md > *:first-child {
+  margin-top: 0 !important;
+}
+.oc-md > *:last-child {
+  margin-bottom: 0 !important;
+}
+.oc-md p {
+  margin: 0 0 0.75em;
+}
+.oc-md h1,
+.oc-md h2,
+.oc-md h3,
+.oc-md h4 {
+  font-weight: 620;
+  line-height: 1.35;
+  margin: 1.3em 0 0.55em;
+  letter-spacing: -0.01em;
+}
+.oc-md h1 {
+  font-size: 1.45em;
+}
+.oc-md h2 {
+  font-size: 1.22em;
+}
+.oc-md h3 {
+  font-size: 1.07em;
+}
+.oc-md ul,
+.oc-md ol {
+  padding-left: 1.4em;
+  margin: 0 0 0.8em;
+}
+.oc-md li {
+  margin: 0.22em 0;
+}
+.oc-md li::marker {
+  color: var(--text-3);
+}
+.oc-md a {
+  color: var(--accent-text);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.oc-md a:hover {
+  border-bottom-color: var(--accent);
+}
+.oc-md blockquote {
+  margin: 0 0 0.8em;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-2);
+}
+.oc-md :not(pre) > code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  padding: 0.12em 0.4em;
+  border-radius: 5px;
+  background: var(--hover);
+  border: 1px solid var(--border);
+}
+.oc-md table {
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 0.4em 0 1em;
+  font-size: 13.5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  width: fit-content;
+}
+.oc-md th,
+.oc-md td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.oc-md tr:last-child td {
+  border-bottom: none;
+}
+.oc-md th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+.oc-md hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.4em 0;
+}
+.oc-md img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+.oc-md pre.oc-plain-code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow: auto;
+}
+/* The highlighter brings its own frame; the <pre> the markdown puts around
+   it must not add a second one. */
+.oc-md pre:has(> [class*="code-highlighter"]) {
+  margin: 0.3em 0 1em;
+  padding: 0;
+  background: none;
+  border: none;
+  overflow: visible;
+}
+.oc-md [class*="code-highlighter"] {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--code-bg);
+}
+.oc-md [class*="code-highlighter-header"] {
+  background: var(--surface-2);
+  font-size: 11.5px;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border);
+  padding: 5px 12px;
+}
+.oc-md [class*="code-highlighter-content"] {
+  background: transparent;
+  font-size: 12.5px;
+  max-height: 460px;
+}
+.oc-md [class*="code-highlighter-content"] pre,
+.oc-md [class*="code-highlighter-content"] code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
