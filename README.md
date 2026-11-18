@@ -2,6 +2,10 @@
 
 把本机的 coding agent 收进同一个窗口：一个用 Go（mygo）+ Vue + antdv-next 写的桌面工作台，agent 全部通过 [ACP](https://agentclientprotocol.com) 驱动，适配层用 [acp-hub](https://github.com/CarlOpenLab/acp-hub)。
 
+![对话](docs/screenshots/chat-light.png)
+
+![新对话](docs/screenshots/desktop-new-chat.jpg)
+
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  Go 宿主（mygo）                                          │
