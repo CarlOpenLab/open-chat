@@ -391,6 +391,12 @@ defineExpose({ addFiles });
 }
 .sel {
   font-size: 12px;
+  max-width: 172px;
+}
+.sel :deep(.ant-select-selection-item) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sel :deep(.ant-select-selector) {
   padding: 0 6px !important;
