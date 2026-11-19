@@ -7,6 +7,7 @@ export default defineConfig({
   version: "0.0.1",
   copyright: "© 2026 CarlOpenLab",
   license: "MIT",
+  icon: "resources/icon.png",
 
   devUrl: "http://127.0.0.1:5173",
   devCommand: "pnpm dev:web",
