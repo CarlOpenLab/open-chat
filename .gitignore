@@ -8,3 +8,5 @@ internal/sidecar/dist/*
 *.log
 .DS_Store
 web/src/gen/
+.claude/
+apps/
