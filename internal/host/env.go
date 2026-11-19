@@ -20,7 +20,7 @@ import (
 func loginEnv() []string {
 	env := os.Environ()
 	if runtime.GOOS == "windows" {
-		return env
+		return withPath(env, windowsExtraPaths(env))
 	}
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -81,34 +81,152 @@ func loginEnv() []string {
 	return withPath(env, extra)
 }
 
-func withPath(env []string, extra []string) []string {
-	idx := -1
-	path := ""
+func envLookup(env []string, key string) (idx int, name, val string) {
 	for i, kv := range env {
-		if strings.HasPrefix(kv, "PATH=") {
-			idx, path = i, kv[5:]
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(k, key) {
+			return i, k, v
 		}
 	}
-	parts := filepath.SplitList(path)
-	seen := map[string]bool{}
-	for _, p := range parts {
-		seen[p] = true
+	return -1, key, ""
+}
+
+func windowsExtraPaths(env []string) []string {
+	home, _ := os.UserHomeDir()
+	get := func(k string) string {
+		_, _, v := envLookup(env, k)
+		return v
 	}
-	for _, p := range extra {
-		if !seen[p] {
-			if st, err := os.Stat(p); err == nil && st.IsDir() {
-				parts = append(parts, p)
-				seen[p] = true
+	localAppData := get("LOCALAPPDATA")
+	appData := get("APPDATA")
+	programFiles := get("ProgramFiles")
+	miseData := get("MISE_DATA_DIR")
+
+	var extra []string
+	add := func(p string) {
+		if p != "" {
+			extra = append(extra, p)
+		}
+	}
+	if miseData != "" {
+		add(filepath.Join(miseData, "shims"))
+	}
+	if localAppData != "" {
+		add(filepath.Join(localAppData, "mise", "shims"))
+	}
+	if home != "" {
+		add(filepath.Join(home, ".local", "share", "mise", "shims"))
+	}
+	// Fallback for mise users who rely on `mise activate` without shims.
+	for _, base := range []string{miseData, filepath.Join(localAppData, "mise"), filepath.Join(home, ".local", "share", "mise")} {
+		if base == "" {
+			continue
+		}
+		if dir := latestMiseNodeDir(filepath.Join(base, "installs", "node")); dir != "" {
+			add(dir)
+		}
+	}
+	if v := get("NVM_SYMLINK"); v != "" {
+		add(v)
+	}
+	if v := get("VOLTA_HOME"); v != "" {
+		add(filepath.Join(v, "bin"))
+	}
+	if home != "" {
+		add(filepath.Join(home, ".volta", "bin"))
+	}
+	if v := get("PNPM_HOME"); v != "" {
+		add(v)
+	}
+	if localAppData != "" {
+		add(filepath.Join(localAppData, "pnpm"))
+	}
+	if appData != "" {
+		add(filepath.Join(appData, "npm"))
+	}
+	if v := get("BUN_INSTALL"); v != "" {
+		add(filepath.Join(v, "bin"))
+	}
+	if home != "" {
+		add(filepath.Join(home, ".bun", "bin"))
+		add(filepath.Join(home, "scoop", "shims"))
+		add(filepath.Join(home, ".local", "bin"))
+	}
+	if programFiles != "" {
+		add(filepath.Join(programFiles, "nodejs"))
+	}
+	return extra
+}
+
+func latestMiseNodeDir(installsDir string) string {
+	entries, err := os.ReadDir(installsDir)
+	if err != nil {
+		return ""
+	}
+	// Prefer "latest" symlink/dir if present, otherwise reverse lexical order.
+	for _, e := range entries {
+		if e.Name() == "latest" {
+			p := filepath.Join(installsDir, e.Name())
+			if st, err := os.Stat(filepath.Join(p, "node.exe")); err == nil && !st.IsDir() {
+				return p
 			}
 		}
 	}
-	kv := "PATH=" + strings.Join(parts, string(os.PathListSeparator))
+	for i := len(entries) - 1; i >= 0; i-- {
+		p := filepath.Join(installsDir, entries[i].Name())
+		if st, err := os.Stat(filepath.Join(p, "node.exe")); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+func withPath(env []string, extra []string) []string {
+	idx, key, path := envLookup(env, "PATH")
+	parts := filepath.SplitList(path)
+	seen := map[string]bool{}
+	norm := func(p string) string {
+		c := filepath.Clean(p)
+		if runtime.GOOS == "windows" {
+			return strings.ToLower(c)
+		}
+		return c
+	}
+	for _, p := range parts {
+		if p != "" {
+			seen[norm(p)] = true
+		}
+	}
+	for _, p := range extra {
+		if p == "" || seen[norm(p)] {
+			continue
+		}
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			parts = append(parts, p)
+			seen[norm(p)] = true
+		}
+	}
+	kv := key + "=" + strings.Join(parts, string(os.PathListSeparator))
 	if idx >= 0 {
 		env[idx] = kv
 	} else {
 		env = append(env, kv)
 	}
 	return env
+}
+
+// execCmd builds an exec.Cmd, wrapping .cmd/.bat shims via cmd.exe on Windows.
+func execCmd(name string, args ...string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext == ".cmd" || ext == ".bat" {
+			return exec.Command("cmd.exe", append([]string{"/c", name}, args...)...)
+		}
+	}
+	return exec.Command(name, args...)
 }
 
 // lookPath finds an executable on the PATH of env.
@@ -122,17 +240,19 @@ func lookPath(env []string, name string) string {
 		}
 		return ""
 	}
-	path := ""
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "PATH=") {
-			path = kv[5:]
-		}
-	}
+	_, _, path := envLookup(env, "PATH")
 	exts := []string{""}
 	if runtime.GOOS == "windows" {
-		exts = []string{".exe", ".cmd", ".bat", ""}
+		if filepath.Ext(name) != "" {
+			exts = []string{"", ".exe", ".cmd", ".bat"}
+		} else {
+			exts = []string{".exe", ".cmd", ".bat", ""}
+		}
 	}
 	for _, dir := range filepath.SplitList(path) {
+		if dir == "" {
+			continue
+		}
 		for _, ext := range exts {
 			p := filepath.Join(dir, name+ext)
 			if st, err := os.Stat(p); err == nil && !st.IsDir() && (runtime.GOOS == "windows" || st.Mode()&0o111 != 0) {

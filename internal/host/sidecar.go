@@ -80,7 +80,7 @@ func sidecarScript(cacheDir string) (string, error) {
 }
 
 func startSidecar(node, script string, env []string, onNotify func(method string, params json.RawMessage)) (*sidecarProc, error) {
-	cmd := exec.Command(node, script)
+	cmd := execCmd(node, script)
 	cmd.Env = env
 	cmd.Stderr = os.Stderr
 	hideWindow(cmd)

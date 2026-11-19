@@ -133,7 +133,10 @@ func (h *Host) sidecar() (*sidecarProc, error) {
 		h.nodeErr = err.Error()
 		return nil, err
 	}
-	if out, err := exec.Command(node, "--version").Output(); err == nil {
+	verCmd := execCmd(node, "--version")
+	verCmd.Env = h.environ()
+	hideWindow(verCmd)
+	if out, err := verCmd.Output(); err == nil {
 		h.nodeVersion = strings.TrimSpace(string(out))
 	}
 	script, err := sidecarScript(h.opts.CacheDir)
