@@ -49,6 +49,8 @@ export const store = reactive({
       return {};
     }
   })(),
+  probingModels: {} as Record<string, boolean>,
+  probeErrors: {} as Record<string, string>,
 });
 
 function captureModels(agentId: string | undefined, configOptions: ConfigOption[] | undefined) {
@@ -234,6 +236,23 @@ export async function init() {
 
 export async function refreshAgents() {
   store.agents = await api.agents();
+}
+
+export async function probeModels(agentId: string, cwd = "", force = false) {
+  if (!agentId || store.probingModels[agentId]) return;
+  if (!force && store.cachedModels[agentId]?.options?.length) return;
+  const agent = agentById(agentId);
+  if (!agent?.available) return;
+  store.probingModels[agentId] = true;
+  delete store.probeErrors[agentId];
+  try {
+    const opts = await api.probeModels(agentId, cwd || store.boot?.home || "");
+    captureModels(agentId, opts);
+  } catch (e) {
+    store.probeErrors[agentId] = e instanceof Error ? e.message : String(e);
+  } finally {
+    store.probingModels[agentId] = false;
+  }
 }
 
 async function load(id: string) {

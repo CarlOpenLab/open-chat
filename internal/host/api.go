@@ -45,6 +45,11 @@ func (a *API) Bootstrap() Bootstrap {
 // Agents probes the agents again (after the user installed one, say).
 func (a *API) Agents() []AgentInfo { return a.h.agents() }
 
+// ProbeModels briefly connects to an agent to read its available configOptions (including models) without creating a conversation.
+func (a *API) ProbeModels(ctx context.Context, agentID, cwd string) ([]any, error) {
+	return a.h.probeAgent(context.WithoutCancel(ctx), agentID, cwd)
+}
+
 // Create starts a conversation with an agent in a working directory and
 // connects it in the background, so its modes and models show up quickly.
 func (a *API) Create(agentID, cwd string) (Meta, error) {

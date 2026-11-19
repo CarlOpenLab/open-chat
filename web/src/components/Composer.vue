@@ -598,6 +598,7 @@ defineExpose({ addFiles });
                 :selected-model-value="selectedModelValue"
                 :live-status="live.status"
                 :locked="lockProvider"
+                :cwd="cwd"
                 @update:model-value="(id) => emit('update:agentId', id)"
                 @pick-model="(cid, val) => emit('pick-model', cid, val)"
                 @manage="emit('manage')"

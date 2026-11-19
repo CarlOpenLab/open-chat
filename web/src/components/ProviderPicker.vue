@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Popover } from "antdv-next";
 import { computed, nextTick, ref } from "vue";
-import { store } from "../store";
+import { isMac, probeModels, store } from "../store";
 import type { AgentInfo, ConfigOption } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
 
@@ -13,6 +13,8 @@ interface ModelRow {
   modelValue: string | null;
   modelLabel: string;
   available: boolean;
+  probing?: boolean;
+  probeError?: string;
   probe?: string;
 }
 
@@ -23,6 +25,7 @@ const props = defineProps<{
   liveStatus?: string;
   disabled?: boolean;
   locked?: boolean;
+  cwd?: string;
 }>();
 
 const emit = defineEmits<{
@@ -114,14 +117,24 @@ const allRows = computed<ModelRow[]>(() => {
       }
     }
     if (props.locked) continue;
+    const probing = Boolean(store.probingModels[a.id]);
+    const probeError = store.probeErrors[a.id];
     rows.push({
       key: `${a.id}::default`,
       agentId: a.id,
       agentName: a.name,
       configId: null,
       modelValue: null,
-      modelLabel: a.available ? (a.demo ? `${a.name} · 内置演示` : `${a.name} · 默认模型（连接一次后同步列表）`) : `${a.name} · 未安装`,
+      modelLabel: !a.available
+        ? `${a.name} · 未安装`
+        : probing
+          ? `正在获取 ${a.name} 的可用模型…`
+          : probeError
+            ? `${a.name} · 默认模型（同步失败，点此重试）`
+            : `${a.name} · 默认模型`,
       available: a.available,
+      probing,
+      probeError,
       probe: a.probe,
     });
   }
@@ -166,6 +179,13 @@ function isRowActive(r: ModelRow) {
   return true;
 }
 
+function ensureModelsFor(agentId: string) {
+  if (props.locked || !agentId || agentId === "all" || agentId === "fav") return;
+  if (!optionForAgent(agentId)) {
+    void probeModels(agentId, props.cwd ?? "");
+  }
+}
+
 function onOpenChange(v: boolean) {
   if (props.disabled) {
     open.value = false;
@@ -175,11 +195,17 @@ function onOpenChange(v: boolean) {
   if (v) {
     query.value = "";
     activeRail.value = props.locked ? props.modelValue : currentAgent.value?.id ?? "all";
+    ensureModelsFor(activeRail.value);
     void nextTick(() => searchEl.value?.focus());
   }
 }
 
 function pickRow(r: ModelRow) {
+  if (r.probing) return;
+  if (r.probeError && r.modelValue === null) {
+    void probeModels(r.agentId, props.cwd ?? "", true);
+    return;
+  }
   if (!props.locked && r.agentId !== props.modelValue) {
     emit("update:modelValue", r.agentId);
   }
@@ -194,6 +220,7 @@ function selectRailAgent(a: AgentInfo) {
   activeRail.value = a.id;
   if (!props.locked) {
     emit("update:modelValue", a.id);
+    ensureModelsFor(a.id);
   }
 }
 
@@ -297,11 +324,13 @@ function openSettings() {
               @click="pickRow(r)"
             >
               <ProviderIcon :id="r.agentId" :name="r.agentName" :size="15" />
-              <span class="model-name">{{ r.modelLabel }}</span>
+              <span class="model-name" :title="r.probeError || r.modelLabel">{{ r.modelLabel }}</span>
+
+              <span v-if="r.probing" class="row-spin" aria-hidden="true" />
 
               <!-- Lucide Check -->
               <svg
-                v-if="isRowActive(r)"
+                v-else-if="isRowActive(r)"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -314,6 +343,7 @@ function openSettings() {
               </svg>
 
               <span
+                v-if="!r.probing"
                 class="fav-btn"
                 :class="{ starred: favKeys.includes(r.key) }"
                 role="button"
@@ -332,7 +362,7 @@ function openSettings() {
                 </svg>
               </span>
 
-              <span v-if="idx < 9" class="kbd-badge">⌘{{ idx + 1 }}</span>
+              <span v-if="!r.probing && idx < 9" class="kbd-badge">{{ isMac ? '⌘' : 'Ctrl+' }}{{ idx + 1 }}</span>
             </button>
 
             <div v-if="!visibleRows.length" class="empty">
@@ -582,6 +612,21 @@ function openSettings() {
   height: 13px;
   color: var(--text);
   flex: none;
+}
+
+.row-spin {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--ink);
+  flex: none;
+  animation: picker-spin 0.75s linear infinite;
+}
+@keyframes picker-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .fav-btn {

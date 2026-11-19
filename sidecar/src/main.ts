@@ -411,6 +411,26 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
     return catalog();
   },
 
+  async probe(params) {
+    const agent = params?.agent as AgentLaunch;
+    const cwd = String(params?.cwd ?? process.cwd());
+    if (!agent?.command) throw new AdapterError("unknown", "probe 需要 agent");
+    const { key: agentKey, adapter, caps, stderrTail } = await adapterFor(agent);
+    const entry = adapters.get(agentKey);
+    if (entry) entry.users += 1;
+    let session: AcpSession | null = null;
+    try {
+      session = (await adapter.createSession({ cwd })) as AcpSession;
+      return describeSession(session, caps, false);
+    } catch (error) {
+      if (!adapter.rawConnection?.isConnected) adapters.delete(agentKey);
+      return await withStderrContext(error, stderrTail);
+    } finally {
+      if (session) await session.dispose().catch(() => {});
+      release(agentKey);
+    }
+  },
+
   async open(params) {
     const key = String(params?.key ?? "");
     const agent = params?.agent as AgentLaunch;

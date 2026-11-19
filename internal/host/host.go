@@ -452,6 +452,40 @@ func (h *Host) open(ctx context.Context, m Meta) (LiveState, error) {
 	}, nil
 }
 
+func (h *Host) probeAgent(ctx context.Context, agentID, cwd string) ([]any, error) {
+	a, ok := h.agent(agentID)
+	if !ok {
+		return nil, fmt.Errorf("agent %s 不存在或已被移除", agentID)
+	}
+	if !a.Available {
+		return nil, fmt.Errorf("没有找到 %s 的命令行（%s）", a.Name, a.Probe)
+	}
+	cwd = expandHome(strings.TrimSpace(cwd))
+	if cwd == "" || !isDir(cwd) {
+		cwd, _ = os.UserHomeDir()
+	}
+	sc, err := h.sidecar()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	var res struct {
+		ConfigOptions []any `json:"configOptions"`
+	}
+	params := map[string]any{
+		"agent": map[string]any{"id": a.ID, "command": a.Command, "args": a.Args, "env": a.Env},
+		"cwd":   cwd,
+	}
+	if err := sc.call(ctx, "probe", params, &res); err != nil {
+		return nil, friendlyError(a, err)
+	}
+	if res.ConfigOptions == nil {
+		res.ConfigOptions = []any{}
+	}
+	return res.ConfigOptions, nil
+}
+
 func friendlyError(a AgentInfo, err error) error {
 	msg := err.Error()
 	low := strings.ToLower(msg)
