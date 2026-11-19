@@ -28,7 +28,7 @@ import {
 } from "@cc-heart/acp-hub-core";
 import { CLAUDE_CODE_ACP_DEFAULT } from "@cc-heart/acp-hub-adapter-claude";
 import { CODEX_ACP_DEFAULT } from "@cc-heart/acp-hub-adapter-codex";
-import { OH_MY_PI_ACP_DEFAULT, PI_ACP_DEFAULT } from "@cc-heart/acp-hub-adapter-pi";
+import { OH_MY_PI_ACP_DEFAULT } from "@cc-heart/acp-hub-adapter-pi";
 import { runDemoAgent } from "./demo-agent.js";
 
 // ---------------------------------------------------------------- protocol
@@ -108,11 +108,11 @@ export function catalog(): AgentPreset[] {
     {
       id: "pi",
       name: "Pi",
-      description: "pi --mode acp，本地 CLI 直连",
-      command: PI_ACP_DEFAULT.command,
-      args: [...PI_ACP_DEFAULT.args],
+      description: "Pi Coding Agent，经 pi-acp 桥接（内部调用 pi --mode rpc）",
+      command: "npx",
+      args: ["-y", "pi-acp"],
       probe: "pi",
-      homepage: "https://github.com/badlogic/pi-mono",
+      homepage: "https://github.com/earendil-works/pi",
     },
     {
       id: "demo",
