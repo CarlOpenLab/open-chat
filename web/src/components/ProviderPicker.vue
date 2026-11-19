@@ -316,54 +316,55 @@ function openSettings() {
           </div>
 
           <div class="model-list">
-            <button
-              v-for="(r, idx) in visibleRows"
-              :key="r.key"
-              class="model-row"
-              :class="{ active: isRowActive(r), dim: !r.available }"
-              @click="pickRow(r)"
-            >
-              <ProviderIcon :id="r.agentId" :name="r.agentName" :size="15" />
-              <span class="model-name" :title="r.probeError || r.modelLabel">{{ r.modelLabel }}</span>
-
-              <span v-if="r.probing" class="row-spin" aria-hidden="true" />
-
-              <!-- Lucide Check -->
-              <svg
-                v-else-if="isRowActive(r)"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                class="row-check"
+            <template v-for="(r, idx) in visibleRows" :key="r.key">
+              <button
+                class="model-row"
+                :class="{ active: isRowActive(r), dim: !r.available }"
+                @click="pickRow(r)"
               >
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
+                <ProviderIcon :id="r.agentId" :name="r.agentName" :size="15" />
+                <span class="model-name" :title="r.probeError || r.modelLabel">{{ r.modelLabel }}</span>
 
-              <span
-                v-if="!r.probing"
-                class="fav-btn"
-                :class="{ starred: favKeys.includes(r.key) }"
-                role="button"
-                title="收藏"
-                @click.stop="toggleFav(r.key)"
-              >
+                <span v-if="r.probing" class="row-spin" aria-hidden="true" />
+
+                <!-- Lucide Check -->
                 <svg
+                  v-else-if="isRowActive(r)"
                   viewBox="0 0 24 24"
-                  :fill="favKeys.includes(r.key) ? 'currentColor' : 'none'"
+                  fill="none"
                   stroke="currentColor"
-                  stroke-width="1.8"
+                  stroke-width="2"
                   stroke-linecap="round"
                   stroke-linejoin="round"
+                  class="row-check"
                 >
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                  <polyline points="20 6 9 17 4 12" />
                 </svg>
-              </span>
 
-              <span v-if="!r.probing && idx < 9" class="kbd-badge">{{ isMac ? '⌘' : 'Ctrl+' }}{{ idx + 1 }}</span>
-            </button>
+                <span
+                  v-if="!r.probing"
+                  class="fav-btn"
+                  :class="{ starred: favKeys.includes(r.key) }"
+                  role="button"
+                  title="收藏"
+                  @click.stop="toggleFav(r.key)"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    :fill="favKeys.includes(r.key) ? 'currentColor' : 'none'"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                  </svg>
+                </span>
+
+                <span v-if="!r.probing && idx < 9" class="kbd-badge">{{ isMac ? '⌘' : 'Ctrl+' }}{{ idx + 1 }}</span>
+              </button>
+              <div v-if="r.probeError" class="probe-err selectable">{{ r.probeError }}</div>
+            </template>
 
             <div v-if="!visibleRows.length" class="empty">
               {{ emptyText }}
@@ -627,6 +628,17 @@ function openSettings() {
   to {
     transform: rotate(360deg);
   }
+}
+
+.probe-err {
+  margin: 2px 6px 4px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--err-soft);
+  color: var(--err);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
 }
 
 .fav-btn {

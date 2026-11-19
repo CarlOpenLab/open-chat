@@ -468,7 +468,7 @@ func (h *Host) probeAgent(ctx context.Context, agentID, cwd string) ([]any, erro
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	var res struct {
 		ConfigOptions []any `json:"configOptions"`
