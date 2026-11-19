@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { currentWindow } from "mygo-runtime";
+import { computed } from "vue";
 import { inApp } from "../api";
 import { isMac } from "../store";
 
 /** Minimize / maximize / close, drawn for Windows and Linux (macOS keeps its traffic lights). */
-const show = inApp && !isMac.value;
+const show = computed(() => inApp && !isMac.value);
 </script>
 
 <template>
