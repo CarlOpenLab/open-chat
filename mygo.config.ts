@@ -1,10 +1,11 @@
 import { defineConfig } from "mygo-cli";
+import pkg from "./package.json" with { type: "json" };
 
 export default defineConfig({
   name: "open-chat",
   slug: "open-chat",
   identifier: "com.carlopenlab.openchat",
-  version: "0.0.2",
+  version: pkg.version,
   copyright: "© 2026 CarlOpenLab",
   license: "MIT",
   icon: "resources/icon.png",
