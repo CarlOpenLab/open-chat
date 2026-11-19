@@ -53,8 +53,11 @@ jobs:
             os: macos-latest
             platform: "darwin/arm64,darwin/amd64"
           - name: Windows
-            os: ubuntu-latest
+            os: windows-latest
             platform: "windows/amd64"
+          - name: Linux
+            os: ubuntu-latest
+            platform: "linux/amd64"
     steps:
       - uses: actions/checkout@v4
 
@@ -69,9 +72,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install NSIS for Windows installer
-        if: matrix.name == 'Windows'
-        run: sudo apt-get update && sudo apt-get install -y nsis
+      - name: Cache NSIS (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\mygo\nsis-*
+          key: nsis-${{ hashFiles('pnpm-lock.yaml') }}
 
       - run: pnpm install --frozen-lockfile
 
@@ -83,7 +89,14 @@ jobs:
         run: |
           mkdir -p dist-release
           shopt -s nullglob
-          for f in build/*/*.dmg build/*/*-setup-*.exe build/windows-*/open-chat.exe; do
+          for f in \
+            build/*/*.dmg \
+            build/*/*-setup-*.exe \
+            build/windows-*/open-chat.exe \
+            build/*/*.deb \
+            build/*/*.rpm \
+            build/*/*.tar.gz \
+            build/*/*.zip; do
             cp "$f" dist-release/
           done
           ls -lh dist-release
