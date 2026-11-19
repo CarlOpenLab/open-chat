@@ -164,7 +164,7 @@ const actionItems = computed<ActionItemType[]>(() => {
 
         <template #content>
           <div class="agent-body">
-            <template v-for="seg in turn.segments" :key="seg.id">
+            <template v-for="(seg, si) in turn.segments" :key="seg.id">
               <ReasoningBlock
                 v-if="seg.kind === 'thought'"
                 :text="seg.text"
@@ -184,7 +184,7 @@ const actionItems = computed<ActionItemType[]>(() => {
               />
               <div v-else-if="seg.kind === 'notice'" class="notice" :class="seg.level">{{ seg.text }}</div>
               <div v-else-if="seg.kind === 'text'" class="answer">
-                <TextBlock :content="seg.text" :streaming="streaming" />
+                <TextBlock :content="seg.text" :streaming="streaming && si === turn.segments.length - 1" />
               </div>
             </template>
 

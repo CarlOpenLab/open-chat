@@ -50,7 +50,27 @@ const dragging = ref(false);
 const gitInfo = ref<GitInfo | null>(null);
 const gitFallbackRepo = ref(false);
 const switchingBranch = ref(false);
+const composing = ref(false);
+let lastCompositionEndAt = 0;
 let dragDepth = 0;
+
+function onCompositionStart() {
+  composing.value = true;
+}
+
+function onCompositionEnd() {
+  composing.value = false;
+  lastCompositionEndAt = performance.now();
+}
+
+function isImeComposing(e: KeyboardEvent) {
+  return (
+    composing.value ||
+    e.isComposing ||
+    e.keyCode === 229 ||
+    performance.now() - lastCompositionEndAt < 100
+  );
+}
 
 const draft = computed({
   get: () => props.value,
@@ -362,6 +382,10 @@ function submit() {
 }
 
 function onKeydown(e: KeyboardEvent): void | false {
+  if (isImeComposing(e)) {
+    if (e.key === "Enter") return false;
+    return;
+  }
   if (slashOpen.value && !slashDismissed.value) {
     if (e.key === "ArrowDown") {
       slashIndex.value = (slashIndex.value + 1) % slashItems.value.length;
@@ -500,7 +524,12 @@ defineExpose({ addFiles });
       </div>
 
       <!-- Layer 2: Main Sender card keeps its full 4-corner 18px rounded border intact -->
-      <div class="composer" :class="{ busy: running, dragging }">
+      <div
+        class="composer"
+        :class="{ busy: running, dragging }"
+        @compositionstart.capture="onCompositionStart"
+        @compositionend.capture="onCompositionEnd"
+      >
         <div v-if="dragging" class="drop-overlay">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="lucide">
             <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
