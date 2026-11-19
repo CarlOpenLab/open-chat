@@ -56,7 +56,6 @@ const editing = ref(false);
 const titleDraft = ref("");
 const folderOpen = ref(false);
 
-const agentInfo = computed(() => store.agents.find((a) => a.id === meta.value.agentId));
 const running = computed(() => live.value.status === "running");
 const turns = computed(() => transcript.value?.turns ?? []);
 const queuedMessages = computed(() => store.queues[meta.value.id] ?? []);
@@ -288,9 +287,14 @@ async function onPickMode(modeId: string) {
 
 const archived = computed(() => isArchived(meta.value.id));
 
-function toggleArchive() {
+async function toggleArchive() {
   const next = !archived.value;
-  setArchived(meta.value.id, next);
+  try {
+    await setArchived(meta.value.id, next);
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+    return;
+  }
   message.success(next ? "已归档" : "已取消归档");
   if (next) void select(null);
 }
@@ -302,17 +306,15 @@ const menu = computed(() => ({
     { key: "archive", label: archived.value ? "取消归档" : "归档对话" },
     { key: "new-same", label: "在同目录新建对话" },
     { key: "reveal", label: "在文件夹中显示" },
-    ...(agentInfo.value?.homepage ? [{ key: "home", label: "agent 主页" }] : []),
     { type: "divider" as const },
     { key: "delete", label: "删除对话", danger: true },
   ],
   onClick: ({ key }: { key: string }) => {
     if (key === "rename") startEdit();
     if (key === "pin") void pin(meta.value.id, !meta.value.pinned);
-    if (key === "archive") toggleArchive();
+    if (key === "archive") void toggleArchive();
     if (key === "new-same") void newSameDir();
     if (key === "reveal") void reveal();
-    if (key === "home") window.open(agentInfo.value!.homepage, "_blank");
     if (key === "delete") confirmDelete();
   },
 }));

@@ -13,7 +13,7 @@ import {
   SearchOutlined,
   ToolOutlined,
 } from "@antdv-next/icons";
-import { h, ref, watch } from "vue";
+import { h, ref } from "vue";
 import type { ToolCall } from "../types";
 import DiffView from "./DiffView.vue";
 
@@ -93,30 +93,8 @@ function hasDetail(call: ToolCall): boolean {
   );
 }
 
+// Collapsed by default; expansion is user-controlled only (no auto open/close on status changes).
 const expandedKeys = ref<Set<string>>(new Set());
-const prevStatuses = new Map<string, ToolCall["status"]>();
-
-watch(
-  () => props.calls.map((c) => `${c.toolCallId}:${c.status}`),
-  () => {
-    const next = new Set(expandedKeys.value);
-    for (const c of props.calls) {
-      const prev = prevStatuses.get(c.toolCallId);
-      const isRunning = c.status === "pending" || c.status === "in_progress";
-      const wasRunning = prev === "pending" || prev === "in_progress";
-      if (isRunning && !prev) {
-        next.add(c.toolCallId);
-      } else if (wasRunning && c.status === "completed") {
-        next.delete(c.toolCallId);
-      } else if (c.status === "failed" && prev !== "failed") {
-        next.add(c.toolCallId);
-      }
-      prevStatuses.set(c.toolCallId, c.status);
-    }
-    expandedKeys.value = next;
-  },
-  { immediate: true },
-);
 
 function toggle(id: string) {
   const next = new Set(expandedKeys.value);

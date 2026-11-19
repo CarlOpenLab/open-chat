@@ -42,6 +42,7 @@ export const api = {
   setConfig: (id: string, configId: string, value: string | boolean) => call<void>("SetConfig", id, configId, value),
   rename: (id: string, title: string) => call<Meta>("Rename", id, title),
   pin: (id: string, pinned: boolean) => call<Meta>("Pin", id, pinned),
+  archive: (id: string, archived: boolean) => call<Meta>("Archive", id, archived),
   remove: (id: string) => call<void>("Delete", id),
   saveSettings: (s: Settings) => call<Settings>("SaveSettings", s),
   listDir: (path: string) => call<DirListing>("ListDir", path),

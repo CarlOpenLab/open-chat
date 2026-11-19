@@ -4,7 +4,7 @@ export default defineConfig({
   name: "open-chat",
   slug: "open-chat",
   identifier: "com.carlopenlab.openchat",
-  version: "0.0.1",
+  version: "0.0.2",
   copyright: "© 2026 CarlOpenLab",
   license: "MIT",
   icon: "resources/icon.png",

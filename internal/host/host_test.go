@@ -147,3 +147,51 @@ func TestDemoConversation(t *testing.T) {
 		t.Fatalf("expected the demo session to resume")
 	}
 }
+
+func TestArchivePersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	st, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.create(Meta{ID: "c1", Title: "hello", AgentID: "demo", AgentName: "Demo", Cwd: dir, CreatedAt: 1, UpdatedAt: 1})
+	h := &Host{store: st, opts: Options{Push: func(Push) {}}, lives: map[string]*live{}}
+	api := NewAPI(h)
+
+	m, err := api.Archive("c1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Archived {
+		t.Fatalf("expected Archived=true")
+	}
+	st.flush()
+
+	st2, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := st2.meta("c1")
+	if !ok || !got.Archived {
+		t.Fatalf("expected archived state to persist, got ok=%v meta=%+v", ok, got)
+	}
+
+	h2 := &Host{store: st2, opts: Options{Push: func(Push) {}}, lives: map[string]*live{}}
+	m2, err := NewAPI(h2).Archive("c1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m2.Archived {
+		t.Fatalf("expected Archived=false")
+	}
+	st2.flush()
+
+	st3, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got3, ok := st3.meta("c1")
+	if !ok || got3.Archived {
+		t.Fatalf("expected unarchived state to persist, got ok=%v meta=%+v", ok, got3)
+	}
+}

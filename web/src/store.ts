@@ -39,13 +39,6 @@ export const store = reactive({
   settingsOpen: false,
   search: "",
   userAvatar: localStorage.getItem("oc.userAvatar") || "",
-  archivedIds: (() => {
-    try {
-      return JSON.parse(localStorage.getItem("oc.archivedIds") || "[]") as string[];
-    } catch {
-      return [];
-    }
-  })(),
   /** Tracks turn completion outcomes per conversation for sidebar status badges. */
   turnOutcome: {} as Record<string, "done" | "unseen" | "error">,
   /** Cached ACP model lists per agentId so New Chat can pick models before connecting. */
@@ -82,15 +75,11 @@ export function setUserAvatar(dataUrl: string) {
 }
 
 export function isArchived(id: string): boolean {
-  return store.archivedIds.includes(id);
+  return Boolean(store.metas[id]?.archived);
 }
 
-export function setArchived(id: string, archived: boolean) {
-  const set = new Set(store.archivedIds);
-  if (archived) set.add(id);
-  else set.delete(id);
-  store.archivedIds = [...set];
-  localStorage.setItem("oc.archivedIds", JSON.stringify(store.archivedIds));
+export async function setArchived(id: string, archived: boolean) {
+  store.metas[id] = await api.archive(id, archived);
 }
 
 watch(
@@ -187,7 +176,6 @@ function onPush(p: Push) {
       delete store.queues[p.conversationId];
       steerPending.delete(p.conversationId);
       manualStop.delete(p.conversationId);
-      if (isArchived(p.conversationId)) setArchived(p.conversationId, false);
       if (store.activeId === p.conversationId) store.activeId = null;
       return;
     case "settings":
@@ -211,10 +199,29 @@ async function reload() {
   else store.activeId = null;
 }
 
+async function migrateLegacyArchives() {
+  const raw = localStorage.getItem("oc.archivedIds");
+  if (!raw) return;
+  try {
+    const ids = JSON.parse(raw) as unknown;
+    if (Array.isArray(ids)) {
+      for (const id of ids) {
+        if (typeof id === "string" && store.metas[id] && !store.metas[id].archived) {
+          store.metas[id] = await api.archive(id, true);
+        }
+      }
+    }
+    localStorage.removeItem("oc.archivedIds");
+  } catch {
+    localStorage.removeItem("oc.archivedIds");
+  }
+}
+
 export async function init() {
   subscribe(onPush, () => void reload().catch(() => {}));
   try {
     await reload();
+    await migrateLegacyArchives();
     const last = localStorage.getItem("oc.active");
     if (last && store.metas[last]) await select(last);
     store.ready = true;

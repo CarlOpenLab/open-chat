@@ -54,6 +54,7 @@ export interface Meta {
   createdAt: number;
   updatedAt: number;
   pinned?: boolean;
+  archived?: boolean;
   acpSessionId?: string;
   preview?: string;
   status: Status;

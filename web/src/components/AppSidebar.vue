@@ -133,9 +133,14 @@ function labelRender(item: ConversationItemType) {
   ]);
 }
 
-function toggleArchive(m: Meta) {
+async function toggleArchive(m: Meta) {
   const next = !isArchived(m.id);
-  setArchived(m.id, next);
+  try {
+    await setArchived(m.id, next);
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+    return;
+  }
   if (next && store.activeId === m.id && !showArchived.value) {
     void select(null);
   }
@@ -164,7 +169,7 @@ function menuFor(value: ConversationItemType) {
     onClick: ({ key }: { key: string }) => {
       if (key === "pin") void pin(m.id, !m.pinned);
       if (key === "rename") void startRename(m);
-      if (key === "archive") toggleArchive(m);
+      if (key === "archive") void toggleArchive(m);
       if (key === "delete") toDelete.value = m;
     },
   };

@@ -76,6 +76,7 @@ type Meta struct {
 	CreatedAt   int64  `json:"createdAt"`
 	UpdatedAt   int64  `json:"updatedAt"`
 	Pinned      bool   `json:"pinned,omitempty"`
+	Archived    bool   `json:"archived,omitempty"`
 	// AcpSessionID is the agent's own session id, to resume with session/load.
 	AcpSessionID string `json:"acpSessionId,omitempty"`
 	Preview      string `json:"preview,omitempty"`

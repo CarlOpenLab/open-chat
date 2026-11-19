@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 
 const props = defineProps<{ text: string; live: boolean; durationSec?: number }>();
 
@@ -42,14 +42,8 @@ const lines = computed<TextRun[][]>(() => {
   });
 });
 
-const open = ref(props.live);
-
-watch(
-  () => props.live,
-  (live) => {
-    open.value = live;
-  },
-);
+// Collapsed by default; expansion is user-controlled only (no auto open/close while streaming).
+const open = ref(false);
 </script>
 
 <template>

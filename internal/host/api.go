@@ -128,6 +128,16 @@ func (a *API) Pin(id string, pinned bool) (Meta, error) {
 	return m, nil
 }
 
+// Archive archives or unarchives a conversation.
+func (a *API) Archive(id string, archived bool) (Meta, error) {
+	m, ok := a.h.store.update(id, func(m *Meta) { m.Archived = archived })
+	if !ok {
+		return Meta{}, errors.New("对话不存在")
+	}
+	a.h.pushMeta(m)
+	return m, nil
+}
+
 // Delete removes a conversation and ends its session.
 func (a *API) Delete(id string) error {
 	a.h.remove(id)
