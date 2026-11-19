@@ -1,22 +1,23 @@
 <script setup lang="ts">
 import {
-  CheckCircleFilled,
-  CloseCircleFilled,
   DeleteOutlined,
+  EditOutlined,
   PlusOutlined,
   ReloadOutlined,
 } from "@antdv-next/icons";
-import { Button, Input, Modal, Segmented, Switch, Tabs, Tag, Tooltip, message } from "antdv-next";
+import { Button, Input, Modal, Switch, Tabs, Tag, Tooltip, message } from "antdv-next";
 import { computed, ref, watch } from "vue";
-import { refreshAgents, saveSettings, store } from "../store";
+import { isMac, refreshAgents, saveSettings, store } from "../store";
 import type { CustomAgent, Settings } from "../types";
+import ProviderIcon from "./ProviderIcon.vue";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ "update:open": [boolean] }>();
 
-const tab = ref("general");
+const tab = ref("agents");
 const local = ref<Settings | null>(null);
 const saving = ref(false);
+const editingCmd = ref<Record<string, boolean>>({});
 
 watch(
   () => props.open,
@@ -25,6 +26,7 @@ watch(
       local.value = JSON.parse(JSON.stringify(store.settings)) as Settings;
       local.value.customAgents = local.value.customAgents ?? [];
       local.value.recentDirs = local.value.recentDirs ?? [];
+      editingCmd.value = {};
       void refreshAgents();
     }
   },
@@ -38,6 +40,7 @@ async function save() {
   try {
     await saveSettings(local.value);
     message.success("已保存");
+    emit("update:open", false);
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e));
   } finally {
@@ -47,7 +50,7 @@ async function save() {
 
 function addCustom() {
   if (!local.value) return;
-  const agent: CustomAgent = { id: "", name: "新 agent", command: "", args: [], env: {} };
+  const agent: CustomAgent = { id: "", name: "", command: "", args: [], env: {} };
   local.value.customAgents = [...(local.value.customAgents ?? []), agent];
 }
 
@@ -61,166 +64,159 @@ function setOverride(id: string, patch: Record<string, unknown>) {
   local.value.agents = { ...(local.value.agents ?? {}), [id]: { ...(local.value.agents?.[id] ?? {}), ...patch } };
 }
 
-const platformName = computed(() => ({ darwin: "macOS", win32: "Windows", linux: "Linux" })[store.boot?.platform ?? ""] ?? store.boot?.platform);
+function toggleCmdEditor(id: string) {
+  editingCmd.value[id] = !editingCmd.value[id];
+}
+
+const modKey = computed(() => (isMac.value ? "⌘" : "Ctrl"));
 </script>
 
 <template>
   <Modal
     :open="props.open"
-    :width="720"
+    :width="560"
     :footer="null"
+    centered
     title="设置"
     class="settings-modal"
     @cancel="emit('update:open', false)"
   >
     <Tabs v-model:activeKey="tab" size="small" class="tabs">
-      <Tabs.TabPane key="general" tab="常规">
+      <Tabs.TabPane key="agents" tab="ACP 供应商">
+        <div class="pane">
+          <div class="pane-bar">
+            <span class="hint">已安装且在 PATH 中的 Agent 可直接使用</span>
+            <button class="link" @click="refreshAgents">
+              <ReloadOutlined /> 重新检测
+            </button>
+          </div>
+
+          <div class="agent-list">
+            <div v-for="a in agents" :key="a.id" class="agent">
+              <div class="agent-head">
+                <span class="agent-ic-box">
+                  <ProviderIcon :id="a.id" :name="a.name" :size="15" />
+                </span>
+                <span class="aname">{{ a.name }}</span>
+                <Tag v-if="a.demo" color="blue" :bordered="false" class="mini-tag">演示</Tag>
+                <Tag v-else-if="a.custom" :bordered="false" class="mini-tag">自定义</Tag>
+                <span class="status-pill" :class="{ ok: a.available }">
+                  <i class="status-dot" />
+                  {{ a.available ? "已就绪" : "未安装" }}
+                </span>
+                <span class="spacer" />
+                <Tooltip v-if="!a.custom && !a.demo" title="自定义启动命令">
+                  <button
+                    class="cmd-btn"
+                    :class="{ active: editingCmd[a.id] || Boolean(overrideOf(a.id).command) }"
+                    @click="toggleCmdEditor(a.id)"
+                  >
+                    <EditOutlined />
+                  </button>
+                </Tooltip>
+                <Switch
+                  v-if="!a.custom"
+                  size="small"
+                  :checked="!overrideOf(a.id).disabled"
+                  @change="(v: unknown) => setOverride(a.id, { disabled: !v })"
+                />
+              </div>
+
+              <div v-if="!a.custom && !a.demo && (editingCmd[a.id] || overrideOf(a.id).command)" class="override">
+                <Input
+                  size="small"
+                  class="mono"
+                  placeholder="覆盖启动命令（留空使用默认）"
+                  :value="overrideOf(a.id).command ?? ''"
+                  @change="(e: Event) => setOverride(a.id, { command: (e.target as HTMLInputElement).value, args: [] })"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="custom-section">
+            <div class="custom-head">
+              <span class="sub-title">自定义 Agent</span>
+              <Button size="small" type="text" @click="addCustom">
+                <template #icon><PlusOutlined /></template>
+                添加
+              </Button>
+            </div>
+            <div v-for="(c, i) in local?.customAgents ?? []" :key="i" class="custom">
+              <Input v-model:value="c.name" placeholder="名称" size="small" style="width: 110px" />
+              <Input v-model:value="c.command" placeholder="命令" size="small" class="mono" style="flex: 1" />
+              <Input
+                :value="(c.args ?? []).join(' ')"
+                placeholder="参数"
+                size="small"
+                class="mono"
+                style="flex: 1"
+                @change="(e: Event) => (c.args = (e.target as HTMLInputElement).value.split(/\s+/).filter(Boolean))"
+              />
+              <Button size="small" type="text" danger @click="removeCustom(i)">
+                <template #icon><DeleteOutlined /></template>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Tabs.TabPane>
+
+      <Tabs.TabPane key="general" tab="偏好">
         <div v-if="local" class="pane">
           <section class="row">
             <div class="label">
-              <div class="title">外观</div>
-              <div class="desc">跟随系统，或固定亮 / 暗</div>
+              <div class="title">发送快捷键</div>
+              <div class="desc">输入框内按 Enter 或 Shift + Enter 发送</div>
             </div>
-            <Segmented
-              v-model:value="local.theme"
-              :options="[
-                { label: '跟随系统', value: 'system' },
-                { label: '浅色', value: 'light' },
-                { label: '深色', value: 'dark' },
-              ]"
-            />
-          </section>
-
-          <section class="row">
-            <div class="label">
-              <div class="title">发送消息</div>
-              <div class="desc">Enter 发送，还是 ⇧/⌘ + Enter 发送</div>
+            <div class="seg-group" role="radiogroup" aria-label="发送快捷键">
+              <button
+                type="button"
+                class="seg-btn"
+                :class="{ active: local.sendKey === 'enter' }"
+                @click="local.sendKey = 'enter'"
+              >
+                Enter
+              </button>
+              <button
+                type="button"
+                class="seg-btn"
+                :class="{ active: local.sendKey !== 'enter' }"
+                @click="local.sendKey = 'modEnter'"
+              >
+                ⇧ Shift + Enter
+              </button>
             </div>
-            <Segmented
-              v-model:value="local.sendKey"
-              :options="[
-                { label: 'Enter 发送', value: 'enter' },
-                { label: '⇧ Enter 发送', value: 'modEnter' },
-              ]"
-            />
           </section>
-
-          <section class="row">
-            <div class="label">
-              <div class="title">自动批准工具调用</div>
-              <div class="desc">agent 请求改文件 / 跑命令时不再询问，直接允许一次</div>
-            </div>
-            <Switch v-model:checked="local.autoAllow" />
-          </section>
-          <p v-if="local.autoAllow" class="warn-line">
-            打开后 agent 会不经确认就修改你的文件、执行命令。只在你信任的目录里这么做。
-          </p>
 
           <section class="row">
             <div class="label">
               <div class="title">Node.js 路径</div>
-              <div class="desc">留空则用 PATH 里的 node（需要 22 或更高）</div>
+              <div class="desc">
+                {{ store.boot?.nodeError || `当前 ${store.boot?.nodeVersion || "未检测到"}，留空默认读 PATH` }}
+              </div>
             </div>
-            <Input v-model:value="local.nodePath" placeholder="/usr/local/bin/node" class="mono widen" />
+            <Input v-model:value="local.nodePath" size="small" placeholder="默认 PATH" class="mono widen" />
           </section>
 
-          <section class="row">
-            <div class="label">
-              <div class="title">Node 版本</div>
-              <div class="desc">{{ store.boot?.nodeError || "检测正常" }}</div>
+          <div class="meta-box">
+            <div class="shortcuts">
+              <span><kbd>{{ modKey }} N</kbd> 新对话</span>
+              <span><kbd>{{ modKey }} K</kbd> 搜索</span>
+              <span><kbd>{{ modKey }} B</kbd> 侧栏</span>
+              <span><kbd>{{ modKey }} ,</kbd> 设置</span>
             </div>
-            <span class="mono value">{{ store.boot?.nodeVersion || "—" }}</span>
-          </section>
-        </div>
-      </Tabs.TabPane>
-
-      <Tabs.TabPane key="agents" tab="Agents">
-        <div class="pane">
-          <p class="hint">
-            这里列出所有通过 ACP 驱动的 agent。命令在 PATH 里被找到才可启动；点 <ReloadOutlined /> 重新检测。
-            <button class="link" @click="refreshAgents">重新检测</button>
-          </p>
-
-          <div v-for="a in agents" :key="a.id" class="agent">
-            <div class="agent-head">
-              <span class="dot" :class="a.available ? 'ok' : 'off'" />
-              <span class="aname">{{ a.name }}</span>
-              <Tag v-if="a.demo" color="blue" :bordered="false">演示</Tag>
-              <Tag v-else-if="a.custom" :bordered="false">自定义</Tag>
-              <span class="cmd mono">{{ a.demo ? "open-chat 内置" : a.resolved || a.command }}</span>
-              <span class="spacer" />
-              <CheckCircleFilled v-if="a.available" class="ok-i" />
-              <Tooltip v-else title="没在 PATH 里找到">
-                <CloseCircleFilled class="off-i" />
-              </Tooltip>
-              <Switch
-                v-if="!a.custom"
-                size="small"
-                :checked="!overrideOf(a.id).disabled"
-                @change="(v: unknown) => setOverride(a.id, { disabled: !v })"
-              />
+            <div class="version mono">
+              open-chat {{ store.boot?.version || "" }} · ACP
             </div>
-            <div v-if="!a.custom" class="override">
-              <Input
-                size="small"
-                class="mono"
-                placeholder="覆盖启动命令（例如 npx -y @agentclientprotocol/codex-acp）"
-                :value="overrideOf(a.id).command ?? ''"
-                @change="(e: Event) => setOverride(a.id, { command: (e.target as HTMLInputElement).value, args: [] })"
-              />
-            </div>
-          </div>
-
-          <div class="custom-head">
-            <span class="title">自定义 agent</span>
-            <Button size="small" @click="addCustom">
-              <template #icon><PlusOutlined /></template>
-              添加
-            </Button>
-          </div>
-          <div v-for="(c, i) in local?.customAgents ?? []" :key="i" class="custom">
-            <Input v-model:value="c.name" placeholder="名字" size="small" style="width: 130px" />
-            <Input v-model:value="c.command" placeholder="命令（如 my-agent）" size="small" class="mono" style="flex: 1" />
-            <Input
-              :value="(c.args ?? []).join(' ')"
-              placeholder="参数，空格分隔"
-              size="small"
-              class="mono"
-              style="flex: 1"
-              @change="(e: Event) => (c.args = (e.target as HTMLInputElement).value.split(/\s+/).filter(Boolean))"
-            />
-            <Button size="small" danger @click="removeCustom(i)">
-              <template #icon><DeleteOutlined /></template>
-            </Button>
-          </div>
-        </div>
-      </Tabs.TabPane>
-
-      <Tabs.TabPane key="about" tab="关于">
-        <div class="pane about">
-          <div class="logo-lg" />
-          <div>
-            <div class="about-name">open-chat</div>
-            <div class="muted">一个把本机 coding agent 收进同一个窗口的工作台。</div>
-          </div>
-          <div class="kv">
-            <span>版本</span><span class="mono">{{ store.boot?.version }}</span>
-            <span>界面</span><span class="mono">{{ store.boot?.mode === "desktop" ? "桌面端（mygo + WebView）" : "网页模式" }}</span>
-            <span>系统</span><span class="mono">{{ platformName }}</span>
-            <span>Node</span><span class="mono">{{ store.boot?.nodeVersion || "—" }}</span>
-            <span>Agent 协议</span><span class="mono">ACP · acp-hub</span>
           </div>
         </div>
       </Tabs.TabPane>
     </Tabs>
 
     <div class="footer">
-      <span class="faint small">
-        设置保存在本机 <span class="mono">~/.config/open-chat</span>
-      </span>
       <span class="spacer" />
-      <Button @click="emit('update:open', false)">关闭</Button>
-      <Button type="primary" :loading="saving" @click="save">保存</Button>
+      <Button size="small" @click="emit('update:open', false)">取消</Button>
+      <Button size="small" type="primary" :loading="saving" @click="save">保存</Button>
     </div>
   </Modal>
 </template>
@@ -229,15 +225,154 @@ const platformName = computed(() => ({ darwin: "macOS", win32: "Windows", linux:
 .pane {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-height: 320px;
-  padding-top: 4px;
+  gap: 8px;
+  max-height: min(54dvh, 420px);
+  overflow-y: auto;
+  padding: 2px 2px 2px 0;
 }
+
+.pane-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+}
+.link:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agent {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--hover);
+  transition: border-color 0.14s;
+}
+.agent:hover {
+  border-color: var(--border-strong);
+}
+.agent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agent-ic-box {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--modal-bg);
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.aname {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text);
+}
+.mini-tag {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 18px;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-3);
+  opacity: 0.55;
+}
+.status-pill.ok {
+  color: var(--ok);
+}
+.status-pill.ok .status-dot {
+  background: var(--ok);
+  opacity: 1;
+}
+
+.cmd-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.12s, color 0.12s;
+}
+.cmd-btn:hover,
+.cmd-btn.active {
+  background: var(--active);
+  color: var(--text);
+}
+
+.override {
+  margin-top: 8px;
+}
+
+.custom-section {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.custom-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.sub-title {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text-2);
+}
+.custom {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 .row {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 11px 2px;
+  gap: 14px;
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
 }
 .row:last-of-type {
@@ -249,7 +384,7 @@ const platformName = computed(() => ({ darwin: "macOS", win32: "Windows", linux:
 }
 .title {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 530;
 }
 .desc {
   font-size: 11.5px;
@@ -257,136 +392,77 @@ const platformName = computed(() => ({ darwin: "macOS", win32: "Windows", linux:
   margin-top: 1px;
 }
 .widen {
-  width: 300px;
+  width: 210px;
 }
-.value {
-  font-size: 12px;
-  color: var(--text-2);
-}
-.warn-line {
-  font-size: 11.5px;
-  color: var(--warn);
-  background: var(--warn-soft);
-  border-radius: 7px;
-  padding: 7px 10px;
-  margin: 2px 0 6px;
-}
-.hint {
-  font-size: 12px;
-  color: var(--text-3);
-  margin: 0 0 6px;
-}
-.link {
-  border: none;
-  background: transparent;
-  color: var(--accent-text);
-  cursor: pointer;
-  font-size: inherit;
-  padding: 0 2px;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.agent {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 9px 11px;
-  margin-bottom: 7px;
-  background: var(--surface);
-}
-.agent-head {
-  display: flex;
+
+.seg-group {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-}
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--hover);
+  border: 1px solid var(--border-strong);
   flex: none;
 }
-.dot.ok {
-  background: var(--ok);
+.seg-btn {
+  height: 26px;
+  padding: 0 11px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.16s var(--ease), color 0.16s var(--ease), box-shadow 0.16s var(--ease);
 }
-.dot.off {
-  background: var(--text-3);
-  opacity: 0.5;
+.seg-btn:hover:not(.active) {
+  color: var(--text);
+  background: var(--surface-2);
 }
-.aname {
-  font-size: 13px;
-  font-weight: 550;
+.seg-btn.active {
+  background: var(--ink);
+  color: var(--ink-inv);
+  font-weight: 580;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.24);
 }
-.cmd {
+
+.meta-box {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.shortcuts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.version {
   font-size: 11px;
   color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 340px;
 }
+
 .spacer {
   flex: 1;
-}
-.ok-i {
-  color: var(--ok);
-  font-size: 12px;
-}
-.off-i {
-  color: var(--text-3);
-  font-size: 12px;
-}
-.override {
-  margin-top: 8px;
-}
-.custom-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 14px 0 8px;
-}
-.custom {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-.about {
-  align-items: center;
-  text-align: center;
-  gap: 14px;
-  padding-top: 18px;
-}
-.logo-lg {
-  width: 54px;
-  height: 54px;
-  border-radius: 16px;
-  background: linear-gradient(140deg, #9d9eff, #4545cc);
-  box-shadow: 0 10px 28px rgba(91, 91, 214, 0.35);
-}
-.about-name {
-  font-size: 18px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-.kv {
-  display: grid;
-  grid-template-columns: auto auto;
-  gap: 6px 22px;
-  margin-top: 8px;
-  font-size: 12.5px;
-  text-align: left;
-  color: var(--text-2);
-}
-.kv span:nth-child(odd) {
-  color: var(--text-3);
 }
 .footer {
   display: flex;
   align-items: center;
   gap: 8px;
   padding-top: 12px;
-  margin-top: 6px;
+  margin-top: 8px;
   border-top: 1px solid var(--border);
-}
-.small {
-  font-size: 11.5px;
 }
 </style>

@@ -1,10 +1,29 @@
-# open-chat
+<div align="center">
+  <img src="docs/logo.svg" width="84" height="84" alt="open-chat logo" />
+  <h1>open-chat</h1>
+  <p>把本机的 Coding Agent 收进同一个窗口 — 基于 Go (mygo) + Vue + ACP 的本地桌面与网页工作台</p>
+</div>
 
-把本机的 coding agent 收进同一个窗口：一个用 Go（mygo）+ Vue + antdv-next 写的桌面工作台，agent 全部通过 [ACP](https://agentclientprotocol.com) 驱动，适配层用 [acp-hub](https://github.com/CarlOpenLab/acp-hub)。
+---
 
-![对话](docs/screenshots/chat-light.png)
+**open-chat** 通过原生 [ACP（Agent Client Protocol）](https://agentclientprotocol.com) 与 [acp-hub](https://github.com/CarlOpenLab/acp-hub)，将你本机安装的 **Claude Code**、**Codex**、**pi**、**omp** 以及任意自定义 ACP Agent 统一收进一个轻量、克制的桌面工作台。支持以独立桌面窗口运行，也支持一行命令启动为内网/本机 Web 服务。
 
-![新对话](docs/screenshots/desktop-new-chat.jpg)
+<p align="center">
+  <img src="docs/screenshots/chat-light.png" alt="对话视图" width="88%" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/desktop-new-chat.jpg" alt="新建对话" width="88%" />
+</p>
+
+## 核心特性
+
+- **多 Agent 统一入口**：通过 ACP 协议直连 Claude Code、Codex、pi、omp 或自定义命令行 Agent，一个窗口管理所有会话与工作目录。
+- **一等公民权限审批与计划视图**：工具调用权限请求直接浮在消息流内（允许在右、拒绝在左，降低误触），支持推理过程折叠、代码 Diff 预览与执行计划卡片。
+- **可靠的会话持久化与续接**：会话记录按对话落盘到本地 `index.json` 与 `conversations/`，重开走 `session/load` 恢复上下文；无法续接时明确提示，不静默丢状态。
+- **零环境折腾的单文件打包**：Go 宿主内嵌单文件打包的 Node sidecar 与前端构建产物，桌面端启动自动读取登录 Shell 环境变量，从 Dock 启动也能找到 `node` / `claude` / `codex`。
+- **桌面 / 网页双模式共享同一套 UI**：同一份二进制既可作为原生桌面应用运行，也可通过 `open-chat serve` 提供 HTTP + SSE 远程访问。
+
+## 架构设计
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -91,8 +110,12 @@ HTTP 模式把 `Host` 的每个方法映射成 `POST /api/call/<Method>`（body 
 
 数据（会话与记录）在同一目录下的 `index.json` 与 `conversations/`。
 
-## 平台
+## 平台适配
 
-- macOS：`TitleBarHiddenInset` + 红绿灯内缩，页面左上留白给红绿灯，其余自绘。
-- Windows / Linux：隐藏系统按钮，页面右上自绘最小化/最大化/关闭（`HideWindowButtons`）。
+- **macOS**：`TitleBarHiddenInset` + 红绿灯内缩，页面左上留白给红绿灯，其余自绘。
+- **Windows / Linux**：隐藏系统按钮，页面右上自绘最小化/最大化/关闭（`HideWindowButtons`）。
 - 桌面端启动时向登录 shell 要一次环境变量，所以 Homebrew / mise / nvm 里的 `node`、`claude`、`codex` 都能被找到——从 Dock 启动也不会找不到命令。
+
+## License
+
+[MIT](LICENSE) © 2026 CarlOpenLab

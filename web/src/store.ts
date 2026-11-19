@@ -2,7 +2,13 @@
 import { computed, reactive, ref, watch } from "vue";
 import { api, inApp, subscribe } from "./api";
 import { apply, emptyTranscript, type Transcript } from "./transcript";
-import type { AgentInfo, Block, Bootstrap, LiveState, Meta, Push, Settings } from "./types";
+import type { AgentInfo, Block, Bootstrap, ConfigOption, LiveState, Meta, Push, Settings } from "./types";
+
+export interface QueuedMessage {
+  id: string;
+  blocks: Block[];
+  createdAt: number;
+}
 
 const idleLive = (): LiveState => ({
   status: "idle",
@@ -24,13 +30,68 @@ export const store = reactive({
   transcripts: {} as Record<string, Transcript>,
   lives: {} as Record<string, LiveState>,
   drafts: {} as Record<string, string>,
+  /** Per-conversation queued follow-up messages while a turn is running. */
+  queues: {} as Record<string, QueuedMessage[]>,
   /** The open conversation; null shows the new-conversation screen. */
   activeId: null as string | null,
   loading: {} as Record<string, boolean>,
   sidebarCollapsed: localStorage.getItem("oc.sidebar") === "0",
   settingsOpen: false,
   search: "",
+  userAvatar: localStorage.getItem("oc.userAvatar") || "",
+  archivedIds: (() => {
+    try {
+      return JSON.parse(localStorage.getItem("oc.archivedIds") || "[]") as string[];
+    } catch {
+      return [];
+    }
+  })(),
+  /** Tracks turn completion outcomes per conversation for sidebar status badges. */
+  turnOutcome: {} as Record<string, "done" | "unseen" | "error">,
+  /** Cached ACP model lists per agentId so New Chat can pick models before connecting. */
+  cachedModels: (() => {
+    try {
+      return JSON.parse(localStorage.getItem("oc.agentModels") || "{}") as Record<string, ConfigOption>;
+    } catch {
+      return {};
+    }
+  })(),
 });
+
+function captureModels(agentId: string | undefined, configOptions: ConfigOption[] | undefined) {
+  if (!agentId || !configOptions?.length) return;
+  const opt =
+    configOptions.find((o) => o.category === "model") ??
+    configOptions.find((o) => o.type === "select" && o.id.includes("model"));
+  if (!opt?.options?.length) return;
+  store.cachedModels[agentId] = opt;
+  try {
+    localStorage.setItem("oc.agentModels", JSON.stringify(store.cachedModels));
+  } catch {
+    /* ignore quota errors */
+  }
+}
+
+export function setUserAvatar(dataUrl: string) {
+  store.userAvatar = dataUrl;
+  if (dataUrl) {
+    localStorage.setItem("oc.userAvatar", dataUrl);
+  } else {
+    localStorage.removeItem("oc.userAvatar");
+  }
+}
+
+export function isArchived(id: string): boolean {
+  return store.archivedIds.includes(id);
+}
+
+export function setArchived(id: string, archived: boolean) {
+  const set = new Set(store.archivedIds);
+  if (archived) set.add(id);
+  else set.delete(id);
+  store.archivedIds = [...set];
+  localStorage.setItem("oc.archivedIds", JSON.stringify(store.archivedIds));
+}
 
 watch(
   () => store.sidebarCollapsed,
@@ -81,11 +142,40 @@ function onPush(p: Push) {
     case "events": {
       const tr = store.transcripts[p.conversationId];
       if (tr) apply(tr, p.events);
+      for (const ev of p.events) {
+        if (ev.type === "turn_end") {
+          const reason = String((ev as { stopReason?: string }).stopReason ?? "");
+          if (reason === "error" || reason === "max_tokens") {
+            store.turnOutcome[p.conversationId] = "error";
+          } else if (reason === "end_turn") {
+            store.turnOutcome[p.conversationId] = store.activeId === p.conversationId ? "done" : "unseen";
+          }
+        }
+      }
       return;
     }
-    case "live":
+    case "live": {
+      const prev = store.lives[p.conversationId]?.status;
       store.lives[p.conversationId] = p.live;
+      captureModels(store.metas[p.conversationId]?.agentId, p.live.configOptions);
+      if (p.live.status === "running") {
+        delete store.turnOutcome[p.conversationId];
+        manualStop.delete(p.conversationId);
+      } else if (p.live.status === "error") {
+        store.turnOutcome[p.conversationId] = "error";
+        steerPending.delete(p.conversationId);
+      } else if (prev === "running" && (p.live.status === "ready" || p.live.status === "idle")) {
+        if (!store.turnOutcome[p.conversationId]) {
+          store.turnOutcome[p.conversationId] = store.activeId === p.conversationId ? "done" : "unseen";
+        }
+        const shouldSteer = steerPending.delete(p.conversationId);
+        const wasManualStop = manualStop.delete(p.conversationId);
+        if (shouldSteer || !wasManualStop) {
+          void drainQueue(p.conversationId);
+        }
+      }
       return;
+    }
     case "meta":
       store.metas[p.conversationId] = p.meta;
       return;
@@ -93,6 +183,11 @@ function onPush(p: Push) {
       delete store.metas[p.conversationId];
       delete store.transcripts[p.conversationId];
       delete store.lives[p.conversationId];
+      delete store.turnOutcome[p.conversationId];
+      delete store.queues[p.conversationId];
+      steerPending.delete(p.conversationId);
+      manualStop.delete(p.conversationId);
+      if (isArchived(p.conversationId)) setArchived(p.conversationId, false);
       if (store.activeId === p.conversationId) store.activeId = null;
       return;
     case "settings":
@@ -143,6 +238,7 @@ async function load(id: string) {
     store.transcripts[id] = tr;
     store.lives[id] = conv.live;
     store.metas[id] = conv.meta;
+    captureModels(conv.meta.agentId, conv.live.configOptions);
   } finally {
     store.loading[id] = false;
   }
@@ -152,8 +248,12 @@ async function load(id: string) {
 
 export async function select(id: string | null) {
   store.activeId = id;
-  if (id) localStorage.setItem("oc.active", id);
-  else localStorage.removeItem("oc.active");
+  if (id) {
+    localStorage.setItem("oc.active", id);
+    if (store.turnOutcome[id] === "unseen") store.turnOutcome[id] = "done";
+  } else {
+    localStorage.removeItem("oc.active");
+  }
   if (id && !store.transcripts[id]) await load(id);
 }
 
@@ -161,14 +261,94 @@ export function newConversation() {
   void select(null);
 }
 
-export async function start(agentId: string, cwd: string, blocks: Block[]) {
+export async function start(
+  agentId: string,
+  cwd: string,
+  blocks: Block[],
+  initialModel?: { configId: string; value: string } | null,
+) {
   const meta = await api.create(agentId, cwd);
   store.metas[meta.id] = meta;
   store.transcripts[meta.id] = emptyTranscript();
   store.lives[meta.id] = { ...idleLive(), status: "connecting" };
   await select(meta.id);
+  if (initialModel?.configId && initialModel.value) {
+    try {
+      await api.connect(meta.id);
+      await api.setConfig(meta.id, initialModel.configId, initialModel.value);
+    } catch {
+      /* fall back to agent default model if pre-selection fails */
+    }
+  }
   if (blocks.length) await send(meta.id, blocks);
   return meta;
+}
+
+const steerPending = new Set<string>();
+const manualStop = new Set<string>();
+const draining = new Set<string>();
+let queueSeq = 0;
+
+export function enqueueMessage(id: string, blocks: Block[]) {
+  if (!blocks.length) return;
+  store.drafts[id] = "";
+  const list = store.queues[id] ?? [];
+  store.queues[id] = [...list, { id: `q-${Date.now()}-${++queueSeq}`, blocks, createdAt: Date.now() }];
+}
+
+export function removeQueued(id: string, queueId: string) {
+  const list = store.queues[id];
+  if (!list) return;
+  store.queues[id] = list.filter((item) => item.id !== queueId);
+}
+
+export function popQueuedToDraft(id: string, queueId: string) {
+  const list = store.queues[id];
+  if (!list) return;
+  const target = list.find((item) => item.id === queueId);
+  if (!target) return;
+  store.queues[id] = list.filter((item) => item.id !== queueId);
+  const text = target.blocks
+    .filter((b): b is Extract<Block, { type: "text" }> => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+  if (text) {
+    store.drafts[id] = store.drafts[id] ? `${text}\n${store.drafts[id]}` : text;
+  }
+}
+
+async function drainQueue(id: string) {
+  if (draining.has(id)) return;
+  const list = store.queues[id];
+  if (!list?.length) return;
+  if (store.lives[id]?.status === "running") return;
+  const [next, ...rest] = list;
+  store.queues[id] = rest;
+  draining.add(id);
+  try {
+    await api.send(id, next.blocks);
+  } catch {
+    // Restore failed item to the front so the user doesn't lose it.
+    store.queues[id] = [next, ...(store.queues[id] ?? [])];
+  } finally {
+    draining.delete(id);
+  }
+}
+
+export async function steerQueued(id: string, queueId: string) {
+  const list = store.queues[id];
+  if (!list?.length) return;
+  const idx = list.findIndex((item) => item.id === queueId);
+  if (idx === -1) return;
+  const [target] = list.splice(idx, 1);
+  store.queues[id] = [target, ...list];
+  if (store.lives[id]?.status === "running") {
+    steerPending.add(id);
+    manualStop.delete(id);
+    await api.cancel(id);
+  } else {
+    await drainQueue(id);
+  }
 }
 
 export async function send(id: string, blocks: Block[]) {
@@ -176,7 +356,11 @@ export async function send(id: string, blocks: Block[]) {
   await api.send(id, blocks);
 }
 
-export const cancel = (id: string) => api.cancel(id);
+export const cancel = (id: string) => {
+  manualStop.add(id);
+  steerPending.delete(id);
+  return api.cancel(id);
+};
 export const respond = (id: string, requestId: string, optionId: string) => api.respond(id, requestId, optionId);
 export const setMode = (id: string, modeId: string) => api.setMode(id, modeId);
 export const setConfig = (id: string, configId: string, value: string | boolean) => api.setConfig(id, configId, value);

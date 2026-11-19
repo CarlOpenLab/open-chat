@@ -183,6 +183,12 @@ export interface DirListing {
   isRepo: boolean;
 }
 
+export interface GitInfo {
+  isRepo: boolean;
+  branch: string;
+  branches: string[];
+}
+
 export type Push =
   | { kind: "events"; conversationId: string; events: HostEvent[] }
   | { kind: "live"; conversationId: string; live: LiveState }

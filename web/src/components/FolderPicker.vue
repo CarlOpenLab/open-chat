@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FolderOutlined, HomeOutlined, RightOutlined, UpOutlined, CheckOutlined, HistoryOutlined } from "@antdv-next/icons";
+import { CheckOutlined, FolderOutlined, HistoryOutlined, HomeOutlined, RightOutlined, SearchOutlined, UpOutlined } from "@antdv-next/icons";
 import { Button, Input, Modal, Spin } from "antdv-next";
 import { computed, ref, watch } from "vue";
 import { api, inApp } from "../api";
@@ -11,12 +11,14 @@ const emit = defineEmits<{ "update:open": [boolean]; pick: [path: string] }>();
 
 const current = ref<DirListing | null>(null);
 const typed = ref("");
+const filter = ref("");
 const loading = ref(false);
 const error = ref("");
 
 async function go(path: string) {
   loading.value = true;
   error.value = "";
+  filter.value = "";
   try {
     current.value = await api.listDir(path);
     typed.value = current.value.path;
@@ -33,6 +35,36 @@ watch(
     if (open) void go(props.path || store.settings?.recentDirs?.[0] || "~");
   },
 );
+
+const breadcrumbs = computed<{ label: string; path: string }[]>(() => {
+  const p = current.value?.path;
+  if (!p) return [];
+  const home = store.boot?.home;
+  if (home && (p === home || p.startsWith(home + "/"))) {
+    const rel = p.slice(home.length).split("/").filter(Boolean);
+    const items = [{ label: "~", path: home }];
+    let acc = home;
+    for (const seg of rel) {
+      acc = `${acc}/${seg}`;
+      items.push({ label: seg, path: acc });
+    }
+    return items;
+  }
+  const segs = p.split("/").filter(Boolean);
+  const items = [{ label: "/", path: "/" }];
+  let acc = "";
+  for (const seg of segs) {
+    acc = `${acc}/${seg}`;
+    items.push({ label: seg, path: acc });
+  }
+  return items;
+});
+
+const visibleDirs = computed(() => {
+  const dirs = current.value?.dirs ?? [];
+  const q = filter.value.trim().toLowerCase();
+  return q ? dirs.filter((d) => d.toLowerCase().includes(q)) : dirs;
+});
 
 const shortcuts = computed(() => {
   const list: { label: string; path: string; icon: "home" | "recent" }[] = [];
@@ -60,11 +92,12 @@ const parent = computed(() => current.value?.parent ?? "");
   <Modal
     :open="props.open"
     :width="560"
+    centered
     title="选择工作目录"
     :footer="null"
     @cancel="emit('update:open', false)"
   >
-    <p class="tip">agent 会在这个目录里读写文件、跑命令。</p>
+    <p class="tip">Agent 将在这个目录里读写文件与执行命令。</p>
 
     <div class="path-row">
       <Input
@@ -88,6 +121,30 @@ const parent = computed(() => current.value?.parent ?? "");
       </button>
     </div>
 
+    <div v-if="breadcrumbs.length" class="crumbs">
+      <template v-for="(c, i) in breadcrumbs" :key="c.path">
+        <span v-if="i > 0" class="crumb-sep">/</span>
+        <button
+          class="crumb mono"
+          :class="{ current: i === breadcrumbs.length - 1 }"
+          @click="go(c.path)"
+        >
+          {{ c.label }}
+        </button>
+      </template>
+      <Input
+        v-if="(current?.dirs ?? []).length > 8"
+        v-model:value="filter"
+        size="small"
+        variant="borderless"
+        allow-clear
+        placeholder="筛选子目录…"
+        class="dir-filter"
+      >
+        <template #prefix><SearchOutlined class="faint" /></template>
+      </Input>
+    </div>
+
     <div class="list">
       <button v-if="parent" class="row up" @click="go(parent)">
         <UpOutlined />
@@ -95,12 +152,14 @@ const parent = computed(() => current.value?.parent ?? "");
       </button>
       <Spin v-if="loading" size="small" class="spin" />
       <template v-else>
-        <button v-for="d in current?.dirs ?? []" :key="d" class="row" @click="go(`${current?.path}/${d}`)">
+        <button v-for="d in visibleDirs" :key="d" class="row" @click="go(`${current?.path}/${d}`)">
           <FolderOutlined class="dir-icon" />
           <span class="name">{{ d }}</span>
           <RightOutlined class="chev" />
         </button>
-        <div v-if="!(current?.dirs ?? []).length" class="empty faint">这个目录里没有子目录</div>
+        <div v-if="!visibleDirs.length" class="empty faint">
+          {{ filter ? "没有匹配的子目录" : "这个目录里没有子目录" }}
+        </div>
       </template>
     </div>
 
@@ -151,6 +210,7 @@ const parent = computed(() => current.value?.parent ?? "");
   font-size: 11.5px;
   cursor: pointer;
   max-width: 180px;
+  transition: background 0.13s, color 0.13s, border-color 0.13s;
 }
 .quick-item span {
   overflow: hidden;
@@ -159,11 +219,50 @@ const parent = computed(() => current.value?.parent ?? "");
 }
 .quick-item:hover {
   background: var(--hover);
+  border-color: var(--border-strong);
   color: var(--text);
+}
+.crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 8px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: var(--hover);
+  min-height: 28px;
+}
+.crumb {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11.5px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.crumb:hover {
+  background: var(--active);
+  color: var(--text);
+}
+.crumb.current {
+  color: var(--text);
+  font-weight: 560;
+}
+.crumb-sep {
+  color: var(--text-3);
+  opacity: 0.5;
+  font-size: 11px;
+}
+.dir-filter {
+  margin-left: auto;
+  width: 136px;
 }
 .list {
   margin-top: 8px;
-  height: 260px;
+  height: 248px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -183,6 +282,7 @@ const parent = computed(() => current.value?.parent ?? "");
   font-size: 13px;
   color: var(--text);
   cursor: pointer;
+  transition: background 0.12s;
 }
 .row:hover {
   background: var(--hover);
@@ -201,6 +301,7 @@ const parent = computed(() => current.value?.parent ?? "");
   font-size: 9px;
   color: var(--text-3);
   opacity: 0;
+  transition: opacity 0.12s;
 }
 .row:hover .chev {
   opacity: 1;
@@ -238,6 +339,6 @@ const parent = computed(() => current.value?.parent ?? "");
   color: var(--ok);
   background: color-mix(in srgb, var(--ok) 12%, transparent);
   border-radius: 5px;
-  padding: 1px 6px;
+  padding: 1px 7px;
 }
 </style>

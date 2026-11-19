@@ -2,70 +2,88 @@
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI",
     "Microsoft YaHei", sans-serif;
   --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
-  --titlebar: var(--mygo-titlebar-height, 52px);
-  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --radius: 10px;
-  --content-width: 780px;
+  --titlebar: var(--mygo-titlebar-height, 48px);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --radius: 12px;
+  --content-width: 840px;
 }
 
 :root[data-theme="light"] {
-  --bg: #fbfbfa;
-  --bg-sidebar: #f3f3f1;
-  --surface: #ffffff;
-  --surface-2: #f6f6f4;
-  --hover: rgba(15, 15, 20, 0.045);
-  --active: rgba(15, 15, 20, 0.075);
-  --border: rgba(15, 15, 20, 0.08);
-  --border-strong: rgba(15, 15, 20, 0.14);
-  --text: #1d1d1f;
-  --text-2: #5f5f66;
-  --text-3: #8e8e94;
-  --accent: #5b5bd6;
-  --accent-soft: rgba(91, 91, 214, 0.1);
-  --accent-text: #4747c2;
-  --ok: #1f9d63;
-  --warn: #c98219;
-  --warn-soft: rgba(201, 130, 25, 0.1);
-  --err: #d9473f;
-  --err-soft: rgba(217, 71, 63, 0.08);
-  --user-bubble: #efeff2;
-  --code-bg: #f6f6f8;
-  --diff-add: rgba(31, 157, 99, 0.1);
-  --diff-add-text: #17794c;
-  --diff-del: rgba(217, 71, 63, 0.09);
-  --diff-del-text: #b2342d;
-  --shadow-composer: 0 1px 2px rgba(20, 20, 40, 0.04), 0 8px 28px rgba(20, 20, 40, 0.07);
-  --shadow-pop: 0 12px 32px rgba(20, 20, 40, 0.12), 0 2px 6px rgba(20, 20, 40, 0.05);
+  --bg: #edf1f7;
+  --bg-sidebar: rgba(255, 255, 255, 0.48);
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-2: rgba(255, 255, 255, 0.46);
+  --surface-strong: rgba(255, 255, 255, 0.86);
+  --modal-bg: #ffffff;
+  --glass-blur: blur(28px) saturate(185%);
+  --glass-blur-sm: blur(18px) saturate(170%);
+  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --hover: rgba(15, 23, 42, 0.05);
+  --active: rgba(15, 23, 42, 0.085);
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.13);
+  --text: #111318;
+  --text-2: #4b5563;
+  --text-3: #7c8596;
+  --ink: #14161c;
+  --ink-inv: #ffffff;
+  --accent: #14161c;
+  --accent-soft: rgba(20, 22, 28, 0.07);
+  --accent-text: #14161c;
+  --ok: #16a34a;
+  --ok-soft: rgba(22, 163, 74, 0.12);
+  --warn: #d97706;
+  --warn-soft: rgba(217, 119, 6, 0.12);
+  --err: #dc2626;
+  --err-soft: rgba(220, 38, 38, 0.1);
+  --user-bubble: rgba(255, 255, 255, 0.78);
+  --code-bg: rgba(248, 250, 252, 0.78);
+  --diff-add: rgba(22, 163, 74, 0.1);
+  --diff-add-text: #15803d;
+  --diff-del: rgba(220, 38, 38, 0.09);
+  --diff-del-text: #b91c1c;
+  --shadow-composer: 0 8px 32px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --shadow-card: 0 2px 10px rgba(15, 23, 42, 0.045), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --shadow-pop: 0 18px 44px rgba(15, 23, 42, 0.12), 0 2px 8px rgba(15, 23, 42, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.92);
 }
 
 :root[data-theme="dark"] {
-  --bg: #161617;
-  --bg-sidebar: #111112;
-  --surface: #1d1d1f;
-  --surface-2: #222225;
-  --hover: rgba(255, 255, 255, 0.05);
-  --active: rgba(255, 255, 255, 0.085);
-  --border: rgba(255, 255, 255, 0.075);
-  --border-strong: rgba(255, 255, 255, 0.13);
-  --text: #ececee;
-  --text-2: #a1a1a6;
-  --text-3: #6f6f75;
-  --accent: #8b8cff;
-  --accent-soft: rgba(139, 140, 255, 0.14);
-  --accent-text: #a5a6ff;
-  --ok: #3fb27f;
-  --warn: #e0a34a;
-  --warn-soft: rgba(224, 163, 74, 0.12);
-  --err: #ef6b6b;
-  --err-soft: rgba(239, 107, 107, 0.1);
-  --user-bubble: #2a2a2e;
-  --code-bg: #1a1a1c;
-  --diff-add: rgba(63, 178, 127, 0.14);
-  --diff-add-text: #5fd39e;
-  --diff-del: rgba(239, 107, 107, 0.13);
-  --diff-del-text: #ff8a85;
-  --shadow-composer: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 10px 30px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 10px 32px rgba(0, 0, 0, 0.5);
+  --bg: #0b0d13;
+  --bg-sidebar: rgba(16, 19, 27, 0.56);
+  --surface: rgba(24, 28, 38, 0.68);
+  --surface-2: rgba(20, 24, 33, 0.52);
+  --surface-strong: rgba(30, 35, 48, 0.82);
+  --modal-bg: #161922;
+  --glass-blur: blur(30px) saturate(175%);
+  --glass-blur-sm: blur(18px) saturate(160%);
+  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  --hover: rgba(255, 255, 255, 0.06);
+  --active: rgba(255, 255, 255, 0.1);
+  --border: rgba(255, 255, 255, 0.085);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --text: #f1f4f9;
+  --text-2: #9ca3b5;
+  --text-3: #687083;
+  --ink: #f4f6fb;
+  --ink-inv: #0b0d13;
+  --accent: #f4f6fb;
+  --accent-soft: rgba(244, 246, 251, 0.1);
+  --accent-text: #f4f6fb;
+  --ok: #34d399;
+  --ok-soft: rgba(52, 211, 153, 0.14);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.14);
+  --err: #f87171;
+  --err-soft: rgba(248, 113, 113, 0.14);
+  --user-bubble: rgba(36, 42, 56, 0.72);
+  --code-bg: rgba(14, 17, 24, 0.72);
+  --diff-add: rgba(52, 211, 153, 0.13);
+  --diff-add-text: #6ee7b7;
+  --diff-del: rgba(248, 113, 113, 0.13);
+  --diff-del-text: #fca5a5;
+  --shadow-composer: 0 14px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.11);
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --shadow-pop: 0 20px 52px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 * {
@@ -79,15 +97,15 @@ body,
   margin: 0;
 }
 
-/* ConfigProvider/App wrappers must not break the column of the shell. */
 #app > *,
 .ant-app {
   height: 100%;
+  background: transparent;
 }
 
 body {
   font-family: var(--font);
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.6;
   color: var(--text);
   background: var(--bg);
@@ -95,11 +113,24 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overflow: hidden;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+button,
+.drag,
+.topbar,
+.sidebar .top,
+.sidebar .controls,
+.sidebar .foot,
+.kbd {
   user-select: none;
   -webkit-user-select: none;
 }
 
-/* Text the user may want to copy. */
+input,
+textarea,
+[contenteditable="true"],
 .selectable,
 .selectable * {
   user-select: text;
@@ -110,8 +141,16 @@ button {
   font: inherit;
 }
 
+button:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ink) 22%, transparent);
+}
+
 ::selection {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--ink) 16%, transparent);
 }
 
 .drag {
@@ -126,15 +165,102 @@ button {
   -webkit-app-region: no-drag;
 }
 
-/* Thin, quiet scrollbars. */
+/* Acrylic overlays for Antdv Next Popovers, Dropdowns, Selects */
+.ant-popover .ant-popover-inner,
+.ant-dropdown .ant-dropdown-menu,
+.ant-select-dropdown {
+  background: var(--surface-strong) !important;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop) !important;
+}
+/* Harmonize @antdv-next/x-pro MessageScroller preview & back-to-bottom button with Beacon Acrylic */
+.ant-message-scroller-preview,
+.ant-message-scroller-back-to-bottom-button {
+  background: var(--surface-strong) !important;
+  backdrop-filter: var(--glass-blur) !important;
+  -webkit-backdrop-filter: var(--glass-blur) !important;
+  border: 1px solid var(--border-strong) !important;
+  box-shadow: var(--shadow-pop) !important;
+  color: var(--text) !important;
+}
+/* Solid opaque surface for Modal dialogs & strict viewport-height fit */
+.ant-modal-wrap {
+  padding: 20px 16px;
+}
+.ant-modal {
+  top: 0 !important;
+  padding-bottom: 0 !important;
+  max-height: calc(100dvh - 40px);
+}
+.ant-modal .ant-modal-container,
+.ant-modal .ant-modal-content {
+  background: var(--modal-bg) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop) !important;
+  border-radius: 14px !important;
+  max-height: calc(100dvh - 40px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ant-modal .ant-modal-header {
+  flex: none;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+.ant-modal .ant-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+.ant-modal .ant-modal-footer {
+  flex: none;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+.oc-provider-popover .ant-popover-container,
+.oc-provider-popover .ant-popover-inner {
+  padding: 0 !important;
+  border-radius: 14px !important;
+  background: var(--modal-bg) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid var(--border-strong) !important;
+  box-shadow: var(--shadow-pop) !important;
+  overflow: hidden;
+}
+.oc-provider-popover .ant-popover-inner-content,
+.oc-provider-popover .ant-popover-content {
+  padding: 0 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 7px;
+  height: 7px;
 }
 ::-webkit-scrollbar-thumb {
   background: transparent;
-  border-radius: 10px;
-  border: 3px solid transparent;
+  border-radius: 7px;
+  border: 2px solid transparent;
   background-clip: content-box;
 }
 *:hover::-webkit-scrollbar-thumb {
@@ -147,14 +273,14 @@ button {
 kbd,
 .kbd {
   font-family: var(--font);
-  font-size: 11px;
+  font-size: 10.5px;
   line-height: 16px;
   min-width: 18px;
-  padding: 0 4px;
+  padding: 0 4.5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: 5px;
   color: var(--text-3);
   background: var(--hover);
   border: 1px solid var(--border);
@@ -172,7 +298,6 @@ kbd,
   color: var(--text-3);
 }
 
-/* A breathing dot for "working". */
 @keyframes oc-pulse {
   0%,
   100% {
@@ -206,7 +331,7 @@ kbd,
 @keyframes oc-rise {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;
@@ -215,14 +340,14 @@ kbd,
 }
 
 .rise {
-  animation: oc-rise 0.32s var(--ease) both;
+  animation: oc-rise 0.22s var(--ease) both;
 }
 
 /* ---------------------------------------------------------------- markdown */
 
 .oc-md {
-  font-size: 14.5px;
-  line-height: 1.72;
+  font-size: 14px;
+  line-height: 1.74;
   color: var(--text);
   word-break: break-word;
 }
@@ -233,7 +358,7 @@ kbd,
   margin-bottom: 0 !important;
 }
 .oc-md p {
-  margin: 0 0 0.75em;
+  margin: 0 0 0.78em;
 }
 .oc-md h1,
 .oc-md h2,
@@ -241,17 +366,17 @@ kbd,
 .oc-md h4 {
   font-weight: 620;
   line-height: 1.35;
-  margin: 1.3em 0 0.55em;
-  letter-spacing: -0.01em;
+  margin: 1.3em 0 0.5em;
+  letter-spacing: -0.02em;
 }
 .oc-md h1 {
-  font-size: 1.45em;
+  font-size: 1.36em;
 }
 .oc-md h2 {
-  font-size: 1.22em;
+  font-size: 1.18em;
 }
 .oc-md h3 {
-  font-size: 1.07em;
+  font-size: 1.05em;
 }
 .oc-md ul,
 .oc-md ol {
@@ -265,43 +390,47 @@ kbd,
   color: var(--text-3);
 }
 .oc-md a {
-  color: var(--accent-text);
-  text-decoration: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
 }
 .oc-md a:hover {
-  border-bottom-color: var(--accent);
+  text-decoration-color: var(--text);
 }
 .oc-md blockquote {
-  margin: 0 0 0.8em;
-  padding: 2px 0 2px 14px;
-  border-left: 3px solid var(--border-strong);
+  margin: 0 0 0.85em;
+  padding: 4px 0 4px 14px;
+  border-left: 2px solid var(--border-strong);
   color: var(--text-2);
 }
 .oc-md :not(pre) > code {
   font-family: var(--mono);
-  font-size: 0.86em;
-  padding: 0.12em 0.4em;
-  border-radius: 5px;
-  background: var(--hover);
+  font-size: 0.84em;
+  padding: 0.12em 0.44em;
+  border-radius: 6px;
+  background: var(--surface-2);
   border: 1px solid var(--border);
 }
 .oc-md table {
   border-collapse: separate;
   border-spacing: 0;
-  margin: 0.4em 0 1em;
-  font-size: 13.5px;
+  margin: 0.5em 0 1em;
+  font-size: 13px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 11px;
   overflow: hidden;
   display: block;
   max-width: 100%;
   overflow-x: auto;
   width: fit-content;
+  background: var(--surface-2);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
 }
 .oc-md th,
 .oc-md td {
-  padding: 7px 12px;
+  padding: 8px 13px;
   border-bottom: 1px solid var(--border);
   text-align: left;
 }
@@ -309,8 +438,10 @@ kbd,
   border-bottom: none;
 }
 .oc-md th {
-  background: var(--surface-2);
+  background: var(--hover);
   font-weight: 600;
+  font-size: 12px;
+  color: var(--text-2);
 }
 .oc-md hr {
   border: none;
@@ -319,21 +450,21 @@ kbd,
 }
 .oc-md img {
   max-width: 100%;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 .oc-md pre.oc-plain-code {
   font-family: var(--mono);
   font-size: 12.5px;
   background: var(--code-bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 12px 14px;
   overflow: auto;
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
 }
-/* The highlighter brings its own frame; the <pre> the markdown puts around
-   it must not add a second one. */
 .oc-md pre:has(> [class*="code-highlighter"]) {
-  margin: 0.3em 0 1em;
+  margin: 0.45em 0 1em;
   padding: 0;
   background: none;
   border: none;
@@ -342,16 +473,30 @@ kbd,
 .oc-md [class*="code-highlighter"] {
   margin: 0;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
   background: var(--code-bg);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  box-shadow: var(--shadow-card);
 }
 .oc-md [class*="code-highlighter-header"] {
   background: var(--surface-2);
+  font-family: var(--mono);
   font-size: 11.5px;
   color: var(--text-3);
   border-bottom: 1px solid var(--border);
-  padding: 5px 12px;
+  padding: 6px 12px;
+  min-height: 34px;
+}
+.oc-md [class*="code-highlighter-header-title"] {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-transform: lowercase;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  color: var(--text-3);
 }
 .oc-md [class*="code-highlighter-content"] {
   background: transparent;
@@ -362,5 +507,5 @@ kbd,
 .oc-md [class*="code-highlighter-content"] code {
   font-family: var(--mono);
   font-size: 12.5px;
-  line-height: 1.6;
+  line-height: 1.62;
 }

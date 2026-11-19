@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="oc-bg" x1="16" y1="12" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#F6F7FA" />
+    </linearGradient>
+    <clipPath id="oc-pill-a">
+      <path d="M 75.36 58.27 A 16.00 16.00 0 0 0 52.73 35.64 L 33.64 54.73 A 16.00 16.00 0 0 0 56.27 77.36 Z" />
+    </clipPath>
+    <clipPath id="oc-pill-b">
+      <path d="M 94.36 73.27 A 16.00 16.00 0 0 0 71.73 50.64 L 52.64 69.73 A 16.00 16.00 0 0 0 75.27 92.36 Z" />
+    </clipPath>
+  </defs>
+
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#oc-bg)" stroke="#E4E7EE" stroke-width="1.5" />
+
+  <path d="M 75.36 58.27 A 16.00 16.00 0 0 0 52.73 35.64 L 33.64 54.73 A 16.00 16.00 0 0 0 56.27 77.36 Z" stroke="#4353FF" stroke-width="2.4" clip-path="url(#oc-pill-b)" opacity="0.85" />
+  <path d="M 94.36 73.27 A 16.00 16.00 0 0 0 71.73 50.64 L 52.64 69.73 A 16.00 16.00 0 0 0 75.27 92.36 Z" stroke="#4353FF" stroke-width="2.4" clip-path="url(#oc-pill-a)" opacity="0.85" />
+
+  <path fill="#14161C" fill-rule="evenodd" clip-rule="evenodd" d="M 75.36 58.27 A 16.00 16.00 0 0 0 52.73 35.64 L 33.64 54.73 A 16.00 16.00 0 0 0 56.27 77.36 Z M 94.36 73.27 A 16.00 16.00 0 0 0 71.73 50.64 L 52.64 69.73 A 16.00 16.00 0 0 0 75.27 92.36 Z" />
+</svg>

@@ -165,5 +165,12 @@ type DirListing struct {
 	IsRepo bool     `json:"isRepo"`
 }
 
+// GitInfo describes the git repository and local branches for a directory.
+type GitInfo struct {
+	IsRepo   bool     `json:"isRepo"`
+	Branch   string   `json:"branch"`
+	Branches []string `json:"branches"`
+}
+
 // Block is one piece of a user's message (ACP ContentBlock).
 type Block = map[string]any

@@ -20,6 +20,9 @@ importers:
       '@antdv-next/x-markdown':
         specifier: 0.3.0
         version: 0.3.0(vue@3.5.45(typescript@5.9.3))
+      '@antdv-next/x-pro':
+        specifier: ^0.0.1
+        version: 0.0.1(vue@3.5.45(typescript@5.9.3))
       '@cc-heart/acp-hub-adapter-claude':
         specifier: 0.0.1
         version: 0.0.1(zod@4.6.7)
@@ -106,6 +109,11 @@ packages:
 
   '@antdv-next/x-markdown@0.3.0':
     resolution: {integrity: sha512-ij+g3y4mUel6gNrWBQFYbf7HKKPOebMIzy23j4u3jAuYmDIzu64/6P2WDEAhYkQA2E+ys2dtD0ipBAMzHwEqZg==}
+    peerDependencies:
+      vue: '>=3.5.0'
+
+  '@antdv-next/x-pro@0.0.1':
+    resolution: {integrity: sha512-/QMJncMbxLQ5TQ+764sts4y25t61WJ9UrbeuWT/zothYWf1FPmBD4e16DoxKnm4tktRwlvVpaCu6rMbf4wXs2g==}
     peerDependencies:
       vue: '>=3.5.0'
 
@@ -1591,6 +1599,17 @@ snapshots:
       katex: 0.16.47
       marked: 16.4.2
       vue: 3.5.45(typescript@5.9.3)
+
+  '@antdv-next/x-pro@0.0.1(vue@3.5.45(typescript@5.9.3))':
+    dependencies:
+      '@antdv-next/cssinjs': 1.2.0(vue@3.5.45(typescript@5.9.3))
+      '@v-c/util': 1.4.2(vue@3.5.45(typescript@5.9.3))
+      antdv-next: 1.8.2(vue@3.5.45(typescript@5.9.3))
+      vue: 3.5.45(typescript@5.9.3)
+    transitivePeerDependencies:
+      - date-fns
+      - luxon
+      - moment
 
   '@antdv-next/x@1.2.7(antdv-next@1.8.2(vue@3.5.45(typescript@5.9.3)))(vue@3.5.45(typescript@5.9.3))':
     dependencies:

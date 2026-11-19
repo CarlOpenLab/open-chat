@@ -5,6 +5,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -721,6 +722,73 @@ func listDir(path string) (DirListing, error) {
 func isDir(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
+}
+
+func (h *Host) runGit(ctx context.Context, dir string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	gitBin := lookPath(h.environ(), "git")
+	if gitBin == "" {
+		gitBin = "git"
+	}
+	fullArgs := append([]string{"-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, gitBin, fullArgs...)
+	cmd.Env = h.environ()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", errors.New(msg)
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func (h *Host) gitInfo(ctx context.Context, path string) (GitInfo, error) {
+	dir := expandHome(strings.TrimSpace(path))
+	if dir == "" || !isDir(dir) {
+		return GitInfo{Branches: []string{}}, nil
+	}
+	out, err := h.runGit(ctx, dir, "rev-parse", "--is-inside-work-tree")
+	if err != nil || out != "true" {
+		return GitInfo{Branches: []string{}}, nil
+	}
+	branch, err := h.runGit(ctx, dir, "symbolic-ref", "--short", "HEAD")
+	if err != nil || branch == "" {
+		branch, _ = h.runGit(ctx, dir, "rev-parse", "--short", "HEAD")
+	}
+	rawBranches, _ := h.runGit(ctx, dir, "for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads/")
+	branches := []string{}
+	for _, line := range strings.Split(rawBranches, "\n") {
+		if b := strings.TrimSpace(line); b != "" {
+			branches = append(branches, b)
+		}
+	}
+	return GitInfo{IsRepo: true, Branch: branch, Branches: branches}, nil
+}
+
+func (h *Host) gitCheckout(ctx context.Context, path, branch string) (GitInfo, error) {
+	dir := expandHome(strings.TrimSpace(path))
+	if dir == "" || !isDir(dir) {
+		return GitInfo{}, errors.New("工作目录不存在")
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" || strings.HasPrefix(branch, "-") {
+		return GitInfo{}, errors.New("无效的分支名")
+	}
+	if _, err := h.runGit(ctx, dir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+		return GitInfo{}, fmt.Errorf("本地分支不存在：%s", branch)
+	}
+	if _, err := h.runGit(ctx, dir, "checkout", branch); err != nil {
+		return GitInfo{}, fmt.Errorf("切换分支失败：%s", err.Error())
+	}
+	return h.gitInfo(ctx, dir)
 }
 
 func logf(format string, args ...any) { log.Printf("open-chat: "+format, args...) }

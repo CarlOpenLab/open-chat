@@ -163,6 +163,16 @@ func (a *API) SaveSettings(s Settings) (Settings, error) {
 // ListDir lists the subdirectories of path, for the folder picker.
 func (a *API) ListDir(path string) (DirListing, error) { return listDir(path) }
 
+// GitInfo returns the current git branch and local branches for path.
+func (a *API) GitInfo(ctx context.Context, path string) (GitInfo, error) {
+	return a.h.gitInfo(ctx, path)
+}
+
+// GitCheckout switches the git repository at path to branch and returns updated info.
+func (a *API) GitCheckout(ctx context.Context, path, branch string) (GitInfo, error) {
+	return a.h.gitCheckout(ctx, path, branch)
+}
+
 // PickFolder shows the system's folder dialog; "" when canceled or unavailable.
 func (a *API) PickFolder(ctx context.Context) (string, error) {
 	if a.h.opts.PickFolder == nil {

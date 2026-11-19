@@ -2,25 +2,28 @@
 import { Conversations } from "@antdv-next/x";
 import type { ConversationItemType } from "@antdv-next/x";
 import {
+  ArrowLeftOutlined,
   DeleteOutlined,
   EditOutlined,
-  MoreOutlined,
-  PushpinOutlined,
-  PushpinFilled,
-  SearchOutlined,
-  SettingOutlined,
+  InboxOutlined,
   MenuFoldOutlined,
-  PlusOutlined,
+  MessageOutlined,
+  PushpinFilled,
+  PushpinOutlined,
+  RollbackOutlined,
 } from "@antdv-next/icons";
 import { Dropdown, Input, Modal, Tooltip, message } from "antdv-next";
 import { computed, h, nextTick, ref } from "vue";
-import { agentById, isDark, isMac, newConversation, pin, remove, rename, select, sortedMetas, store, saveSettings } from "../store";
+import { isArchived, isDark, isMac, newConversation, pin, remove, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
 import type { Meta } from "../types";
+import ProviderIcon from "./ProviderIcon.vue";
 
 const renaming = ref<Meta | null>(null);
 const newTitle = ref("");
 const renameInput = ref<{ focus: () => void } | null>(null);
 const toDelete = ref<Meta | null>(null);
+const avatarInput = ref<HTMLInputElement | null>(null);
+const showArchived = ref(false);
 
 const groupRank = (m: Meta) => {
   if (m.pinned) return 0;
@@ -35,51 +38,116 @@ const groupRank = (m: Meta) => {
 };
 const groupName = (m: Meta) => ["置顶", "今天", "昨天", "近 7 天", "更早"][groupRank(m)];
 
+const archivedCount = computed(() => sortedMetas.value.filter((m) => isArchived(m.id)).length);
+
 const filtered = computed(() => {
   const q = store.search.trim().toLowerCase();
   return sortedMetas.value
+    .filter((m) => (showArchived.value ? isArchived(m.id) : !isArchived(m.id)))
     .filter((m) => !q || m.title.toLowerCase().includes(q) || m.cwd.toLowerCase().includes(q) || m.agentName.toLowerCase().includes(q))
     .sort((a, b) => groupRank(a) - groupRank(b) || b.updatedAt - a.updatedAt);
 });
 
 const items = computed<ConversationItemType[]>(() =>
-  filtered.value.map((m) => ({ key: m.id, label: m.title, group: groupName(m), "data-meta": m })),
+  filtered.value.map((m) => ({
+    key: m.id,
+    label: m.title,
+    group: showArchived.value ? "已归档" : groupName(m),
+    "data-meta": m,
+  })),
 );
 
 function ago(t: number) {
   const s = Math.max(1, Math.round((Date.now() - t) / 1000));
   if (s < 60) return "刚刚";
-  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-  if (s < 86400 * 30) return `${Math.floor(s / 86400)} 天前`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 86400 * 30) return `${Math.floor(s / 86400)}d`;
   return new Date(t).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
-/** A conversation's row: title, the agent it runs on, and live state. */
+function shortDir(cwd: string) {
+  const home = store.boot?.home;
+  if (home && cwd === home) return "~";
+  return cwd.split("/").filter(Boolean).pop() || cwd;
+}
+
+function statusNodeFor(m: Meta) {
+  const status = store.lives[m.id]?.status ?? m.status;
+  const outcome = store.turnOutcome[m.id];
+
+  // 1. Need you: waiting for user confirmation (highest priority)
+  if ((m.pending ?? 0) > 0) {
+    return h("span", { class: "st-pill need", title: "需要你的确认" }, [
+      h("i", { class: "st-dot" }),
+      "待确认",
+    ]);
+  }
+  // 2. Running / connecting
+  if (status === "running" || status === "connecting") {
+    return h("span", { class: "st-pill run", title: status === "connecting" ? "连接中" : "运行中" }, [
+      h("i", { class: "st-spin" }),
+      status === "connecting" ? "连接中" : "运行中",
+    ]);
+  }
+  // 3. Error
+  if (status === "error" || outcome === "error") {
+    return h("span", { class: "st-pill err", title: "执行出错" }, "失败");
+  }
+  // 4. Newly completed in background (unseen success)
+  if (outcome === "unseen") {
+    return h("span", { class: "st-pill ok", title: "任务已完成" }, [
+      h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.4", "stroke-linecap": "round", "stroke-linejoin": "round", class: "st-check" }, [
+        h("polyline", { points: "20 6 9 17 4 12" }),
+      ]),
+      "已完成",
+    ]);
+  }
+  // 5. Completed / ready conversation with replies (subtle quiet check)
+  if (outcome === "done" || Boolean(m.preview)) {
+    return h("span", { class: "st-done-ic", title: "已完成" }, [
+      h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.2", "stroke-linecap": "round", "stroke-linejoin": "round", class: "st-check" }, [
+        h("polyline", { points: "20 6 9 17 4 12" }),
+      ]),
+    ]);
+  }
+  return null;
+}
+
 function labelRender(item: ConversationItemType) {
   const m = (item as unknown as { "data-meta": Meta })["data-meta"];
-  const status = store.lives[m.id]?.status ?? m.status;
   return h("div", { class: "conv" }, [
     h("div", { class: "conv-row" }, [
+      h(ProviderIcon, { id: m.agentId, name: m.agentName, size: 13, class: "conv-logo" }),
       h("span", { class: "conv-title" }, m.title || "新对话"),
-      status === "running"
-        ? h("span", { class: "dot running" })
-        : (m.pending ?? 0) > 0
-          ? h("span", { class: "dot pending" })
-          : status === "error"
-            ? h("span", { class: "dot error" })
-            : null,
+      statusNodeFor(m),
     ]),
     h("div", { class: "conv-meta" }, [
-      h("span", { class: "conv-agent" }, m.agentName),
-      h("span", { class: "conv-sep" }, "·"),
-      h("span", {}, ago(m.updatedAt)),
+      h("span", { class: "conv-sub" }, [
+        h("span", { class: "conv-agent" }, m.agentName),
+        m.cwd ? h("span", { class: "conv-sep" }, "·") : null,
+        m.cwd ? h("span", { class: "conv-dir mono" }, shortDir(m.cwd)) : null,
+      ]),
+      h("span", { class: "conv-time mono" }, ago(m.updatedAt)),
     ]),
   ]);
 }
 
+function toggleArchive(m: Meta) {
+  const next = !isArchived(m.id);
+  setArchived(m.id, next);
+  if (next && store.activeId === m.id && !showArchived.value) {
+    void select(null);
+  }
+  if (!next && showArchived.value && archivedCount.value === 0) {
+    showArchived.value = false;
+  }
+  message.success(next ? "已归档" : "已恢复到对话列表");
+}
+
 function menuFor(value: ConversationItemType) {
   const m = (value as unknown as { "data-meta": Meta })["data-meta"];
+  const archived = isArchived(m.id);
   const item = (key: string, icon: () => unknown, label: string, danger = false) => ({
     key,
     danger,
@@ -87,14 +155,16 @@ function menuFor(value: ConversationItemType) {
   });
   return {
     items: [
-      item("pin", () => (m.pinned ? h(PushpinFilled) : h(PushpinOutlined)), m.pinned ? "取消置顶" : "置顶"),
+      ...(archived ? [] : [item("pin", () => (m.pinned ? h(PushpinFilled) : h(PushpinOutlined)), m.pinned ? "取消置顶" : "置顶")]),
       item("rename", () => h(EditOutlined), "重命名"),
+      item("archive", () => (archived ? h(RollbackOutlined) : h(InboxOutlined)), archived ? "取消归档" : "归档"),
       { type: "divider" as const },
       item("delete", () => h(DeleteOutlined), "删除对话", true),
     ],
     onClick: ({ key }: { key: string }) => {
       if (key === "pin") void pin(m.id, !m.pinned);
       if (key === "rename") void startRename(m);
+      if (key === "archive") toggleArchive(m);
       if (key === "delete") toDelete.value = m;
     },
   };
@@ -127,18 +197,76 @@ function toggleTheme() {
   void saveSettings({ theme: isDark.value ? "light" : "dark" });
 }
 
+function triggerAvatarUpload() {
+  avatarInput.value?.click();
+}
+
+async function onAvatarPick(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    message.error("请选择图片文件");
+    return;
+  }
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new window.Image();
+        img.onload = () => {
+          const size = 160;
+          const canvas = document.createElement("canvas");
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            resolve(String(reader.result));
+            return;
+          }
+          const side = Math.min(img.width, img.height);
+          const sx = (img.width - side) / 2;
+          const sy = (img.height - side) / 2;
+          ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+          resolve(canvas.toDataURL("image/webp", 0.9));
+        };
+        img.onerror = reject;
+        img.src = String(reader.result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    setUserAvatar(dataUrl);
+    message.success("头像已保存到本地");
+  } catch {
+    message.error("读取头像图片失败");
+  }
+}
+
+const avatarMenu = computed(() => ({
+  items: [
+    { key: "upload", label: store.userAvatar ? "更换本地头像" : "上传本地头像" },
+    ...(store.userAvatar ? [{ key: "reset", label: "恢复默认头像", danger: true }] : []),
+  ],
+  onClick: ({ key }: { key: string }) => {
+    if (key === "upload") triggerAvatarUpload();
+    if (key === "reset") {
+      setUserAvatar("");
+      message.success("已恢复默认头像");
+    }
+  },
+}));
+
 const needsNode = computed(() => Boolean(store.boot?.nodeError));
 </script>
 
 <template>
   <aside class="sidebar" :class="{ mac: isMac }">
     <div class="top drag">
-      <div class="brand">
-        <span class="logo" />
-        <span class="wordmark">open-chat</span>
-      </div>
+      <div class="top-spacer" />
       <div class="top-actions no-drag">
-        <Tooltip title="收起侧栏" :mouse-enter-delay="0.4">
+        <Tooltip :title="`收起侧栏 (${isMac ? '⌘' : 'Ctrl'} B)`" :mouse-enter-delay="0.4">
           <button class="icon-btn" @click="store.sidebarCollapsed = true">
             <MenuFoldOutlined />
           </button>
@@ -146,18 +274,47 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
       </div>
     </div>
 
-    <div class="actions">
+    <div class="controls">
       <button class="new-btn" @click="newConversation()">
-        <PlusOutlined />
+        <!-- Lucide SquarePen -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="new-ic">
+          <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
+        </svg>
         <span>新对话</span>
         <span class="hint kbd">{{ isMac ? "⌘" : "Ctrl" }} N</span>
       </button>
+
+      <label class="search-box" for="conv-search">
+        <!-- Lucide Search -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="search-ic">
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+        <input
+          id="conv-search"
+          v-model="store.search"
+          type="text"
+          class="search-input"
+          placeholder="搜索对话…"
+          @keydown.esc="store.search = ''"
+        />
+        <button v-if="store.search" type="button" class="search-clear" aria-label="清空搜索" @click.prevent="store.search = ''">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+        <span v-else class="search-kbd kbd">{{ isMac ? "⌘" : "Ctrl" }} K</span>
+      </label>
     </div>
 
-    <div class="search">
-      <Input id="conv-search" v-model:value="store.search" placeholder="搜索对话" allow-clear variant="borderless" size="small">
-        <template #prefix><SearchOutlined class="faint" /></template>
-      </Input>
+    <div v-if="showArchived" class="archive-bar">
+      <button class="archive-back" @click="showArchived = false">
+        <ArrowLeftOutlined />
+        <span>返回对话</span>
+      </button>
+      <span class="archive-count mono">{{ archivedCount }}</span>
     </div>
 
     <div class="list">
@@ -171,24 +328,116 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         class="convs"
         @active-change="(key: string) => select(key)"
       />
-      <div v-else class="list-empty faint">
-        {{ store.search ? "没有匹配的对话" : "还没有对话" }}
+      <div v-else class="list-empty">
+        <InboxOutlined v-if="showArchived" class="empty-icon" />
+        <MessageOutlined v-else class="empty-icon" />
+        <div class="empty-text">
+          {{ store.search ? "没有匹配的对话" : showArchived ? "还没有归档的对话" : "还没有对话记录" }}
+        </div>
+        <button v-if="store.search" class="empty-btn" @click="store.search = ''">清空搜索</button>
       </div>
+    </div>
+
+    <div v-if="!showArchived && archivedCount > 0" class="archive-entry">
+      <button class="archive-entry-btn" @click="showArchived = true">
+        <InboxOutlined class="archive-ic" />
+        <span>已归档</span>
+        <span class="archive-count mono">{{ archivedCount }}</span>
+      </button>
     </div>
 
     <div class="foot">
       <button v-if="needsNode" class="warn" @click="store.settingsOpen = true">
         <span class="dot error" />
-        <span>没找到 Node.js</span>
+        <span>未检测到 Node.js</span>
       </button>
       <div class="foot-row">
-        <button class="foot-btn" @click="store.settingsOpen = true">
-          <SettingOutlined />
-          <span>设置</span>
-        </button>
-        <Tooltip :title="isDark ? '切到浅色' : '切到深色'" :mouse-enter-delay="0.4">
-          <button class="icon-btn" @click="toggleTheme">
-            <span class="theme-dot" :class="{ dark: isDark }" />
+        <Dropdown :menu="avatarMenu" :trigger="['click']" placement="topLeft">
+          <Tooltip :title="store.userAvatar ? '点击更换或重置本地头像' : '上传本地头像（仅保存在本机）'" :mouse-enter-delay="0.35">
+            <button class="avatar-btn" aria-label="用户头像">
+              <img v-if="store.userAvatar" :src="store.userAvatar" alt="用户头像" />
+              <!-- Lucide User -->
+              <svg
+                v-else
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="avatar-ic"
+              >
+                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+              <span class="avatar-cam" aria-hidden="true">
+                <!-- Lucide Camera -->
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+                  <circle cx="12" cy="13" r="3" />
+                </svg>
+              </span>
+            </button>
+          </Tooltip>
+        </Dropdown>
+        <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatarPick" />
+
+        <span class="foot-spacer" />
+
+        <Tooltip :title="`设置 (${isMac ? '⌘' : 'Ctrl'} ,)`" :mouse-enter-delay="0.35">
+          <button class="icon-btn theme-btn" aria-label="设置" @click="store.settingsOpen = true">
+            <!-- Lucide Settings -->
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.85"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="theme-ic"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+        </Tooltip>
+
+        <Tooltip :title="isDark ? '切换到浅色模式' : '切换到深色模式'" :mouse-enter-delay="0.35">
+          <button class="icon-btn theme-btn" :class="{ dark: isDark }" aria-label="切换主题" @click="toggleTheme">
+            <!-- Lucide Sun (shown in dark mode) -->
+            <svg
+              v-if="isDark"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.85"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="theme-ic"
+            >
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2" />
+              <path d="M12 20v2" />
+              <path d="m4.93 4.93 1.41 1.41" />
+              <path d="m17.66 17.66 1.41 1.41" />
+              <path d="M2 12h2" />
+              <path d="M20 12h2" />
+              <path d="m6.34 17.66-1.41 1.41" />
+              <path d="m19.07 4.93-1.41 1.41" />
+            </svg>
+            <!-- Lucide Moon (shown in light mode) -->
+            <svg
+              v-else
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.85"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="theme-ic"
+            >
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+            </svg>
           </button>
         </Tooltip>
       </div>
@@ -198,8 +447,9 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
       :open="Boolean(renaming)"
       title="重命名对话"
       :width="380"
-      :ok-text="'保存'"
-      :cancel-text="'取消'"
+      centered
+      ok-text="保存"
+      cancel-text="取消"
       @ok="confirmRename"
       @cancel="renaming = null"
     >
@@ -209,9 +459,10 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
       :open="Boolean(toDelete)"
       title="删除这个对话？"
       :width="380"
-      :ok-text="'删除'"
+      centered
+      ok-text="删除"
       ok-type="danger"
-      :cancel-text="'取消'"
+      cancel-text="取消"
       @ok="confirmDelete"
       @cancel="toDelete = null"
     >
@@ -225,10 +476,14 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
 <style scoped>
 .sidebar {
   width: 262px;
+  height: 100%;
   flex: none;
   display: flex;
   flex-direction: column;
+  position: relative;
   background: var(--bg-sidebar);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   border-right: 1px solid var(--border);
   min-height: 0;
 }
@@ -242,46 +497,15 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   padding: 0 10px 0 14px;
 }
 .mac .top {
-  padding-left: 80px;
+  padding-left: 78px;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+.top-spacer {
   flex: 1;
 }
 
-.logo {
-  width: 17px;
-  height: 17px;
-  border-radius: 6px;
-  flex: none;
-  background: linear-gradient(140deg, #9d9eff, #4a4ad0);
-  box-shadow: 0 2px 8px rgba(91, 91, 214, 0.4);
-  position: relative;
-}
-.logo::after {
-  content: "";
-  position: absolute;
-  inset: 5px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.9);
-  clip-path: polygon(0 20%, 100% 20%, 100% 62%, 30% 62%, 0 92%);
-}
-
-.wordmark {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text-2);
-  white-space: nowrap;
-  overflow: hidden;
-}
-
 .top-actions {
-  opacity: 0;
+  opacity: 0.55;
   transition: opacity 0.15s var(--ease);
 }
 .sidebar:hover .top-actions {
@@ -306,8 +530,12 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   color: var(--text);
 }
 
-.actions {
-  padding: 0 10px 6px;
+/* Integrated frosted controls: blends into the acrylic sidebar without heavy white boxes */
+.controls {
+  padding: 2px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .new-btn {
@@ -318,118 +546,343 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   gap: 8px;
   padding: 0 10px;
   border-radius: 9px;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--ink) 4.5%, transparent);
   color: var(--text);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 530;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(20, 20, 40, 0.04);
-  transition: box-shadow 0.18s var(--ease), transform 0.18s var(--ease), border-color 0.18s;
+  transition: background 0.14s var(--ease), border-color 0.14s var(--ease), transform 0.14s var(--ease);
 }
 .new-btn:hover {
-  border-color: var(--border-strong);
-  box-shadow: 0 4px 14px rgba(20, 20, 40, 0.08);
-  transform: translateY(-0.5px);
+  background: var(--surface);
+  border-color: var(--border);
 }
 .new-btn:active {
-  transform: translateY(0);
+  transform: scale(0.99);
+}
+.new-ic {
+  width: 14px;
+  height: 14px;
+  color: var(--text-2);
+  flex: none;
 }
 .new-btn .hint {
   margin-left: auto;
-  font-size: 10.5px;
+  background: transparent;
+  border-color: transparent;
+  opacity: 0.65;
+}
+.new-btn:hover .hint {
+  background: var(--hover);
+  border-color: var(--border);
+  opacity: 1;
 }
 
-.search {
-  padding: 2px 10px 6px;
+.search-box {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--ink) 3.8%, transparent);
+  cursor: text;
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
 }
-.search :deep(.ant-input-affix-wrapper) {
+.search-box:hover {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.search-box:focus-within {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-card);
+}
+.search-ic {
+  width: 13.5px;
+  height: 13.5px;
+  color: var(--text-3);
+  flex: none;
+  transition: color 0.14s;
+}
+.search-box:focus-within .search-ic {
+  color: var(--text-2);
+}
+.search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
   background: transparent;
-  padding-left: 6px;
-  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 18px;
+  padding: 0;
 }
-.search :deep(.ant-input-affix-wrapper:hover) {
+.search-input:focus-visible {
+  box-shadow: none;
+}
+.search-input::placeholder {
+  color: var(--text-3);
+}
+.search-clear {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
   background: var(--hover);
+  color: var(--text-3);
+  cursor: pointer;
+  flex: none;
+  padding: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.search-clear:hover {
+  background: var(--active);
+  color: var(--text);
+}
+.search-clear svg {
+  width: 10px;
+  height: 10px;
+}
+.search-kbd {
+  background: transparent;
+  border-color: transparent;
+  opacity: 0.55;
+  flex: none;
 }
 
 .list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 2px 8px 8px;
+  padding: 0 8px 10px;
 }
 
 .list-empty {
-  padding: 18px 10px;
-  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 14px;
   text-align: center;
+}
+.empty-icon {
+  font-size: 18px;
+  color: var(--text-3);
+  opacity: 0.5;
+}
+.empty-text {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.empty-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 11.5px;
+  border-radius: 7px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.empty-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 
 .convs {
   background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
 }
-
+.convs :deep(.antd-conversations-list),
+.convs :deep(.antd-conversations-group) {
+  padding: 0 !important;
+  margin: 0 !important;
+}
 .convs :deep(.antd-conversations-item) {
-  border-radius: 8px;
-  margin-bottom: 1px;
-  padding: 7px 8px !important;
+  border-radius: 10px;
+  margin: 0 0 2px !important;
+  padding: 7px 10px !important;
+  height: auto !important;
+  min-height: 0 !important;
+  align-items: center !important;
+  border: 1px solid transparent;
+  transition: background 0.14s var(--ease), border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
+}
+.convs :deep(.antd-conversations-item:hover) {
+  background: var(--hover) !important;
 }
 .convs :deep(.antd-conversations-item-active) {
   background: var(--surface) !important;
-  box-shadow: 0 1px 2px rgba(20, 20, 40, 0.06), 0 0 0 1px var(--border);
+  border-color: var(--border);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+  box-shadow: var(--shadow-card);
 }
 .convs :deep(.antd-conversations-group-title) {
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 560;
+  line-height: 16px;
   color: var(--text-3);
-  padding: 12px 8px 4px !important;
-  letter-spacing: 0.01em;
+  padding: 10px 10px 5px !important;
+  margin: 0 !important;
+  letter-spacing: 0.02em;
+}
+.convs :deep(.antd-conversations-group:first-child .antd-conversations-group-title) {
+  padding-top: 4px !important;
+}
+.convs :deep(.antd-conversations-label) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 .convs :deep(.antd-conversations-menu-icon) {
   opacity: 0;
   color: var(--text-3);
-  transition: opacity 0.14s var(--ease);
+  margin-left: 4px;
+  transition: opacity 0.14s var(--ease), color 0.14s var(--ease);
 }
 .convs :deep(.antd-conversations-item:hover) .antd-conversations-menu-icon,
 .convs :deep(.antd-conversations-item-active) .antd-conversations-menu-icon {
   opacity: 1;
 }
 
-.conv {
+.convs :deep(.conv) {
   min-width: 0;
-  flex: 1;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding-right: 2px;
+  gap: 3px;
 }
-.conv-row {
+.convs :deep(.conv-row) {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+  min-width: 0;
 }
-.conv-title {
+.convs :deep(.conv-logo) {
+  flex: none;
+  opacity: 0.92;
+}
+.convs :deep(.conv-title) {
   font-size: 13px;
-  font-weight: 450;
+  font-weight: 500;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 18px;
+  flex: 1;
+  min-width: 0;
 }
-.conv-meta {
+.convs :deep(.conv-meta) {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: space-between;
+  gap: 8px;
+  padding-left: 20px;
   font-size: 11px;
   color: var(--text-3);
   line-height: 15px;
-  white-space: nowrap;
-  overflow: hidden;
+  min-width: 0;
 }
-.conv-agent {
+.convs :deep(.conv-sub) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.convs :deep(.conv-agent) {
+  flex-shrink: 0;
+}
+.convs :deep(.conv-sep) {
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+.convs :deep(.conv-dir) {
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 10.5px;
+  opacity: 0.85;
+}
+.convs :deep(.conv-time) {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  opacity: 0.7;
+  padding-left: 4px;
+}
+
+.convs :deep(.st-pill) {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-weight: 560;
+  letter-spacing: 0.01em;
+}
+.convs :deep(.st-pill.need) {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.convs :deep(.st-pill.run) {
+  background: rgba(56, 189, 248, 0.14);
+  color: #0284c7;
+}
+:root[data-theme="dark"] .convs :deep(.st-pill.run) {
+  color: #38bdf8;
+}
+.convs :deep(.st-pill.ok) {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.convs :deep(.st-pill.err) {
+  background: var(--err-soft);
+  color: var(--err);
+}
+.convs :deep(.st-dot) {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: oc-pulse 1.2s ease-in-out infinite;
+}
+.convs :deep(.st-spin) {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-top-color: currentColor;
+  animation: oc-spin 0.75s linear infinite;
+}
+.convs :deep(.st-check) {
+  width: 10px;
+  height: 10px;
+  flex: none;
+}
+.convs :deep(.st-done-ic) {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ok);
+  opacity: 0.72;
+}
+@keyframes oc-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .dot {
@@ -439,60 +892,160 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   flex: none;
   background: var(--text-3);
 }
-.dot.running {
-  background: var(--accent);
-  animation: oc-pulse 1.4s ease-in-out infinite;
-}
-.dot.pending {
-  background: var(--warn);
-}
 .dot.error {
   background: var(--err);
 }
 
+.archive-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px 6px;
+}
+.archive-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 520;
+  padding: 3px 6px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.13s, color 0.13s;
+}
+.archive-back:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.archive-entry {
+  flex: none;
+  padding: 4px 10px 6px;
+}
+.archive-entry-btn {
+  width: 100%;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.archive-entry-btn:hover {
+  background: var(--hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+.archive-ic {
+  font-size: 13px;
+}
+.archive-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 0 6px;
+  line-height: 17px;
+  border-radius: 999px;
+  background: var(--hover);
+}
+
 .foot {
   flex: none;
-  padding: 6px 10px 10px;
+  padding: 8px 10px 10px;
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 
 .foot-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
-.foot-btn {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 8px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.foot-btn:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
-.theme-dot {
-  width: 13px;
-  height: 13px;
+.avatar-btn {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border-radius: 50%;
   border: 1px solid var(--border-strong);
-  background: linear-gradient(90deg, #fff 0 50%, #2a2a2e 50% 100%);
+  background: var(--surface);
+  color: var(--text-2);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  cursor: pointer;
+  flex: none;
+  box-shadow: var(--shadow-card);
+  transition: border-color 0.14s, transform 0.14s var(--ease);
 }
-.theme-dot.dark {
-  background: linear-gradient(90deg, #2a2a2e 0 50%, #fff 50% 100%);
+.avatar-btn:hover {
+  border-color: var(--ink);
+  transform: scale(1.04);
+}
+.avatar-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.avatar-ic {
+  width: 14px;
+  height: 14px;
+}
+.avatar-cam {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(15, 23, 42, 0.56);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.14s;
+}
+.avatar-cam svg {
+  width: 12px;
+  height: 12px;
+}
+.avatar-btn:hover .avatar-cam {
+  opacity: 1;
+}
+
+.foot-spacer {
+  flex: 1;
+}
+
+.theme-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  color: var(--text-3);
+  transition: background 0.14s, border-color 0.14s, color 0.14s, transform 0.14s var(--ease);
+}
+.theme-btn:hover {
+  background: var(--hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+.theme-btn:active {
+  transform: scale(0.94);
+}
+.theme-ic {
+  width: 15px;
+  height: 15px;
+  display: block;
 }
 
 .warn {
@@ -502,7 +1055,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   border: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
   background: var(--err-soft);
   color: var(--err);
-  border-radius: 8px;
+  border-radius: 9px;
   padding: 6px 9px;
   font-size: 12px;
   cursor: pointer;

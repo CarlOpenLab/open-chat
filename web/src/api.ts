@@ -7,6 +7,7 @@ import type {
   Bootstrap,
   Conversation,
   DirListing,
+  GitInfo,
   LiveState,
   Meta,
   Push,
@@ -44,6 +45,8 @@ export const api = {
   remove: (id: string) => call<void>("Delete", id),
   saveSettings: (s: Settings) => call<Settings>("SaveSettings", s),
   listDir: (path: string) => call<DirListing>("ListDir", path),
+  gitInfo: (path: string) => call<GitInfo>("GitInfo", path),
+  gitCheckout: (path: string, branch: string) => call<GitInfo>("GitCheckout", path, branch),
   pickFolder: () => call<string>("PickFolder"),
   reveal: (path: string) => call<void>("Reveal", path),
 };

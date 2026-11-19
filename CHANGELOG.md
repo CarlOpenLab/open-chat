@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0
+## 0.0.1
 
 - 重写：Go（mygo）+ Vue 3 + antdv-next / @antdv-next/x 的桌面工作台，旧 Express + Vite 双进程架构废弃。
 - 通过 `@cc-heart/acp-hub` 驱动 Claude Code / Codex / pi / Oh My Pi 与任意自定义 ACP agent。

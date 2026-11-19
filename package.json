@@ -1,6 +1,6 @@
 {
   "name": "open-chat",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -20,6 +20,7 @@
     "@antdv-next/icons": "^1.0.6",
     "@antdv-next/x": "1.2.7",
     "@antdv-next/x-markdown": "0.3.0",
+    "@antdv-next/x-pro": "^0.0.1",
     "@cc-heart/acp-hub-adapter-claude": "0.0.1",
     "@cc-heart/acp-hub-adapter-codex": "0.0.1",
     "@cc-heart/acp-hub-adapter-pi": "0.0.1",

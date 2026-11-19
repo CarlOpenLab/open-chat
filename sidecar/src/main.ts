@@ -14,6 +14,8 @@
  *
  * stdout carries protocol frames only — logs go to stderr.
  */
+import { existsSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
@@ -138,7 +140,10 @@ interface Live {
   pendingPermissions: Set<string>;
 }
 
-const adapters = new Map<string, { adapter: AcpAgentAdapter; caps: AgentCapabilities; users: number }>();
+const adapters = new Map<
+  string,
+  { adapter: AcpAgentAdapter; caps: AgentCapabilities; users: number; stderrTail: string[] }
+>();
 const lives = new Map<string, Live>();
 
 /** Sentinel pushed into a session's own queue so it arrives after every event of the turn. */
@@ -148,29 +153,100 @@ function agentKeyOf(agent: AgentLaunch): string {
   return JSON.stringify([agent.command, agent.args ?? [], agent.env ?? {}]);
 }
 
-async function adapterFor(agent: AgentLaunch): Promise<{ key: string; adapter: AcpAgentAdapter; caps: AgentCapabilities }> {
+function isPnpmShimDir(dir: string): boolean {
+  const low = dir.toLowerCase();
+  return low.includes("pnpm") && (low.includes("shim") || low.includes("node_modules/.bin") || low.includes("node_modules\\.bin"));
+}
+
+/**
+ * When `open-chat` is launched via `pnpm dev`, pnpm injects a shim `npx` on PATH
+ * that fails with ERR_PNPM_SHIM_NO_TARGET inside projects pinned to pnpm.
+ * Resolve the real `npx` beside `process.execPath` (or non-shim PATH) instead,
+ * and fall back to `pnpm dlx` if no standalone `npx` exists.
+ */
+function resolveLaunch(agent: AgentLaunch, env: Record<string, string>): { command: string; args: string[] } {
+  const args = [...(agent.args ?? [])];
+  if (agent.command !== "npx") return { command: agent.command, args };
+
+  const npxName = process.platform === "win32" ? "npx.cmd" : "npx";
+  const nodeBinDir = dirname(process.execPath);
+  const pathKey = Object.keys(process.env).find((k) => k.toLowerCase() === "path") ?? "PATH";
+  const rawPath = env[pathKey] ?? process.env[pathKey] ?? "";
+  const pathDirs = rawPath.split(delimiter).filter(Boolean);
+
+  // Strip pnpm shim directories from child PATH so npx -> npm/node won't hit the shim either.
+  const cleanPathDirs = pathDirs.filter((d) => !isPnpmShimDir(d));
+  const candidateDirs = [nodeBinDir, ...cleanPathDirs];
+
+  for (const dir of candidateDirs) {
+    if (isPnpmShimDir(dir)) continue;
+    const candidate = join(dir, npxName);
+    if (existsSync(candidate)) {
+      const nextDirs = [dir, ...cleanPathDirs.filter((d) => d !== dir)];
+      env[pathKey] = nextDirs.join(delimiter);
+      return { command: candidate, args };
+    }
+  }
+
+  // Last resort: use `pnpm dlx` without the `-y` flag.
+  return { command: "pnpm", args: ["dlx", ...args.filter((a) => a !== "-y" && a !== "--yes")] };
+}
+
+async function withStderrContext(error: unknown, stderrTail: string[]): Promise<never> {
+  if (stderrTail.length === 0) {
+    // Give child stderr a brief tick to flush after stdout closes.
+    await new Promise((r) => setTimeout(r, 80));
+  }
+  if (stderrTail.length > 0) {
+    const base = error instanceof Error ? error.message : String(error);
+    const tail = stderrTail.slice(-2).join(" | ");
+    throw new AdapterError(
+      error instanceof AdapterError ? error.code : "initialize_failed",
+      `${base}（${tail}）`,
+    );
+  }
+  throw error;
+}
+
+async function adapterFor(agent: AgentLaunch): Promise<{
+  key: string;
+  adapter: AcpAgentAdapter;
+  caps: AgentCapabilities;
+  stderrTail: string[];
+}> {
   const key = agentKeyOf(agent);
   const cached = adapters.get(key);
   if (cached && cached.adapter.rawConnection?.isConnected) return { key, ...cached };
   if (cached) adapters.delete(key);
+  const stderrTail: string[] = [];
+  const cleanEnv: Record<string, string> = { ...(agent.env ?? {}) };
+  // Avoid nested Claude Code rejection when open-chat is launched from inside Claude Code.
+  if ("CLAUDECODE" in process.env) delete process.env.CLAUDECODE;
+  const resolved = resolveLaunch(agent, cleanEnv);
   const adapter = new AcpAgentAdapter(
     agent.id,
-    { command: agent.command, args: agent.args ?? [], env: agent.env ?? {} },
+    { command: resolved.command, args: resolved.args, env: cleanEnv },
     {
       clientInfo: { name: "open-chat", version: "0.1.0" },
       initializeTimeoutMs: 120_000,
       logger: (level, message) => {
-        if (level !== "debug") log(level, `${agent.id}: ${message}`);
+        if (message.includes("stderr]")) {
+          stderrTail.push(message);
+          if (stderrTail.length > 8) stderrTail.shift();
+          log("stderr", `${agent.id}: ${message}`);
+        } else if (level !== "debug") {
+          log(level, `${agent.id}: ${message}`);
+        }
       },
     },
   );
   try {
     const caps = await adapter.connect();
-    adapters.set(key, { adapter, caps, users: 0 });
-    return { key, adapter, caps };
+    adapters.set(key, { adapter, caps, users: 0, stderrTail });
+    return { key, adapter, caps, stderrTail };
   } catch (error) {
     await adapter.dispose().catch(() => {});
-    throw error;
+    return await withStderrContext(error, stderrTail);
   }
 }
 
@@ -348,19 +424,24 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
       release(existing.agentKey);
     }
 
-    const { key: agentKey, adapter, caps } = await adapterFor(agent);
+    const { key: agentKey, adapter, caps, stderrTail } = await adapterFor(agent);
     let session: AcpSession;
     let resumed = false;
-    if (resumeId && caps.supportsLoad) {
-      try {
-        session = (await adapter.createSession({ cwd, resumeSessionId: resumeId })) as AcpSession;
-        resumed = true;
-      } catch (error) {
-        log("warn", `${agent.id}: session/load ${resumeId} failed, starting fresh: ${String(error)}`);
+    try {
+      if (resumeId && caps.supportsLoad) {
+        try {
+          session = (await adapter.createSession({ cwd, resumeSessionId: resumeId })) as AcpSession;
+          resumed = true;
+        } catch (error) {
+          log("warn", `${agent.id}: session/load ${resumeId} failed, starting fresh: ${String(error)}`);
+          session = (await adapter.createSession({ cwd })) as AcpSession;
+        }
+      } else {
         session = (await adapter.createSession({ cwd })) as AcpSession;
       }
-    } else {
-      session = (await adapter.createSession({ cwd })) as AcpSession;
+    } catch (error) {
+      if (!adapter.rawConnection?.isConnected) adapters.delete(agentKey);
+      return await withStderrContext(error, stderrTail);
     }
     const entry = adapters.get(agentKey);
     if (entry) entry.users += 1;
