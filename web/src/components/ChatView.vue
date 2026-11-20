@@ -136,8 +136,51 @@ function quickRespond(requestId: string, optionId?: string) {
   void respond(meta.value.id, requestId, optionId);
 }
 
+let jumpLockUntil = 0;
+
+function onFollowUpdate(next: boolean) {
+  if (next && performance.now() < jumpLockUntil) return;
+  following.value = next;
+}
+
+function scrollToTurnStart(turnId: string | number, smooth = true) {
+  const vp = scroller.value?.viewportElement;
+  const content = scroller.value?.contentElement;
+  if (!vp || !content) return;
+  const id = String(turnId);
+  const turnEl = Array.from(content.querySelectorAll<HTMLElement>("[data-message-id]")).find(
+    (el) => el.getAttribute("data-message-id") === id,
+  );
+  if (!turnEl) return;
+  const anchorEl = turnEl.querySelector<HTMLElement>(".mine") ?? turnEl;
+  const vpRect = vp.getBoundingClientRect();
+  const elRect = anchorEl.getBoundingClientRect();
+  const maxTop = Math.max(0, vp.scrollHeight - vp.clientHeight);
+  const targetTop = Math.min(maxTop, Math.max(0, vp.scrollTop + elRect.top - vpRect.top - 16));
+  const atBottom = maxTop - targetTop <= 56;
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  const behavior: ScrollBehavior = smooth && !reducedMotion ? "smooth" : "auto";
+
+  if (!atBottom) {
+    jumpLockUntil = performance.now() + (behavior === "smooth" ? 400 : 100);
+    following.value = false;
+  } else {
+    jumpLockUntil = 0;
+  }
+
+  vp.scrollTo({ top: targetTop, behavior });
+}
+
 function jumpToTurn(turnId: string) {
-  scroller.value?.scrollToItem(turnId, { behavior: "smooth" });
+  scrollToTurnStart(turnId, true);
+}
+
+function onRailItemSelect(id: string | number) {
+  // Run after MessageScroller's synchronous handleRailItemClick (which centers the full
+  // turn or jumps to the bottom on the last item) so we always land at the message start.
+  void nextTick().then(() => {
+    scrollToTurnStart(id, true);
+  });
 }
 
 const scrollerItems = computed<MessageScrollerItem[]>(() =>
@@ -179,6 +222,7 @@ function updateScrollable() {
 }
 
 function scrollToBottom(smooth = false) {
+  jumpLockUntil = 0;
   scroller.value?.setFollowing(true);
   scroller.value?.scrollToEnd({ behavior: smooth ? "smooth" : "auto" });
 }
@@ -439,13 +483,15 @@ async function changeDir(path: string) {
     <MessageScroller
       ref="scroller"
       :key="meta.id"
-      v-model:follow="following"
+      :follow="following"
       class="scroll"
       :busy="running"
       :navigation="turns.length > 1 ? 'rail' : undefined"
       :items="scrollerItems"
       item-selector="[data-message-id]"
       :back-to-bottom="canScroll"
+      @update:follow="onFollowUpdate"
+      @rail-item-select="onRailItemSelect"
       @scroll="updateScrollable"
     >
       <div class="inner">

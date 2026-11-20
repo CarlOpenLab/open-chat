@@ -462,48 +462,62 @@ kbd,
   backdrop-filter: var(--glass-blur-sm);
   -webkit-backdrop-filter: var(--glass-blur-sm);
 }
-.oc-md pre:has(> [class*="code-highlighter"]) {
+.oc-md pre:has(> .antd-code-highlighter) {
   margin: 0.45em 0 1em;
   padding: 0;
   background: none;
   border: none;
   overflow: visible;
 }
-.oc-md [class*="code-highlighter"] {
+.oc-md .antd-code-highlighter.antd-code-highlighter {
   margin: 0;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 11px;
   overflow: hidden;
   background: var(--code-bg);
   backdrop-filter: var(--glass-blur-sm);
   -webkit-backdrop-filter: var(--glass-blur-sm);
   box-shadow: var(--shadow-card);
 }
-.oc-md [class*="code-highlighter-header"] {
+.oc-md .antd-code-highlighter.antd-code-highlighter .antd-code-highlighter-header {
   background: var(--surface-2);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--text-3);
+  border: none;
   border-bottom: 1px solid var(--border);
-  padding: 6px 12px;
-  min-height: 34px;
+  border-radius: 0;
+  padding: 5px 8px 5px 12px;
+  min-height: 32px;
 }
-.oc-md [class*="code-highlighter-header-title"] {
+.oc-md .antd-code-highlighter.antd-code-highlighter .antd-code-highlighter-lang {
   font-family: var(--mono);
   font-size: 11.5px;
+  font-weight: 500;
   text-transform: lowercase;
-  background: transparent !important;
-  border: none !important;
-  padding: 0 !important;
   color: var(--text-3);
 }
-.oc-md [class*="code-highlighter-content"] {
+.oc-md .antd-code-highlighter.antd-code-highlighter .antd-code-highlighter-copy-btn,
+.oc-md .antd-code-highlighter.antd-code-highlighter .antd-code-highlighter-theme-btn {
+  color: var(--text-3) !important;
+  border-radius: 6px;
+}
+.oc-md .antd-code-highlighter.antd-code-highlighter .antd-code-highlighter-copy-btn:hover,
+.oc-md .antd-code-highlighter.antd-code-highlighter .antd-code-highlighter-theme-btn:hover {
+  color: var(--text) !important;
+  background: var(--hover) !important;
+}
+.oc-md .antd-code-highlighter.antd-code-highlighter .antd-code-highlighter-content {
   background: transparent;
   font-size: 12.5px;
   max-height: 460px;
 }
-.oc-md [class*="code-highlighter-content"] pre,
-.oc-md [class*="code-highlighter-content"] code {
+.oc-md .antd-code-highlighter.antd-code-highlighter .antd-code-highlighter-code > pre {
+  margin: 0;
+  padding: 12px 14px;
+  background: transparent !important;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.62;
+}
+.oc-md .antd-code-highlighter.antd-code-highlighter .antd-code-highlighter-code > pre > code {
   font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.62;
