@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$MYGO_UPDATER_PRIVATE_KEY" ]; then
-            echo "::error title=Update signing key missing::MYGO_UPDATER_PRIVATE_KEY is not set. Run 'mygo keygen' once, then 'gh secret set MYGO_UPDATER_PRIVATE_KEY < mygo-update.key'."
+            echo "::error title=Update signing key missing::MYGO_UPDATER_PRIVATE_KEY is not set. Run 'mygo keygen -o <dir>' once, then 'gh secret set MYGO_UPDATER_PRIVATE_KEY < <dir>/mygo-update.key'."
             exit 1
           fi
           # Ed25519 private keys are the 32-byte seed followed by the 32-byte

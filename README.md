@@ -94,16 +94,19 @@ HTTP 模式把 `Host` 的每个方法映射成 `POST /api/call/<Method>`（body 
 ### 一次性配置签名密钥
 
 ```bash
-go tool mygo keygen          # 写出 mygo-update.key 与 mygo-update.pub
-gh secret set MYGO_UPDATER_PRIVATE_KEY < \
-  "$HOME/Library/Application Support/mygo/update-keys/mygo-update.key"
+# 用 -o 给 open-chat 一个自己的目录：mygo 的默认目录可能已经放着
+# 其他应用的密钥，直接 keygen 会报错，-force 则会覆盖它们。
+go tool mygo keygen -o "$HOME/Library/Application Support/mygo/open-chat-update-keys"
+
+gh secret set MYGO_UPDATER_PRIVATE_KEY --repo CarlOpenLab/open-chat < \
+  "$HOME/Library/Application Support/mygo/open-chat-update-keys/mygo-update.key"
 ```
 
 私钥只放在本地密码管理器和 GitHub 仓库 secret 里，**不要提交进仓库**。CI 会从私钥推导公钥（Ed25519 私钥的后 32 字节），因此不需要第二个变量；本地想做可更新的发布构建时自行传入：
 
 ```bash
-MYGO_UPDATER_PUBLIC_KEY="$(cat mygo-update.pub)" \
-MYGO_UPDATER_PRIVATE_KEY="$(cat mygo-update.key)" \
+MYGO_UPDATER_PUBLIC_KEY="$(cat "$HOME/Library/Application Support/mygo/open-chat-update-keys/mygo-update.pub")" \
+MYGO_UPDATER_PRIVATE_KEY="$(cat "$HOME/Library/Application Support/mygo/open-chat-update-keys/mygo-update.key")" \
 pnpm build
 ```
 
