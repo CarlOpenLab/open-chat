@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>open-chat — 把本机的 Coding Agent 收进同一个窗口</title>
+<meta name="description" content="open-chat 通过 ACP 直连 Claude Code、Codex、Pi、Oh My Pi 与任意自定义 agent。本地优先的桌面工作台，也可一行命令变成内网 Web 服务。" />
+<meta property="og:title" content="open-chat — One window for every coding agent on your machine" />
+<meta property="og:description" content="A local-first desktop workbench for Claude Code, Codex, Pi, Oh My Pi and any ACP agent. Native app or one-line web server." />
+<meta property="og:image" content="https://carlopenlab.github.io/open-chat/assets/hero-light.png" />
+<link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+<style>
+  :root {
+    --bg: #FFFFFF;
+    --bg-soft: #F6F7FA;
+    --ink: #14161C;
+    --ink-2: #565D6E;
+    --ink-3: #8A91A3;
+    --line: #E4E7EE;
+    --accent: #4353FF;
+    --accent-ink: #FFFFFF;
+    --accent-soft: rgba(67, 83, 255, 0.07);
+    --dark-bg: #101319;
+    --dark-line: #232936;
+    --dark-ink: #E9ECF3;
+    --dark-ink-2: #9BA3B5;
+    --radius: 12px;
+    --radius-lg: 18px;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    color: var(--ink);
+    background: var(--bg);
+    font-size: 16px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+    text-wrap: pretty;
+  }
+  img { max-width: 100%; display: block; }
+  a { color: inherit; }
+
+  /* ---------- header ---------- */
+  .site-header {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .header-inner {
+    max-width: 1120px; margin: 0 auto; padding: 0 24px;
+    height: 60px;
+    display: flex; align-items: center; gap: 28px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 650; font-size: 16px; text-decoration: none; letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+  .brand img { width: 26px; height: 26px; }
+  .header-nav { display: flex; gap: 22px; margin-left: 8px; }
+  .header-nav a { text-decoration: none; color: var(--ink-2); font-size: 14px; }
+  .header-nav a:hover { color: var(--ink); }
+  .header-actions { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  .lang-switch {
+    display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  }
+  .lang-switch button {
+    border: 0; background: transparent; padding: 4px 10px;
+    font-size: 12.5px; font-family: var(--sans); cursor: pointer; color: var(--ink-3);
+  }
+  .lang-switch button.on { background: var(--ink); color: #fff; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    border-radius: 10px; padding: 9px 16px;
+    font-size: 14px; font-weight: 600; text-decoration: none;
+    border: 1px solid var(--line); color: var(--ink); background: #fff;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .btn:hover { border-color: var(--ink-3); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn.primary:hover { background: #3242E8; border-color: #3242E8; }
+  .btn svg { width: 15px; height: 15px; }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; overflow: hidden; padding: 88px 24px 64px; }
+  .hero::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(560px 320px at 50% -60px, rgba(67,83,255,0.075), transparent 70%),
+      linear-gradient(180deg, rgba(246,247,250,0.9), transparent 320px);
+  }
+  .hero-inner { position: relative; max-width: 1120px; margin: 0 auto; text-align: center; }
+  .hero-badges { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-bottom: 26px; }
+  .pill {
+    font-size: 12.5px; color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px;
+    background: rgba(255,255,255,0.7);
+    font-variant-numeric: tabular-nums;
+  }
+  .pill.accent { color: var(--accent); border-color: rgba(67,83,255,0.35); background: var(--accent-soft); }
+  h1 {
+    font-size: clamp(34px, 5.4vw, 56px);
+    line-height: 1.18; letter-spacing: -0.022em;
+    margin: 0 auto 18px; max-width: 820px; font-weight: 700;
+    text-wrap: balance;
+  }
+  .hero-sub {
+    font-size: clamp(15.5px, 1.6vw, 18px); color: var(--ink-2);
+    max-width: 640px; margin: 0 auto 34px;
+  }
+  .hero-sub code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--bg-soft); border: 1px solid var(--line);
+    border-radius: 6px; padding: 1.5px 6px; color: var(--ink);
+  }
+  .hero-cta { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .hero-note { font-size: 13px; color: var(--ink-3); margin: 0 0 56px; }
+
+  /* ---------- app window mockup ---------- */
+  .app-window {
+    width: 100%;
+    max-width: 1020px; margin: 0 auto;
+    border: 1px solid var(--line); border-radius: var(--radius-lg);
+    background: #fff; overflow: hidden;
+    box-shadow: 0 1px 2px rgba(20,22,28,0.04), 0 24px 64px -24px rgba(20,22,28,0.18);
+  }
+  .app-titlebar {
+    height: 40px; display: flex; align-items: center; gap: 8px;
+    padding: 0 14px; border-bottom: 1px solid var(--line); background: #fff;
+  }
+  .app-titlebar .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .app-titlebar .dot.r { background: #FF5F57; } .app-titlebar .dot.y { background: #FEBC2E; } .app-titlebar .dot.g { background: #28C840; }
+  .app-titlebar .title {
+    margin: 0 auto; font-size: 12.5px; color: var(--ink-3);
+    display: flex; align-items: center; gap: 7px;
+  }
+  .app-titlebar .title img { width: 14px; height: 14px; }
+  .app-titlebar .spacer { width: 57px; }
+  .app-window.dark { background: var(--dark-bg); border-color: var(--dark-line); }
+  .app-window.dark .app-titlebar { background: var(--dark-bg); border-color: var(--dark-line); }
+  .app-window.dark .app-titlebar .title { color: var(--dark-ink-2); }
+  .app-window img { width: 100%; }
+
+  /* ---------- agents strip ---------- */
+  .agents-strip { padding: 34px 24px 8px; text-align: center; }
+  .agents-strip .label { font-size: 13px; color: var(--ink-3); margin-bottom: 14px; }
+  .agent-chips { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 7px 14px; font-size: 14px; font-weight: 550; color: var(--ink-2);
+    background: #fff;
+  }
+  .chip .sw { width: 8px; height: 8px; border-radius: 3px; }
+  .chip b { color: var(--ink); font-weight: 650; }
+
+  /* ---------- sections ---------- */
+  section { padding: 84px 24px; }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+  .section-head { max-width: 640px; margin: 0 auto 48px; text-align: center; }
+  .section-head h2 { font-size: clamp(26px, 3.2vw, 36px); letter-spacing: -0.02em; margin: 0 0 12px; line-height: 1.25; text-wrap: balance; }
+  .section-head p { color: var(--ink-2); font-size: 16px; margin: 0; }
+  .kicker {
+    display: inline-block; font-size: 12.5px; font-weight: 650;
+    color: var(--accent); background: var(--accent-soft);
+    border-radius: 999px; padding: 3px 12px; margin-bottom: 16px;
+    letter-spacing: 0.02em;
+  }
+
+  /* dark band: full turn */
+  .band-dark {
+    background: var(--dark-bg); color: var(--dark-ink);
+  }
+  .band-dark .section-head p { color: var(--dark-ink-2); }
+  .band-dark .kicker { color: #8E9BFF; background: rgba(67,83,255,0.16); }
+  .band-dark .app-window { box-shadow: 0 1px 2px rgba(0,0,0,0.4), 0 32px 80px -24px rgba(0,0,0,0.6); }
+  .flow-points {
+    max-width: 760px; margin: 44px auto 0;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+  }
+  .flow-point { text-align: center; }
+  .flow-point .fp-title { font-weight: 650; font-size: 15px; margin-bottom: 6px; }
+  .flow-point .fp-text { font-size: 13.5px; color: var(--dark-ink-2); line-height: 1.65; }
+
+  /* feature grid */
+  .feature-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px;
+  }
+  .feature-card {
+    border: 1px solid var(--line); border-radius: var(--radius-lg);
+    background: #fff; padding: 26px 24px 24px;
+    transition: border-color .15s ease;
+  }
+  .feature-card:hover { border-color: #C6CCDA; }
+  .feature-card .icon {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: var(--accent-soft); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 16px;
+  }
+  .feature-card .icon svg { width: 18px; height: 18px; }
+  .feature-card h3 { font-size: 16.5px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .feature-card p { font-size: 14px; color: var(--ink-2); margin: 0; line-height: 1.7; }
+  .feature-card code {
+    font-family: var(--mono); font-size: 0.84em;
+    background: var(--bg-soft); border: 1px solid var(--line);
+    border-radius: 5px; padding: 0.5px 5px; white-space: nowrap;
+  }
+
+  /* workspace block */
+  .split { display: grid; grid-template-columns: 5fr 6fr; gap: 56px; align-items: center; }
+  .split > * { min-width: 0; }
+  .split .copy h2 { font-size: clamp(24px, 2.8vw, 32px); letter-spacing: -0.02em; margin: 0 0 14px; line-height: 1.3; }
+  .split .copy p { color: var(--ink-2); margin: 0 0 10px; font-size: 15.5px; }
+  .check-list { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 12px; }
+  .check-list li { display: flex; gap: 10px; font-size: 14.5px; color: var(--ink-2); }
+  .check-list li svg { width: 17px; height: 17px; color: var(--accent); flex: none; margin-top: 4px; }
+  .check-list li b { color: var(--ink); font-weight: 600; }
+
+  /* serve / terminal */
+  .band-soft { background: var(--bg-soft); }
+  .terminal {
+    border: 1px solid var(--dark-line); border-radius: var(--radius-lg);
+    background: var(--dark-bg); color: #D5DAE5; overflow: hidden;
+    box-shadow: 0 24px 64px -28px rgba(20,22,28,0.4);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.75;
+  }
+  .terminal .term-bar {
+    height: 38px; display: flex; align-items: center; gap: 7px;
+    padding: 0 14px; border-bottom: 1px solid var(--dark-line); color: var(--dark-ink-2);
+    font-family: var(--sans); font-size: 12.5px;
+  }
+  .terminal .term-bar .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .terminal .term-body { padding: 18px 20px; }
+  .terminal .ln { white-space: pre; overflow-x: auto; }
+  .terminal .c-prompt { color: #6EE7A0; }
+  .terminal .c-cmd { color: #E9ECF3; }
+  .terminal .c-flag { color: #8E9BFF; }
+  .terminal .c-out { color: #8A91A3; }
+  .terminal .c-url { color: #6EE7A0; text-decoration: underline; text-underline-offset: 3px; }
+
+  /* architecture */
+  .arch { max-width: 860px; margin: 0 auto; display: grid; gap: 0; }
+  .arch-node {
+    border: 1px solid var(--line); border-radius: var(--radius-lg);
+    background: #fff; padding: 22px 26px;
+    display: flex; gap: 18px; align-items: flex-start;
+  }
+  .arch-node.core { border-color: rgba(67,83,255,0.4); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .arch-tag {
+    flex: none; font-family: var(--mono); font-size: 12px; font-weight: 600;
+    color: var(--accent); background: var(--accent-soft);
+    border-radius: 7px; padding: 3px 9px; margin-top: 2px;
+  }
+  .arch-node h3 { margin: 0 0 5px; font-size: 16px; }
+  .arch-node p { margin: 0; font-size: 13.5px; color: var(--ink-2); line-height: 1.65; }
+  .arch-link {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0 10px 34px; color: var(--ink-3);
+  }
+  .arch-link .wire { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .arch-link .wire .line { width: 1.5px; height: 14px; background: var(--line); }
+  .arch-link .wire .arrow { width: 7px; height: 7px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(45deg); margin-top: -5px; }
+  .arch-link .proto { font-family: var(--mono); font-size: 12.5px; }
+  .arch-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .arch-row .chip { padding: 4px 11px; font-size: 13px; border-radius: 8px; }
+
+  /* download */
+  .dl-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 36px; }
+  .dl-card {
+    border: 1px solid var(--line); border-radius: var(--radius-lg);
+    background: #fff; padding: 24px; text-align: left;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .dl-card .os { font-weight: 650; font-size: 15.5px; display: flex; align-items: center; gap: 9px; }
+  .dl-card .os svg { width: 17px; height: 17px; color: var(--accent); }
+  .dl-card .fmt { font-size: 13.5px; color: var(--ink-2); }
+  .dl-card .hint { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; }
+  .dl-cta { text-align: center; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  .dl-cta .btn { padding: 12px 22px; font-size: 15px; }
+  .dl-cta .note { font-size: 13px; color: var(--ink-3); }
+  .dl-cta .note code { font-family: var(--mono); font-size: 0.9em; background: #fff; border: 1px solid var(--line); border-radius: 5px; padding: 0.5px 6px; }
+
+  /* footer */
+  footer { border-top: 1px solid var(--line); padding: 40px 24px 56px; background: var(--bg-soft); }
+  .footer-inner {
+    max-width: 1120px; margin: 0 auto;
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; flex-wrap: wrap;
+  }
+  .footer-left { display: flex; gap: 12px; align-items: center; }
+  .footer-left img { width: 30px; height: 30px; }
+  .footer-left .fname { font-weight: 650; font-size: 15px; }
+  .footer-left .fdesc { font-size: 13px; color: var(--ink-3); }
+  .footer-links { display: flex; gap: 20px; font-size: 14px; flex-wrap: wrap; }
+  .footer-links a { color: var(--ink-2); text-decoration: none; }
+  .footer-links a:hover { color: var(--ink); }
+  .footer-copy { font-size: 12.5px; color: var(--ink-3); margin-top: 22px; }
+
+  /* scroll reveal */
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal { opacity: 1; transform: none; transition: none; }
+  }
+
+  /* responsive */
+  @media (max-width: 900px) {
+    .feature-grid, .dl-grid { grid-template-columns: repeat(2, 1fr); }
+    .flow-points { grid-template-columns: 1fr; gap: 26px; }
+    .split { grid-template-columns: 1fr; gap: 32px; }
+    .header-nav { display: none; }
+  }
+  @media (max-width: 620px) {
+    section { padding: 60px 20px; }
+    .hero { padding: 56px 20px 44px; }
+    .terminal .ln { white-space: pre-wrap; word-break: break-all; }
+    .feature-grid, .dl-grid { grid-template-columns: 1fr; }
+    .arch-node { flex-direction: column; gap: 10px; }
+    .arch-link { padding-left: 10px; }
+    .header-actions .btn span { display: none; }
+    .hero-cta .btn { width: 100%; justify-content: center; }
+  }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="#top">
+      <img src="assets/logo.svg" alt="open-chat logo" />
+      <span>open-chat</span>
+    </a>
+    <nav class="header-nav">
+      <a href="#features" data-zh="特性" data-en="Features">特性</a>
+      <a href="#architecture" data-zh="架构" data-en="Architecture">架构</a>
+      <a href="#download" data-zh="下载" data-en="Download">下载</a>
+    </nav>
+    <div class="header-actions">
+      <div class="lang-switch" role="group" aria-label="Language">
+        <button type="button" id="lang-zh">中</button>
+        <button type="button" id="lang-en">EN</button>
+      </div>
+      <a class="btn primary" href="https://github.com/CarlOpenLab/open-chat/releases/latest" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span data-zh="下载" data-en="Download">下载</span>
+      </a>
+      <a class="btn" href="https://github.com/CarlOpenLab/open-chat" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5A10.5 10.5 0 0 0 1.5 12a10.5 10.5 0 0 0 7.18 9.97c.52.1.71-.23.71-.5v-1.78c-2.92.63-3.54-1.41-3.54-1.41-.48-1.21-1.17-1.54-1.17-1.54-.95-.65.07-.64.07-.64 1.06.07 1.61 1.08 1.61 1.08.94 1.6 2.46 1.14 3.06.87.1-.68.37-1.14.66-1.4-2.33-.27-4.78-1.17-4.78-5.2 0-1.15.41-2.09 1.08-2.82-.11-.27-.47-1.34.1-2.79 0 0 .88-.28 2.88 1.08a10 10 0 0 1 5.25 0c2-1.36 2.88-1.08 2.88-1.08.57 1.45.21 2.52.1 2.79.67.73 1.08 1.67 1.08 2.82 0 4.04-2.46 4.93-4.8 5.19.38.32.71.96.71 1.94v2.88c0 .28.19.6.72.5A10.5 10.5 0 0 0 22.5 12 10.5 10.5 0 0 0 12 1.5Z"/></svg>
+        <span>GitHub</span>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============ HERO ============ -->
+  <section class="hero" data-screen-label="hero" style="padding-bottom:40px;">
+    <div class="hero-inner">
+      <div class="hero-badges">
+        <span class="pill accent">v0.0.5</span>
+        <span class="pill">MIT</span>
+        <span class="pill" data-zh="macOS · Windows · Linux" data-en="macOS · Windows · Linux">macOS · Windows · Linux</span>
+        <span class="pill" data-zh="ACP 原生" data-en="ACP-native">ACP 原生</span>
+      </div>
+      <h1 data-zh="本机的 Coding Agent，收进同一个窗口" data-en="One window for every coding agent on your machine">本机的 Coding Agent，收进同一个窗口</h1>
+      <p class="hero-sub" data-zh="open-chat 通过 ACP 直连 Claude Code、Codex、Pi、Oh My Pi 与任意自定义 agent。本地优先，单个安装包开箱即用；也可以用一行 serve 命令变成内网 Web 服务。" data-en="open-chat speaks ACP natively to Claude Code, Codex, Pi, Oh My Pi and any custom agent. Local-first, shipped as a single installer — or turn it into a LAN web server with one serve command.">open-chat 通过 ACP 直连 Claude Code、Codex、Pi、Oh My Pi 与任意自定义 agent。本地优先，单个安装包开箱即用；也可以用一行 serve 命令变成内网 Web 服务。</p>
+      <div class="hero-cta">
+        <a class="btn primary" href="https://github.com/CarlOpenLab/open-chat/releases/latest" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span data-zh="获取 open-chat" data-en="Get open-chat">获取 open-chat</span>
+        </a>
+        <a class="btn" href="https://github.com/CarlOpenLab/open-chat" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 1.5A10.5 10.5 0 0 0 1.5 12a10.5 10.5 0 0 0 7.18 9.97c.52.1.71-.23.71-.5v-1.78c-2.92.63-3.54-1.41-3.54-1.41-.48-1.21-1.17-1.54-1.17-1.54-.95-.65.07-.64.07-.64 1.06.07 1.61 1.08 1.61 1.08.94 1.6 2.46 1.14 3.06.87.1-.68.37-1.14.66-1.4-2.33-.27-4.78-1.17-4.78-5.2 0-1.15.41-2.09 1.08-2.82-.11-.27-.47-1.34.1-2.79 0 0 .88-.28 2.88 1.08a10 10 0 0 1 5.25 0c2-1.36 2.88-1.08 2.88-1.08.57 1.45.21 2.52.1 2.79.67.73 1.08 1.67 1.08 2.82 0 4.04-2.46 4.93-4.8 5.19.38.32.71.96.71 1.94v2.88c0 .28.19.6.72.5A10.5 10.5 0 0 0 22.5 12 10.5 10.5 0 0 0 12 1.5Z"/></svg>
+          <span data-zh="查看源码" data-en="View source">查看源码</span>
+        </a>
+      </div>
+      <p class="hero-note" data-zh="内置 Demo Agent —— 没装任何 agent 也能先试试完整流程。" data-en="Ships with a built-in Demo Agent — try the full flow without installing anything.">内置 Demo Agent —— 没装任何 agent 也能先试试完整流程。</p>
+
+      <div class="app-window reveal">
+        <div class="app-titlebar">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="title"><img src="assets/logo.svg" alt="" /><span>open-chat</span></span>
+          <span class="spacer"></span>
+        </div>
+        <img src="assets/hero-light.png" alt="open-chat 对话视图：执行计划、工具调用与代码结果" loading="eager" />
+      </div>
+    </div>
+  </section>
+
+  <!-- agents strip -->
+  <div class="agents-strip reveal">
+    <div class="label" data-zh="一个入口，管理所有 agent" data-en="One entry point for all your agents">一个入口，管理所有 agent</div>
+    <div class="agent-chips">
+      <span class="chip"><span class="sw" style="background:#D97757;"></span><b>Claude Code</b></span>
+      <span class="chip"><span class="sw" style="background:#10A37F;"></span><b>Codex</b></span>
+      <span class="chip"><span class="sw" style="background:#FF7A45;"></span><b>Pi</b></span>
+      <span class="chip"><span class="sw" style="background:#8B5CF6;"></span><b>Oh My Pi</b></span>
+      <span class="chip" data-zh="＋ 任意自定义 ACP agent" data-en="＋ any custom ACP agent">＋ 任意自定义 ACP agent</span>
+    </div>
+  </div>
+
+  <!-- ============ FLOW (dark band) ============ -->
+  <section class="band-dark" data-screen-label="flow">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker" data-zh="完整的回合" data-en="The full turn">完整的回合</span>
+        <h2 data-zh="从一句话到跑完测试，全过程看得见" data-en="From one prompt to a passing test, fully visible">从一句话到跑完测试，全过程看得见</h2>
+        <p data-zh="思考、计划、工具调用、代码 diff、终端输出和最终总结，按顺序流在同一份消息记录里；重开对话接着上次继续。" data-en="Thinking, plans, tool calls, diffs, terminal output and the final summary flow into one transcript — and every conversation resumes where it left off.">思考、计划、工具调用、代码 diff、终端输出和最终总结，按顺序流在同一份消息记录里；重开对话接着上次继续。</p>
+      </div>
+      <div class="app-window dark reveal">
+        <div class="app-titlebar">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="title"><img src="assets/logo.svg" alt="" /><span>open-chat</span></span>
+          <span class="spacer"></span>
+        </div>
+        <img src="assets/hero-dark.png" alt="open-chat 深色主题：执行计划卡片与工具链" loading="lazy" />
+      </div>
+      <div class="flow-points reveal">
+        <div class="flow-point">
+          <div class="fp-title" data-zh="计划先行" data-en="Plans first">计划先行</div>
+          <div class="fp-text" data-zh="执行计划是一张活的卡片：进度条、优先级、逐项打勾。" data-en="The execution plan is a live card — progress bar, priorities, items ticking off.">执行计划是一张活的卡片：进度条、优先级、逐项打勾。</div>
+        </div>
+        <div class="flow-point">
+          <div class="fp-title" data-zh="Diff 直接读" data-en="Readable diffs">Diff 直接读</div>
+          <div class="fp-text" data-zh="每次改动以代码 diff 呈现，终端输出就地展开。" data-en="Every edit lands as a code diff; terminal output expands in place.">每次改动以代码 diff 呈现，终端输出就地展开。</div>
+        </div>
+        <div class="flow-point">
+          <div class="fp-title" data-zh="会话可续接" data-en="Resumable sessions">会话可续接</div>
+          <div class="fp-text" data-zh="对话落盘本地，重开走 session/load 恢复上下文；续不上会明说。" data-en="Conversations persist locally and resume via session/load — and if resume fails, it says so.">对话落盘本地，重开走 session/load 恢复上下文；续不上会明说。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FEATURES ============ -->
+  <section id="features" data-screen-label="features">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker" data-zh="为什么是 open-chat" data-en="Why open-chat">为什么是 open-chat</span>
+        <h2 data-zh="为「认真用 agent 干活」设计的细节" data-en="Details designed for people who really work with agents">为「认真用 agent 干活」设计的细节</h2>
+        <p data-zh="不是又一个聊天壳子——权限、持久化、环境、分发，这些用起来真正疼的地方都替你想到了。" data-en="Not another chat shell. Permissions, persistence, environment and distribution — the parts that actually hurt are taken care of.">不是又一个聊天壳子——权限、持久化、环境、分发，这些用起来真正疼的地方都替你想到了。</p>
+      </div>
+      <div class="feature-grid reveal">
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg></div>
+          <h3 data-zh="权限审批是一等公民" data-en="Permissions as first-class citizens">权限审批是一等公民</h3>
+          <p data-zh="工具调用的授权请求浮在输入框上方：允许在右、拒绝在左，降低误触；支持每次确认、自动批准与完全访问三档实时切换。" data-en="Approval requests float above the composer — Allow on the right, Deny on the left. Switch between confirm-each, auto-approve and full access at any time.">工具调用的授权请求浮在输入框上方：允许在右、拒绝在左，降低误触；支持每次确认、自动批准与完全访问三档实时切换。</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
+          <h3 data-zh="会话持久化，本地落盘" data-en="Local-first persistence">会话持久化，本地落盘</h3>
+          <p data-zh="记录落在 <code>~/.config/open-chat</code>，原子写入 + 流式合并；侧栏分段、搜索、置顶、归档，数据始终在你手里。" data-en="Transcripts live in <code>~/.config/open-chat</code> with atomic writes. Search, pin and archive from the sidebar — your data stays yours.">记录落在 <code>~/.config/open-chat</code>，原子写入 + 流式合并；侧栏分段、搜索、置顶、归档，数据始终在你手里。</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><line x1="2" y1="9" x2="22" y2="9"/><line x1="7" y1="14" x2="7" y2="14.01"/></svg></div>
+          <h3 data-zh="零环境折腾" data-en="Zero environment fuss">零环境折腾</h3>
+          <p data-zh="Node sidecar 打包进安装包，前端产物内嵌进二进制；启动时自动读取登录 Shell 的 PATH，从 Dock 启动也能找到 <code>node</code> / <code>claude</code> / <code>codex</code>。" data-en="The Node sidecar ships inside the installer and the frontend is embedded in the binary. PATH is read from your login shell at launch, so <code>node</code>, <code>claude</code> and <code>codex</code> are found even from the Dock.">Node sidecar 打包进安装包，前端产物内嵌进二进制；启动时自动读取登录 Shell 的 PATH，从 Dock 启动也能找到 <code>node</code> / <code>claude</code> / <code>codex</code>。</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="14" height="16" rx="2"/><rect x="16" y="8" width="6" height="12" rx="2"/></svg></div>
+          <h3 data-zh="桌面 / 网页双模式" data-en="Desktop &amp; web, one UI">桌面 / 网页双模式</h3>
+          <p data-zh="同一份二进制，既是原生桌面应用，也能 <code>open-chat serve</code> 变成带令牌的 HTTP + SSE 服务，在内网另一台设备上接着用。" data-en="The same binary is a native desktop app and, with <code>open-chat serve</code>, a token-protected HTTP + SSE server for another device on your LAN.">同一份二进制，既是原生桌面应用，也能 <code>open-chat serve</code> 变成带令牌的 HTTP + SSE 服务，在内网另一台设备上接着用。</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-8L9.6 4.6A1 1 0 0 0 8.9 4H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z"/></svg></div>
+          <h3 data-zh="工作区面板" data-en="Workspace panel">工作区面板</h3>
+          <p data-zh="文件树、内置终端和 CodeMirror 编辑器就在对话旁边；语法高亮开箱即用，改完 <code>⌘S</code> 直接保存。" data-en="File tree, built-in terminal and a CodeMirror editor live next to the conversation, with syntax highlighting and <code>⌘S</code> to save.">文件树、内置终端和 CodeMirror 编辑器就在对话旁边；语法高亮开箱即用，改完 <code>⌘S</code> 直接保存。</p>
+        </div>
+        <div class="feature-card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></div>
+          <h3 data-zh="Agent 更新管理" data-en="Agent updates in-app">Agent 更新管理</h3>
+          <p data-zh="设置里跨 mise / npm / bun / Homebrew 检查各 agent CLI 版本，单个或一键批量升级；应用自身也带签名校验的自动更新。" data-en="Check every agent CLI across mise, npm, bun and Homebrew from Settings, upgrade in one click — and the app itself auto-updates with signature verification.">设置里跨 mise / npm / bun / Homebrew 检查各 agent CLI 版本，单个或一键批量升级；应用自身也带签名校验的自动更新。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ WORKSPACE ============ -->
+  <section class="band-soft" data-screen-label="workspace">
+    <div class="wrap split">
+      <div class="copy reveal">
+        <span class="kicker" data-zh="工作区" data-en="Workspace">工作区</span>
+        <h2 data-zh="对话旁边，就是项目本身" data-en="The project, right next to the conversation">对话旁边，就是项目本身</h2>
+        <p data-zh="右侧工作区面板跟着会话的工作目录走：文件树、实时语法高亮编辑器、内置终端，三件套不用离开窗口。" data-en="The workspace panel follows the session's working directory: file tree, live syntax-highlighted editor and built-in terminal — without leaving the window.">右侧工作区面板跟着会话的工作目录走：文件树、实时语法高亮编辑器、内置终端，三件套不用离开窗口。</p>
+        <ul class="check-list">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg><span><b data-zh="离线图标主题" data-en="Offline icon theme">离线图标主题</b><span data-zh=" — Catppuccin 文件图标，按扩展名着色" data-en=" — Catppuccin icons by file type"> — Catppuccin 文件图标，按扩展名着色</span></span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg><span><b data-zh="直接改文件" data-en="Edit in place">直接改文件</b><span data-zh=" — 未保存提醒、撤回，agent 与你共享同一份磁盘" data-en=" — unsaved hints, revert; agent and you share the same disk"> — 未保存提醒、撤回，agent 与你共享同一份磁盘</span></span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg><span><b data-zh="看得到 agent 在哪干活" data-en="See where the agent works">看得到 agent 在哪干活</b><span data-zh=" — 每个工具调用都带文件路径与分支" data-en=" — every tool call carries its file path and branch"> — 每个工具调用都带文件路径与分支</span></span></li>
+        </ul>
+      </div>
+      <div class="app-window reveal">
+        <div class="app-titlebar">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="title"><img src="assets/logo.svg" alt="" /><span>open-chat — workspace</span></span>
+          <span class="spacer"></span>
+        </div>
+        <img src="assets/workspace-light.png" alt="open-chat 工作区面板：文件树、编辑器与对话并排" loading="lazy" />
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SERVE ============ -->
+  <section data-screen-label="serve">
+    <div class="wrap split">
+      <div class="app-window dark reveal" style="order:1;">
+        <div class="terminal">
+          <div class="term-bar"><span class="dot" style="background:#FF5F57;"></span><span class="dot" style="background:#FEBC2E;"></span><span class="dot" style="background:#28C840;"></span>&nbsp;<span>terminal</span></div>
+          <div class="term-body">
+            <div class="ln"><span class="c-prompt">$</span> <span class="c-cmd">open-chat serve</span></div>
+            <div class="ln"><span class="c-out">listening on</span> <span class="c-url">http://127.0.0.1:4310/?token=…</span></div>
+            <div class="ln">&nbsp;</div>
+            <div class="ln"><span class="c-prompt">$</span> <span class="c-cmd">open-chat serve</span> <span class="c-flag">-addr</span> 0.0.0.0:4310 <span class="c-flag">-token</span> s3cret</div>
+            <div class="ln"><span class="c-out">sharing to your LAN — same UI, HTTP + SSE</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="copy reveal" style="order:2;">
+        <span class="kicker">serve</span>
+        <h2 data-zh="一行命令，变成内网服务" data-en="One command to a LAN server">一行命令，变成内网服务</h2>
+        <p data-zh="不开窗口也行：<code>serve</code> 把整套 UI 挂到 HTTP + SSE 上，页面代码与桌面模式零分叉，平板和办公室另一台机器都能用。" data-en="Skip the window: <code>serve</code> puts the whole UI on HTTP + SSE. The page code is identical to desktop mode — tablets and other machines on your LAN just work.">不开窗口也行：<code>serve</code> 把整套 UI 挂到 HTTP + SSE 上，页面代码与桌面模式零分叉，平板和办公室另一台机器都能用。</p>
+        <ul class="check-list">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg><span data-zh="一次性 token 保护，或 <b>-no-auth</b> 仅限本机" data-en="One-time token protection, or <b>-no-auth</b> for localhost only">一次性 token 保护，或 <b>-no-auth</b> 仅限本机</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg><span data-zh="同一份会话记录，桌面与网页无缝接力" data-en="Same conversation store — desktop and web pick up where you left off">同一份会话记录，桌面与网页无缝接力</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ARCHITECTURE ============ -->
+  <section class="band-soft" id="architecture" data-screen-label="architecture">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker" data-zh="架构" data-en="Architecture">架构</span>
+        <h2 data-zh="Go 管桌面，Node 管协议，中间只有 NDJSON" data-en="Go runs the desktop, Node runs the protocol — NDJSON in between">Go 管桌面，Node 管协议，中间只有 NDJSON</h2>
+        <p data-zh="Go 宿主负责窗口、目录与持久化；ACP 生态本来就活在 Node 里，所以 sidecar 打包成单文件嵌进二进制。两层之间只有一种协议。" data-en="The Go host handles windows, folders and persistence; the ACP ecosystem lives in Node, so the sidecar ships as a single embedded file. Between the two layers there is exactly one protocol.">Go 宿主负责窗口、目录与持久化；ACP 生态本来就活在 Node 里，所以 sidecar 打包成单文件嵌进二进制。两层之间只有一种协议。</p>
+      </div>
+      <div class="arch reveal">
+        <div class="arch-node core">
+          <span class="arch-tag">Go</span>
+          <div>
+            <h3 data-zh="Go 宿主（mygo）" data-en="Go host (mygo)">Go 宿主（mygo）</h3>
+            <p data-zh="桌面窗口、会话落盘、登录 Shell 环境探测、Host API；serve 模式下同一套 API 换成 HTTP + SSE。" data-en="Desktop windows, conversation persistence, login-shell environment detection and the Host API — re-served as HTTP + SSE in serve mode.">桌面窗口、会话落盘、登录 Shell 环境探测、Host API；serve 模式下同一套 API 换成 HTTP + SSE。</p>
+          </div>
+        </div>
+        <div class="arch-link">
+          <span class="wire"><span class="line"></span><span class="arrow"></span></span>
+          <span class="proto">NDJSON over stdio</span>
+        </div>
+        <div class="arch-node">
+          <span class="arch-tag">Node</span>
+          <div>
+            <h3 data-zh="sidecar — acp-hub core（go:embed 单文件）" data-en="sidecar — acp-hub core (single go:embed file)">sidecar — acp-hub core（go:embed 单文件）</h3>
+            <p data-zh="ACP 握手、事件翻译、权限桥接；每个 agent 一个子进程，多个对话共享同一条连接。" data-en="ACP handshake, event translation and permission bridging — one child process per agent, shared across conversations.">ACP 握手、事件翻译、权限桥接；每个 agent 一个子进程，多个对话共享同一条连接。</p>
+          </div>
+        </div>
+        <div class="arch-link">
+          <span class="wire"><span class="line"></span><span class="arrow"></span></span>
+          <span class="proto">ACP over stdio</span>
+        </div>
+        <div class="arch-node">
+          <span class="arch-tag" data-zh="Agents" data-en="Agents">Agents</span>
+          <div>
+            <h3 data-zh="你机器上已有的 agent" data-en="The agents already on your machine">你机器上已有的 agent</h3>
+            <div class="arch-row">
+              <span class="chip">Claude Code</span>
+              <span class="chip">Codex</span>
+              <span class="chip">Pi</span>
+              <span class="chip">Oh My Pi</span>
+              <span class="chip" data-zh="自定义 ACP agent" data-en="Custom ACP agents">自定义 ACP agent</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ DOWNLOAD ============ -->
+  <section id="download" data-screen-label="download">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker" data-zh="获取" data-en="Get started">获取</span>
+        <h2 data-zh="下载即用，更新自动送达" data-en="Download once, updates come to you">下载即用，更新自动送达</h2>
+        <p data-zh="安装包内置签名校验的自动更新：后台检查、弹出更新说明、原地替换，重启即新版本。" data-en="Installers ship with signature-verified auto-update: background checks, release notes, in-place replacement, restart into the new version.">安装包内置签名校验的自动更新：后台检查、弹出更新说明、原地替换，重启即新版本。</p>
+      </div>
+      <div class="dl-grid reveal">
+        <div class="dl-card">
+          <div class="os"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.7 12.9c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.9-1.6 0-3.2 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3.1 2.5 1.2-.1 1.7-.8 3.2-.8s1.9.8 3.2.8c1.3 0 2.2-1.2 3-2.4.9-1.4 1.3-2.7 1.3-2.8-.1 0-2.6-1-2.7-3.9ZM14.4 5.6c.7-.8 1.1-1.9 1-3.1-1 0-2.2.7-2.9 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.6 2.9-1.4Z"/></svg><span>macOS</span></div>
+          <div class="fmt">.dmg（Apple Silicon &amp; Intel）</div>
+          <div class="hint" data-zh="支持菜单栏检查更新" data-en="Check for Updates in the menu bar">支持菜单栏检查更新</div>
+        </div>
+        <div class="dl-card">
+          <div class="os"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.5l7.5-1v7H3v-6Zm0 13l7.5 1v-7H3v6Zm8.5 1.2L21 21V12.5h-9.5v7.2Zm0-15.4v7.2H21V3l-9.5 1.3Z"/></svg><span>Windows</span></div>
+          <div class="fmt">setup .exe（x64）</div>
+          <div class="hint" data-zh="设置里可手动检查更新" data-en="Manual check in Settings">设置里可手动检查更新</div>
+        </div>
+        <div class="dl-card">
+          <div class="os"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg><span>Linux</span></div>
+          <div class="fmt">.deb / .rpm / .tar.gz</div>
+          <div class="hint" data-zh="x64 构建" data-en="x64 builds">x64 构建</div>
+        </div>
+      </div>
+      <div class="dl-cta reveal">
+        <a class="btn primary" href="https://github.com/CarlOpenLab/open-chat/releases/latest" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span data-zh="前往 GitHub Releases 下载" data-en="Download from GitHub Releases">前往 GitHub Releases 下载</span>
+        </a>
+        <p class="note" data-zh="还没装任何 agent？开发构建内置 Demo Agent，装完 open-chat 就能跑通完整流程。" data-en="No agents installed yet? The built-in Demo Agent walks the full flow out of the box.">还没装任何 agent？开发构建内置 Demo Agent，装完 open-chat 就能跑通完整流程。</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-left">
+      <img src="assets/logo.svg" alt="open-chat logo" />
+      <div>
+        <div class="fname">open-chat</div>
+        <div class="fdesc" data-zh="本地优先的 agent 工作台" data-en="A local-first agent workbench">本地优先的 agent 工作台</div>
+      </div>
+    </div>
+    <nav class="footer-links">
+      <a href="https://github.com/CarlOpenLab/open-chat" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/CarlOpenLab/open-chat/releases" target="_blank" rel="noopener" data-zh="版本发布" data-en="Releases">版本发布</a>
+      <a href="https://github.com/CarlOpenLab/open-chat/issues" target="_blank" rel="noopener" data-zh="问题反馈" data-en="Issues">问题反馈</a>
+      <a href="https://agentclientprotocol.com" target="_blank" rel="noopener">ACP</a>
+      <a href="https://github.com/CarlOpenLab/acp-hub" target="_blank" rel="noopener">acp-hub</a>
+    </nav>
+  </div>
+  <div class="wrap footer-copy"><span data-zh="MIT License © 2026 CarlOpenLab" data-en="MIT License © 2026 CarlOpenLab">MIT License © 2026 CarlOpenLab</span></div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  var KEY = "oc-lang";
+  var root = document.documentElement;
+  var btnZh = document.getElementById("lang-zh");
+  var btnEn = document.getElementById("lang-en");
+
+  function apply(lang) {
+    root.setAttribute("lang", lang === "en" ? "en" : "zh-CN");
+    var nodes = document.querySelectorAll("[data-zh]");
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var v = el.getAttribute(lang === "en" ? "data-en" : "data-zh");
+      if (v != null) el.innerHTML = v;
+    }
+    btnZh.classList.toggle("on", lang !== "en");
+    btnEn.classList.toggle("on", lang === "en");
+    try { localStorage.setItem(KEY, lang); } catch (e) {}
+  }
+
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  var lang = saved || (navigator.language && navigator.language.toLowerCase().indexOf("zh") === 0 ? "zh" : "en");
+  apply(lang);
+  btnZh.addEventListener("click", function () { apply("zh"); });
+  btnEn.addEventListener("click", function () { apply("en"); });
+
+  // scroll reveal
+  var revealEls = document.querySelectorAll(".reveal");
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("in");
+          io.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12 });
+    revealEls.forEach(function (el) { io.observe(el); });
+  } else {
+    revealEls.forEach(function (el) { el.classList.add("in"); });
+  }
+})();
+</script>
+</body>
+</html>

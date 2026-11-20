@@ -10,3 +10,5 @@ internal/sidecar/dist/*
 web/src/gen/
 .claude/
 apps/
+.scratch/
+designs/
