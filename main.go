@@ -102,10 +102,35 @@ func desktop() {
 			return paths[0], nil
 		},
 		Reveal: func(path string) error { mygo.Shell.ShowItemInFolder(path); return nil },
+		Notify: func(conversationID, title, subtitle, body string, sound bool) error {
+			if !mygo.NotificationsSupported() {
+				return nil
+			}
+			n := mygo.NewNotification(mygo.NotificationOptions{
+				Group:    conversationID,
+				Title:    title,
+				Subtitle: subtitle,
+				Body:     body,
+				Silent:   !sound,
+			})
+			n.OnClick(func() {
+				mygo.App.Focus()
+				if win != nil {
+					win.Show()
+					win.Focus()
+				}
+				if conversationID != "" {
+					PushEvent.Broadcast(host.Push{Kind: "focus", ConversationID: conversationID})
+				}
+				n.Close()
+			})
+			return n.Show()
+		},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
+	mygo.App.OnDidBecomeActive(func() { mygo.ClearNotifications() })
 	mygo.BindAs("Host", host.NewAPI(h))
 	// Also in development builds: a plain `go build` has no embedded frontend
 	// of its own, and this is what serves the page then.

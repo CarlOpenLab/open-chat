@@ -293,7 +293,14 @@ func cloneEvent(e Event) Event {
 // settings.json
 
 func loadSettings(dir string) Settings {
-	s := Settings{Theme: "system", SendKey: "modEnter", Agents: map[string]AgentOverride{}}
+	s := Settings{
+		Theme:          "system",
+		SendKey:        "modEnter",
+		NotifyNeedYou:  true,
+		NotifyTurnDone: true,
+		NotifySound:    true,
+		Agents:         map[string]AgentOverride{},
+	}
 	if b, err := os.ReadFile(filepath.Join(dir, "settings.json")); err == nil {
 		_ = json.Unmarshal(b, &s)
 	}

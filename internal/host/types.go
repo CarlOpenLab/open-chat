@@ -8,14 +8,17 @@ type Event = map[string]any
 
 // Settings are the user's preferences, stored in settings.json.
 type Settings struct {
-	Theme        string                   `json:"theme"`        // system | light | dark
-	SendKey      string                   `json:"sendKey"`      // enter | modEnter
-	AutoAllow    bool                     `json:"autoAllow"`    // answer permission requests with "allow once"
-	DefaultAgent string                   `json:"defaultAgent"` // agent of new conversations
-	RecentDirs   []string                 `json:"recentDirs"`
-	NodePath     string                   `json:"nodePath,omitempty"`
-	Agents       map[string]AgentOverride `json:"agents"`
-	CustomAgents []CustomAgent            `json:"customAgents"`
+	Theme          string                   `json:"theme"`          // system | light | dark
+	SendKey        string                   `json:"sendKey"`        // enter | modEnter
+	AutoAllow      bool                     `json:"autoAllow"`      // answer permission requests with "allow once"
+	NotifyNeedYou  bool                     `json:"notifyNeedYou"`  // notify when an agent waits for user confirmation
+	NotifyTurnDone bool                     `json:"notifyTurnDone"` // notify when a conversation turn finishes
+	NotifySound    bool                     `json:"notifySound"`    // play sound with desktop notifications
+	DefaultAgent   string                   `json:"defaultAgent"`   // agent of new conversations
+	RecentDirs     []string                 `json:"recentDirs"`
+	NodePath       string                   `json:"nodePath,omitempty"`
+	Agents         map[string]AgentOverride `json:"agents"`
+	CustomAgents   []CustomAgent            `json:"customAgents"`
 }
 
 // AgentOverride changes how a built-in agent launches.
@@ -149,13 +152,41 @@ type AgentUpdateProgress struct {
 
 // Push is what the host tells the pages, as the "push" event.
 type Push struct {
-	Kind           string               `json:"kind"` // events | live | meta | removed | settings | agent_update
+	Kind           string               `json:"kind"` // events | live | meta | removed | focus | settings | agent_update | term_out | term_exit
 	ConversationID string               `json:"conversationId,omitempty"`
 	Events         []Event              `json:"events,omitempty"`
 	Live           *LiveState           `json:"live,omitempty"`
 	Meta           *Meta                `json:"meta,omitempty"`
 	Settings       *Settings            `json:"settings,omitempty"`
 	AgentUpdate    *AgentUpdateProgress `json:"agentUpdate,omitempty"`
+	TermOut        *TermOut             `json:"termOut,omitempty"`
+	TermExit       *TermExit            `json:"termExit,omitempty"`
+}
+
+// WorkspaceNode describes a file or directory for the workspace file tree.
+type WorkspaceNode struct {
+	Title    string          `json:"title"`
+	Path     string          `json:"path"`
+	Children []WorkspaceNode `json:"children,omitempty"`
+}
+
+// TermInfo describes a newly spawned PTY terminal session.
+type TermInfo struct {
+	ID    string `json:"id"`
+	Cwd   string `json:"cwd"`
+	Shell string `json:"shell"`
+}
+
+// TermOut carries a base64-encoded chunk of raw PTY output.
+type TermOut struct {
+	ID   string `json:"id"`
+	Data string `json:"data"`
+}
+
+// TermExit reports that a PTY terminal session exited.
+type TermExit struct {
+	ID       string `json:"id"`
+	ExitCode int    `json:"exitCode"`
 }
 
 // Bootstrap is everything the page needs to draw its first frame.

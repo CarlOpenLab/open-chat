@@ -4,11 +4,21 @@ import type { SenderPasteInfo } from "@antdv-next/x";
 import { Dropdown, Tooltip, message } from "antdv-next";
 import { computed, h, ref, watch } from "vue";
 import { api } from "../api";
-import { saveSettings, store } from "../store";
-import type { Block, ConfigOption, GitInfo, LiveState } from "../types";
+import { saveSettings, store, type QueuedMessage } from "../store";
+import { userText } from "../transcript";
+import type { Block, ConfigOption, GitInfo, LiveState, PermissionOption } from "../types";
 import ProviderPicker from "./ProviderPicker.vue";
 
 type PermissionMode = "supervised" | "auto" | "full";
+type DeckKind = "permission" | "queue" | "files";
+
+export interface PendingPermission {
+  turnId: string;
+  requestId: string;
+  title: string;
+  detail?: string;
+  options: PermissionOption[];
+}
 type EffortKey = "low" | "medium" | "high" | "xhigh" | "max";
 
 const gitCache = new Map<string, { info: GitInfo | null; fallback: boolean }>();
@@ -29,6 +39,10 @@ const props = defineProps<{
   lockProvider?: boolean;
   /** Recent directories shown as quiet quick-switch chips under the composer. */
   recentDirs?: string[];
+  /** Pending permission requests for the active conversation. */
+  pendingPerms?: PendingPermission[];
+  /** Queued follow-up messages waiting to be sent. */
+  queuedMessages?: QueuedMessage[];
 }>();
 
 const emit = defineEmits<{
@@ -40,11 +54,26 @@ const emit = defineEmits<{
   stop: [];
   "pick-model": [configId: string, value: string];
   "pick-mode": [modeId: string];
+  "respond-permission": [requestId: string, optionId: string];
+  "steer-queued": [queueId: string];
+  "edit-queued": [queueId: string];
+  "remove-queued": [queueId: string];
+  "jump-turn": [turnId: string];
   cwd: [];
   manage: [];
 }>();
 
-const attached = ref<Block[]>([]);
+const localAttached = ref<Block[]>([]);
+const attached = computed<Block[]>({
+  get: () => (props.conversationId ? (store.draftAttachments[props.conversationId] ?? []) : localAttached.value),
+  set: (next: Block[]) => {
+    if (props.conversationId) {
+      store.draftAttachments[props.conversationId] = next;
+    } else {
+      localAttached.value = next;
+    }
+  },
+});
 const inputFiles = ref<HTMLInputElement | null>(null);
 const dragging = ref(false);
 const gitInfo = ref<GitInfo | null>(null);
@@ -299,7 +328,6 @@ const branchMenu = computed(() => {
 watch(
   () => props.conversationId,
   () => {
-    attached.value = [];
     slashDismissed.value = false;
     dragging.value = false;
     dragDepth = 0;
@@ -408,8 +436,110 @@ function onKeydown(e: KeyboardEvent): void | false {
   return;
 }
 
+// Unified 3-card interactive deck above Composer: permission / queue / files
+const permList = computed(() => props.pendingPerms ?? []);
+const queueList = computed(() => props.queuedMessages ?? []);
+const submittingPermId = ref<string | null>(null);
+
+const availableDeckCards = computed<DeckKind[]>(() => {
+  const list: DeckKind[] = [];
+  if (permList.value.length > 0) list.push("permission");
+  if (queueList.value.length > 0) list.push("queue");
+  if (attached.value.length > 0) list.push("files");
+  return list;
+});
+
+const activeDeck = ref<DeckKind | null>(null);
+
+const effectiveDeck = computed<DeckKind | null>(() => {
+  const avail = availableDeckCards.value;
+  if (!avail.length) return null;
+  if (activeDeck.value && avail.includes(activeDeck.value)) return activeDeck.value;
+  return avail[0];
+});
+
+const backDeckCards = computed<DeckKind[]>(() =>
+  availableDeckCards.value.filter((k) => k !== effectiveDeck.value),
+);
+
+watch(
+  () => permList.value.length,
+  (len, prev) => {
+    if (len > (prev ?? 0)) activeDeck.value = "permission";
+    if (len === 0) submittingPermId.value = null;
+  },
+);
+
+watch(
+  () => queueList.value.length,
+  (len, prev) => {
+    if (len > (prev ?? 0) && activeDeck.value !== "permission") activeDeck.value = "queue";
+  },
+);
+
+watch(
+  () => attached.value.length,
+  (len, prev) => {
+    if (len > (prev ?? 0)) activeDeck.value = "files";
+  },
+);
+
+watch(
+  () => props.conversationId,
+  () => {
+    activeDeck.value = null;
+    submittingPermId.value = null;
+  },
+);
+
+function selectDeck(kind: DeckKind) {
+  activeDeck.value = kind;
+}
+
+const currentPerm = computed(() => permList.value[0] ?? null);
+const isAllowOption = (o: PermissionOption) => o.kind.startsWith("allow");
+const permRejects = computed(() => (currentPerm.value?.options ?? []).filter((o) => !isAllowOption(o)));
+const permAllows = computed(() => (currentPerm.value?.options ?? []).filter(isAllowOption));
+
+function permOptionLabel(o: PermissionOption): string {
+  if (o.kind === "allow_once") return "允许一次";
+  if (o.kind === "allow_always") return "本会话允许";
+  if (o.kind === "reject_once") return "拒绝";
+  if (o.kind === "reject_always") return "始终拒绝";
+  return o.name;
+}
+
+function answerPerm(requestId: string, optionId: string) {
+  if (submittingPermId.value === requestId) return;
+  submittingPermId.value = requestId;
+  emit("respond-permission", requestId, optionId);
+  window.setTimeout(() => {
+    if (submittingPermId.value === requestId) submittingPermId.value = null;
+  }, 3000);
+}
+
+function queuePreview(blocks: Block[]): string {
+  const text = userText(blocks).replace(/\s+/g, " ").trim();
+  const imgs = blocks.filter((b) => b.type === "image").length;
+  const files = blocks.filter((b) => b.type === "resource_link").length;
+  const attach: string[] = [];
+  if (imgs) attach.push(`${imgs} 张图片`);
+  if (files) attach.push(`${files} 个文件`);
+  if (text && attach.length) return `${text} · ${attach.join("、")}`;
+  return text || attach.join("、") || "待发送消息";
+}
+
+const filesSummary = computed(() => {
+  const first = attached.value[0];
+  if (!first) return "";
+  const firstName = first.type === "image" ? "图片" : (first as { name?: string }).name || "文件";
+  return attached.value.length > 1 ? `${firstName} 等 ${attached.value.length} 项` : firstName;
+});
+
 async function addFiles(files: FileList | File[]) {
-  for (const file of Array.from(files)) {
+  const list = Array.from(files);
+  const added: Block[] = [];
+  for (const file of list) {
     if (file.type.startsWith("image/") && file.size < 8 * 1024 * 1024) {
       const data = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -417,10 +547,14 @@ async function addFiles(files: FileList | File[]) {
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
-      attached.value.push({ type: "image", data, mimeType: file.type, uri: `file://${file.name}` });
+      added.push({ type: "image", data, mimeType: file.type, uri: `file://${file.name}` });
     } else {
-      attached.value.push({ type: "resource_link", uri: `file://${file.name}`, name: file.name, mimeType: file.type, size: file.size });
+      added.push({ type: "resource_link", uri: `file://${file.name}`, name: file.name, mimeType: file.type, size: file.size });
     }
+  }
+  if (added.length > 0) {
+    attached.value = [...attached.value, ...added];
+    activeDeck.value = "files";
   }
 }
 
@@ -452,7 +586,7 @@ function onDrop(e: DragEvent) {
 }
 
 function removeAt(i: number) {
-  attached.value.splice(i, 1);
+  attached.value = attached.value.filter((_, idx) => idx !== i);
 }
 
 defineExpose({ addFiles });
@@ -482,9 +616,123 @@ defineExpose({ addFiles });
       </div>
     </Transition>
 
-    <div class="composer-shell" :class="{ 'has-tray': attached.length > 0 }">
-      <!-- Layer 1: Top attachment drawer (68x68 stacked mini-cards + adjacent dashed ImagePlus tile) -->
-      <div v-if="attached.length" class="top-tray">
+    <!-- Peeking back cards (click any card to bring it to the front) -->
+    <div v-if="backDeckCards.length" class="deck-peeks">
+      <button
+        v-for="(kind, idx) in backDeckCards"
+        :key="kind"
+        type="button"
+        class="deck-peek"
+        :class="[
+          `kind-${kind}`,
+          backDeckCards.length === 2 && idx === 0 ? 'tier-far' : 'tier-near',
+        ]"
+        @click="selectDeck(kind)"
+      >
+        <template v-if="kind === 'permission' && currentPerm">
+          <span class="peek-dot warn" />
+          <span class="peek-label">待确认{{ permList.length > 1 ? ` (${permList.length})` : '' }}</span>
+          <span class="peek-text">{{ currentPerm.title }}</span>
+          <span class="peek-switch">切换</span>
+        </template>
+        <template v-else-if="kind === 'queue'">
+          <span class="peek-dot queue" />
+          <span class="peek-label">待发消息 ({{ queueList.length }})</span>
+          <span class="peek-text">{{ queuePreview(queueList[0].blocks) }}</span>
+          <span class="peek-switch">切换</span>
+        </template>
+        <template v-else-if="kind === 'files'">
+          <span class="peek-dot files" />
+          <span class="peek-label">已选附件 ({{ attached.length }})</span>
+          <span class="peek-text">{{ filesSummary }}</span>
+          <span class="peek-switch">切换</span>
+        </template>
+      </button>
+    </div>
+
+    <div class="composer-shell" :class="{ 'has-tray': effectiveDeck !== null, 'is-perm': effectiveDeck === 'permission' }">
+      <!-- Active Front Card: Permission Confirmation -->
+      <div v-if="effectiveDeck === 'permission' && currentPerm" class="tray-panel perm-panel">
+        <div class="perm-head">
+          <span class="perm-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+              <path d="M12 8v4" />
+              <path d="M12 16h.01" />
+            </svg>
+          </span>
+          <div class="perm-meta" @click="emit('jump-turn', currentPerm.turnId)">
+            <div class="perm-title-row">
+              <span class="perm-title">{{ currentPerm.title }}</span>
+              <span v-if="permList.length > 1" class="perm-count mono">1 / {{ permList.length }}</span>
+            </div>
+            <div v-if="currentPerm.detail" class="perm-detail mono" :title="currentPerm.detail">
+              {{ nicePath(currentPerm.detail) }}
+            </div>
+          </div>
+          <div class="perm-actions">
+            <button
+              v-for="o in permRejects"
+              :key="o.optionId"
+              type="button"
+              class="perm-btn reject"
+              :disabled="submittingPermId === currentPerm.requestId"
+              @click="answerPerm(currentPerm.requestId, o.optionId)"
+            >
+              {{ permOptionLabel(o) }}
+            </button>
+            <button
+              v-for="o in permAllows"
+              :key="o.optionId"
+              type="button"
+              class="perm-btn"
+              :class="o.kind === 'allow_always' ? 'allow-always' : 'allow-once'"
+              :disabled="submittingPermId === currentPerm.requestId"
+              @click="answerPerm(currentPerm.requestId, o.optionId)"
+            >
+              {{ permOptionLabel(o) }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active Front Card: Queued Messages -->
+      <div v-else-if="effectiveDeck === 'queue' && queueList.length" class="tray-panel queue-panel">
+        <div class="queue-list">
+          <div v-for="(item, qi) in queueList" :key="item.id" class="queue-row">
+            <span class="queue-tag mono">{{ qi + 1 }}</span>
+            <span class="queue-text" :title="queuePreview(item.blocks)">{{ queuePreview(item.blocks) }}</span>
+            <div class="queue-acts">
+              <Tooltip title="立即打断当前输出并发送" :mouse-enter-delay="0.25">
+                <button type="button" class="queue-ic steer" aria-label="立即发送" @click.stop="emit('steer-queued', item.id)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="9 10 4 15 9 20" />
+                    <path d="M20 4v7a4 4 0 0 1-4 4H4" />
+                  </svg>
+                </button>
+              </Tooltip>
+              <Tooltip title="放回输入框编辑" :mouse-enter-delay="0.25">
+                <button type="button" class="queue-ic" aria-label="编辑" @click.stop="emit('edit-queued', item.id)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+                  </svg>
+                </button>
+              </Tooltip>
+              <Tooltip title="移出队列" :mouse-enter-delay="0.25">
+                <button type="button" class="queue-ic danger" aria-label="删除" @click.stop="emit('remove-queued', item.id)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                  </svg>
+                </button>
+              </Tooltip>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active Front Card: Uploaded Files / Images -->
+      <div v-else-if="effectiveDeck === 'files' && attached.length" class="top-tray">
         <div
           class="mini-cards-group"
           :class="{ 'is-stacked': attached.length > 1 }"
@@ -730,17 +978,306 @@ defineExpose({ addFiles });
   height: 12.5px;
 }
 
+/* Peeking back cards above the composer shell (click any card to switch to front) */
+.deck-peeks {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  z-index: 1;
+  margin-bottom: -10px;
+}
+
+.deck-peek {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 14px 8px;
+  border: 1px solid var(--border-strong);
+  border-bottom: none;
+  border-radius: 14px 14px 0 0;
+  background: var(--surface-2);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: transform 0.2s var(--ease), background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.deck-peek.tier-near {
+  width: 95%;
+  z-index: 2;
+}
+.deck-peek.tier-far {
+  width: 90%;
+  margin-bottom: -10px;
+  z-index: 1;
+  opacity: 0.88;
+}
+.deck-peek:hover {
+  transform: translateY(-2px);
+  background: var(--surface);
+  color: var(--text);
+}
+.deck-peek.kind-permission {
+  border-color: color-mix(in srgb, var(--warn) 36%, var(--border-strong));
+  background: color-mix(in srgb, var(--warn-soft) 45%, var(--surface-2));
+}
+.deck-peek.kind-permission:hover {
+  background: color-mix(in srgb, var(--warn-soft) 65%, var(--surface));
+}
+
+.peek-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.peek-dot.warn {
+  background: var(--warn);
+  animation: oc-pulse 1.4s ease-in-out infinite;
+}
+.peek-dot.queue {
+  background: var(--ink);
+  opacity: 0.7;
+}
+.peek-dot.files {
+  background: var(--ok);
+}
+.peek-label {
+  font-weight: 560;
+  color: var(--text);
+  flex: none;
+}
+.peek-text {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peek-switch {
+  font-size: 11px;
+  color: var(--text-3);
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--hover);
+  transition: color 0.14s, background 0.14s;
+}
+.deck-peek:hover .peek-switch {
+  color: var(--text);
+  background: var(--active);
+}
+
 /* Outer shell matching sender-stacked-studio: rounded 20px tray seamlessly wrapping the 18px Sender card */
 .composer-shell {
   position: relative;
+  z-index: 2;
   border-radius: 20px;
 }
 .composer-shell.has-tray {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: var(--surface-2);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-composer);
+}
+.composer-shell.is-perm {
+  border-color: color-mix(in srgb, var(--warn) 38%, var(--border-strong));
+  background: color-mix(in srgb, var(--warn-soft) 32%, var(--surface-2));
+}
+
+.tray-panel {
+  padding: 11px 14px;
+}
+
+/* Active Permission Confirmation Panel */
+.perm-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.perm-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  color: var(--warn);
+}
+.perm-icon svg {
+  width: 15px;
+  height: 15px;
+}
+.perm-meta {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.perm-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.perm-title {
+  font-size: 13px;
+  font-weight: 580;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.perm-count {
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+  flex: none;
+}
+.perm-detail {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.perm-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.perm-btn {
+  height: 27px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 540;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-strong);
+  color: var(--text-2);
+  transition: background 0.14s, color 0.14s, border-color 0.14s, opacity 0.14s;
+  white-space: nowrap;
+}
+.perm-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.perm-btn.reject:hover:not(:disabled) {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 35%, var(--border-strong));
+  background: var(--err-soft);
+}
+.perm-btn.allow-always {
+  color: var(--text);
+  background: var(--surface-strong);
+}
+.perm-btn.allow-always:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: color-mix(in srgb, var(--ink) 28%, var(--border-strong));
+}
+.perm-btn.allow-once {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--ink-inv);
+}
+.perm-btn.allow-once:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+/* Active Queued Messages Panel */
+.queue-panel {
+  padding: 8px 12px;
+}
+.queue-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 116px;
+  overflow-y: auto;
+}
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 2px 4px 2px 6px;
+  border-radius: 7px;
+  transition: background 0.14s var(--ease);
+}
+.queue-row:hover {
+  background: var(--hover);
+}
+.queue-tag {
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  background: var(--hover);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 10.5px;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+.queue-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.queue-ic {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+}
+.queue-ic svg {
+  width: 12.5px;
+  height: 12.5px;
+}
+.queue-ic:hover {
+  background: var(--active);
+  color: var(--text);
+}
+.queue-ic.steer {
+  color: var(--text-2);
+}
+.queue-ic.steer:hover {
+  background: var(--ink);
+  color: var(--ink-inv);
+}
+.queue-ic.danger:hover {
+  background: var(--err-soft);
+  color: var(--err);
 }
 
 .composer {

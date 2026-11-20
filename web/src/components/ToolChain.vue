@@ -119,9 +119,18 @@ function toggle(id: string) {
     >
       <!-- Left rail: status dot/icon + dashed connector -->
       <div class="tool-rail">
-        <span class="tool-status-ic" :class="call.status">
-          <CloseCircleOutlined v-if="call.status === 'failed'" />
-          <CheckCircleOutlined v-else-if="call.status === 'completed'" />
+        <span
+          class="tool-status-ic"
+          :class="
+            call.status === 'completed'
+              ? 'completed'
+              : call.status === 'failed' || !live
+                ? 'failed'
+                : call.status
+          "
+        >
+          <CheckCircleOutlined v-if="call.status === 'completed'" />
+          <CloseCircleOutlined v-else-if="call.status === 'failed' || !live" />
           <LoadingOutlined v-else spin />
         </span>
         <span v-if="idx < calls.length - 1" class="tool-line" />

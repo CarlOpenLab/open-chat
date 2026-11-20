@@ -36,6 +36,7 @@ type Options struct {
 	// Desktop integrations; nil in web mode.
 	PickFolder func(ctx context.Context) (string, error)
 	Reveal     func(path string) error
+	Notify     func(conversationID, title, subtitle, body string, sound bool) error
 	// CheckUpdates opens the update window; nil in web mode.
 	CheckUpdates func()
 }
@@ -60,13 +61,17 @@ type Host struct {
 
 	liveMu sync.Mutex
 	lives  map[string]*live
+
+	termMu sync.Mutex
+	terms  map[string]*termSession
 }
 
 type live struct {
-	state      LiveState
-	connecting chan struct{}
-	err        error
-	pending    map[string]bool
+	state        LiveState
+	acpSessionID string
+	connecting   chan struct{}
+	err          error
+	pending      map[string]bool
 }
 
 // New opens the data directory and prepares the host. Agents start lazily.
@@ -78,7 +83,7 @@ func New(opts Options) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Host{opts: opts, store: st, settings: loadSettings(opts.DataDir), lives: map[string]*live{}}
+	h := &Host{opts: opts, store: st, settings: loadSettings(opts.DataDir), lives: map[string]*live{}, terms: map[string]*termSession{}}
 	// Resolve the login environment and warm the sidecar up in the
 	// background, so the first conversation doesn't wait for either.
 	go func() {
@@ -87,8 +92,9 @@ func New(opts Options) (*Host, error) {
 	return h, nil
 }
 
-// Close stops the agents and writes everything pending to disk.
+// Close stops the agents, terminals and writes everything pending to disk.
 func (h *Host) Close() {
+	h.closeAllTerms()
 	h.scMu.Lock()
 	sc := h.sc
 	h.sc = nil
@@ -395,7 +401,7 @@ func (h *Host) connect(ctx context.Context, id string) (LiveState, error) {
 	h.liveMu.Unlock()
 	h.pushLive(id)
 
-	st, err := h.open(ctx, m)
+	st, acpSessionID, err := h.open(ctx, m)
 
 	h.liveMu.Lock()
 	if err != nil {
@@ -403,6 +409,7 @@ func (h *Host) connect(ctx context.Context, id string) (LiveState, error) {
 		l.err = err
 	} else {
 		l.state = st
+		l.acpSessionID = acpSessionID
 	}
 	close(l.connecting)
 	l.connecting = nil
@@ -415,17 +422,17 @@ func (h *Host) connect(ctx context.Context, id string) (LiveState, error) {
 	return st, err
 }
 
-func (h *Host) open(ctx context.Context, m Meta) (LiveState, error) {
+func (h *Host) open(ctx context.Context, m Meta) (LiveState, string, error) {
 	a, ok := h.agent(m.AgentID)
 	if !ok {
-		return LiveState{}, fmt.Errorf("agent %s 不存在或已被移除", m.AgentID)
+		return LiveState{}, "", fmt.Errorf("agent %s 不存在或已被移除", m.AgentID)
 	}
 	if !a.Available {
-		return LiveState{}, fmt.Errorf("没有找到 %s 的命令行（%s）。安装并登录后再试", a.Name, a.Probe)
+		return LiveState{}, "", fmt.Errorf("没有找到 %s 的命令行（%s）。安装并登录后再试", a.Name, a.Probe)
 	}
 	sc, err := h.sidecar()
 	if err != nil {
-		return LiveState{}, err
+		return LiveState{}, "", err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 	defer cancel()
@@ -447,15 +454,24 @@ func (h *Host) open(ctx context.Context, m Meta) (LiveState, error) {
 		params["resumeId"] = m.AcpSessionID
 	}
 	if err := sc.call(ctx, "open", params, &res); err != nil {
-		return LiveState{}, friendlyError(a, err)
+		return LiveState{}, "", friendlyError(a, err)
 	}
 	if res.ConfigOptions == nil {
 		res.ConfigOptions = []any{}
 	}
 	hadHistory := m.AcpSessionID != ""
-	h.store.update(m.ID, func(mm *Meta) { mm.AcpSessionID = res.AcpSessionID })
-	if hadHistory && !res.Resumed {
-		h.emit(m.ID, Event{"type": "notice", "level": "info", "text": a.Name + " 无法恢复之前的上下文，接下来是一个新的会话", "t": now()})
+	// Only persist AcpSessionID when resuming an existing session; fresh
+	// sessions are persisted on the first sent prompt (Codex only writes a
+	// thread to disk once a message is sent, so saving an empty session ID
+	// causes session/load to fail on the next restart).
+	if res.Resumed {
+		h.store.update(m.ID, func(mm *Meta) { mm.AcpSessionID = res.AcpSessionID })
+	} else if hadHistory {
+		h.store.update(m.ID, func(mm *Meta) { mm.AcpSessionID = "" })
+		noticeText := a.Name + " 无法恢复之前的上下文，接下来是一个新的会话"
+		if h.shouldEmitResetNotice(m.ID, noticeText) {
+			h.emit(m.ID, Event{"type": "notice", "level": "info", "text": noticeText, "t": now()})
+		}
 	}
 	return LiveState{
 		Status:        "ready",
@@ -465,7 +481,29 @@ func (h *Host) open(ctx context.Context, m Meta) (LiveState, error) {
 		ConfigOptions: res.ConfigOptions,
 		Commands:      []Command{},
 		Resumed:       res.Resumed,
-	}, nil
+	}, res.AcpSessionID, nil
+}
+
+// shouldEmitResetNotice returns true only if the conversation had at least one
+// user message since the last identical reset notice, preventing duplicate
+// notices when re-clicking an idle conversation that cannot resume sessions.
+func (h *Host) shouldEmitResetNotice(id, text string) bool {
+	events := h.store.transcript(id)
+	hasActivity := false
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		t, _ := e["type"].(string)
+		if t == "notice" {
+			if msg, _ := e["text"].(string); msg == text {
+				return hasActivity
+			}
+			continue
+		}
+		if t == "user_message" || t == "message_delta" || t == "tool_call" {
+			hasActivity = true
+		}
+	}
+	return hasActivity
 }
 
 func (h *Host) probeAgent(ctx context.Context, agentID, cwd string) ([]any, error) {
@@ -557,9 +595,13 @@ func (h *Host) send(ctx context.Context, id string, blocks []Block) error {
 		h.liveMu.Unlock()
 		return errors.New("连接已断开")
 	}
+	sid := l.acpSessionID
 	l.state.Status = "running"
 	l.state.TurnStartedAt = now()
 	h.liveMu.Unlock()
+	if sid != "" {
+		h.store.update(id, func(mm *Meta) { mm.AcpSessionID = sid })
+	}
 	h.pushLive(id)
 
 	sc, err := h.sidecar()

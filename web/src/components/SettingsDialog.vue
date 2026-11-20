@@ -8,6 +8,7 @@ import {
 import { Button, Dropdown, Input, Modal, Switch, Tabs, Tag, Tooltip, message } from "antdv-next";
 import { computed, ref, watch } from "vue";
 import { api } from "../api";
+import { sendTestNotification } from "../notify";
 import { refreshAgents, saveSettings, store } from "../store";
 import type { AgentUpdateChannel, AgentUpdateReport, AgentUpdateResult, CustomAgent, Settings } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
@@ -52,7 +53,22 @@ watch(tab, (next) => {
   }
 });
 
+const MANAGED_AGENT_SPECS = [
+  { id: "claude-code", agent: "Claude Code" },
+  { id: "codex", agent: "Codex" },
+  { id: "opencode", agent: "OpenCode" },
+  { id: "pi", agent: "Pi" },
+  { id: "oh-my-pi", agent: "Oh My Pi" },
+  { id: "dsh", agent: "DeepSeek Harness" },
+];
+
 const agents = computed(() => store.agents);
+const initialManagedAgents = computed(() =>
+  MANAGED_AGENT_SPECS.map((spec) => {
+    const known = store.agents.find((a) => a.id === spec.id);
+    return { id: spec.id, agent: known?.name || spec.agent };
+  }),
+);
 const outdatedCount = computed(() => updateReport.value?.summary.outdated ?? 0);
 const anyUpgrading = computed(
   () =>
@@ -303,6 +319,14 @@ async function checkUpdates() {
   }
 }
 
+async function testNotify() {
+  try {
+    await sendTestNotification(local.value?.notifySound !== false);
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  }
+}
+
 async function save() {
   if (!local.value) return;
   saving.value = true;
@@ -471,11 +495,28 @@ function toggleCmdEditor(id: string) {
             </div>
           </div>
 
-          <div v-if="inspectingUpdates && !updateReport" class="update-empty">
-            正在扫描本机 Agent 安装渠道与最新版本…
+          <div v-if="!updateReport" class="agent-list">
+            <div v-for="item in initialManagedAgents" :key="item.id" class="agent initializing" aria-disabled="true">
+              <div class="agent-head">
+                <span class="agent-ic-box">
+                  <ProviderIcon :id="item.id" :name="item.agent" :size="15" />
+                </span>
+                <span class="aname">{{ item.agent }}</span>
+                <span class="skel-pill skel-ch" aria-hidden="true" />
+                <span class="status-pill init">
+                  <i class="status-dot" />
+                  <span>{{ inspectingUpdates ? "初始化检测中…" : "等待检测" }}</span>
+                </span>
+                <span class="spacer" />
+                <span class="skel-pill skel-ver" aria-hidden="true" />
+                <Button size="small" disabled class="init-btn">
+                  {{ inspectingUpdates ? "检测中" : "未检测" }}
+                </Button>
+              </div>
+            </div>
           </div>
 
-          <div v-else-if="updateReport" class="agent-list">
+          <div v-else class="agent-list">
             <div v-for="r in updateReport.results" :key="r.id" class="agent" :class="{ updating: isAgentUpdating(r.id) }">
               <div class="agent-head">
                 <span class="agent-ic-box">
@@ -610,6 +651,45 @@ function toggleCmdEditor(id: string) {
               </button>
             </div>
           </section>
+
+          <template v-if="store.boot?.mode === 'desktop'">
+            <section class="row">
+              <div class="label">
+                <div class="title">待确认通知（Need You）</div>
+                <div class="desc">窗口在后台或切到其他对话时，Agent 等待确认立即发出系统通知</div>
+              </div>
+              <Switch v-model:checked="local.notifyNeedYou" size="small" />
+            </section>
+
+            <section class="row">
+              <div class="label">
+                <div class="title">会话完成通知</div>
+                <div class="desc">窗口在后台或非当前对话完成回复、执行出错时发出系统通知</div>
+              </div>
+              <Switch v-model:checked="local.notifyTurnDone" size="small" />
+            </section>
+
+            <section class="row">
+              <div class="label">
+                <div class="title">通知提示音</div>
+                <div class="desc">系统桌面通知附带提示音</div>
+              </div>
+              <div class="row-acts">
+                <Button
+                  size="small"
+                  :disabled="!local.notifyNeedYou && !local.notifyTurnDone"
+                  @click="testNotify"
+                >
+                  测试通知
+                </Button>
+                <Switch
+                  v-model:checked="local.notifySound"
+                  size="small"
+                  :disabled="!local.notifyNeedYou && !local.notifyTurnDone"
+                />
+              </div>
+            </section>
+          </template>
 
           <section class="row">
             <div class="label">
@@ -801,11 +881,46 @@ function toggleCmdEditor(id: string) {
   opacity: 1;
   animation: oc-pulse 1.2s ease-in-out infinite;
 }
-.update-empty {
-  padding: 28px 12px;
-  text-align: center;
-  font-size: 12.5px;
+.agent.initializing {
+  opacity: 0.62;
+  pointer-events: none;
+  border-style: dashed;
+  border-color: var(--border);
+}
+.agent.initializing .agent-ic-box {
+  filter: grayscale(0.45);
+  opacity: 0.85;
+}
+.status-pill.init {
   color: var(--text-3);
+}
+.status-pill.init .status-dot {
+  background: var(--text-3);
+  opacity: 0.65;
+  animation: oc-pulse 1.4s ease-in-out infinite;
+}
+.skel-pill {
+  display: inline-block;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--hover) 0%,
+    var(--active) 50%,
+    var(--hover) 100%
+  );
+  background-size: 200% 100%;
+  animation: oc-shimmer 1.8s linear infinite;
+}
+.skel-ch {
+  width: 34px;
+  height: 16px;
+}
+.skel-ver {
+  width: 52px;
+  height: 14px;
+}
+.init-btn {
+  min-width: 58px;
 }
 .ver-text {
   font-size: 11.5px;
@@ -998,6 +1113,12 @@ function toggleCmdEditor(id: string) {
 }
 .widen {
   width: 210px;
+}
+.row-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
 }
 
 .seg-group {

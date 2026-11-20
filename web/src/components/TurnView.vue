@@ -7,7 +7,6 @@ import { computed, h } from "vue";
 import { store } from "../store";
 import { answerText, userText, type Turn } from "../transcript";
 import type { Block } from "../types";
-import PermissionCard from "./PermissionCard.vue";
 import PlanCard from "./PlanCard.vue";
 import ProviderIcon from "./ProviderIcon.vue";
 import ReasoningBlock from "./ReasoningBlock.vue";
@@ -173,15 +172,6 @@ const actionItems = computed<ActionItemType[]>(() => {
               />
               <PlanCard v-else-if="seg.kind === 'plan'" :entries="seg.entries" />
               <ToolChain v-else-if="seg.kind === 'tools'" :calls="seg.calls" :live="streaming" />
-              <PermissionCard
-                v-else-if="seg.kind === 'permission'"
-                :conversation-id="conversationId"
-                :request-id="seg.requestId"
-                :options="seg.options"
-                :title="seg.toolCall?.title || seg.toolCall?.kind || '需要你的确认'"
-                :detail="seg.toolCall?.locations?.[0]?.path"
-                :resolved="seg.resolved"
-              />
               <div v-else-if="seg.kind === 'notice'" class="notice" :class="seg.level">{{ seg.text }}</div>
               <div v-else-if="seg.kind === 'text'" class="answer">
                 <TextBlock :content="seg.text" :streaming="streaming && si === turn.segments.length - 1" />

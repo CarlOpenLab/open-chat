@@ -274,3 +274,46 @@ func (a *API) Reveal(path string) error {
 	}
 	return a.h.opts.Reveal(expandHome(path))
 }
+
+// Notify displays a native OS desktop notification.
+func (a *API) Notify(conversationID, title, subtitle, body string, sound bool) error {
+	if a.h.opts.Notify == nil {
+		return nil
+	}
+	return a.h.opts.Notify(conversationID, title, subtitle, body, sound)
+}
+
+// WorkspaceTree returns the file tree of cwd for the workspace panel.
+func (a *API) WorkspaceTree(cwd string) ([]WorkspaceNode, error) {
+	return listWorkspaceTree(cwd)
+}
+
+// WorkspaceReadFile returns the UTF-8 text content of a file inside cwd.
+func (a *API) WorkspaceReadFile(cwd, relPath string) (string, error) {
+	return readWorkspaceFile(cwd, relPath)
+}
+
+// WorkspaceWriteFile saves UTF-8 text content to a file inside cwd.
+func (a *API) WorkspaceWriteFile(cwd, relPath, content string) error {
+	return writeWorkspaceFile(cwd, relPath, content)
+}
+
+// TermCreate spawns an interactive PTY shell session rooted at cwd.
+func (a *API) TermCreate(cwd string, cols, rows int) (TermInfo, error) {
+	return a.h.termCreate(cwd, cols, rows)
+}
+
+// TermWrite sends keyboard input to a running terminal session.
+func (a *API) TermWrite(id, data string) error {
+	return a.h.termWrite(id, data)
+}
+
+// TermResize updates the PTY dimensions of a running terminal session.
+func (a *API) TermResize(id string, cols, rows int) error {
+	return a.h.termResize(id, cols, rows)
+}
+
+// TermClose terminates a terminal session and releases its PTY.
+func (a *API) TermClose(id string) error {
+	return a.h.termClose(id)
+}

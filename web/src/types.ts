@@ -21,6 +21,9 @@ export interface Settings {
   theme: "system" | "light" | "dark";
   sendKey: "enter" | "modEnter";
   autoAllow: boolean;
+  notifyNeedYou: boolean;
+  notifyTurnDone: boolean;
+  notifySound: boolean;
   defaultAgent: string;
   recentDirs: string[] | null;
   nodePath?: string;
@@ -201,13 +204,38 @@ export interface AgentUpdateProgress {
   result?: AgentUpdateResult;
 }
 
+export interface WorkspaceNode {
+  title: string;
+  path: string;
+  children?: WorkspaceNode[];
+}
+
+export interface TermInfo {
+  id: string;
+  cwd: string;
+  shell: string;
+}
+
+export interface TermOut {
+  id: string;
+  data: string;
+}
+
+export interface TermExit {
+  id: string;
+  exitCode: number;
+}
+
 export type Push =
   | { kind: "events"; conversationId: string; events: HostEvent[] }
   | { kind: "live"; conversationId: string; live: LiveState }
   | { kind: "meta"; conversationId: string; meta: Meta }
   | { kind: "removed"; conversationId: string }
+  | { kind: "focus"; conversationId: string }
   | { kind: "settings"; settings: Settings }
-  | { kind: "agent_update"; agentUpdate: AgentUpdateProgress };
+  | { kind: "agent_update"; agentUpdate: AgentUpdateProgress }
+  | { kind: "term_out"; termOut: TermOut }
+  | { kind: "term_exit"; termExit: TermExit };
 
 export type AgentUpdateChannel = "mise" | "npm" | "bun" | "pnpm" | "brew" | "native" | "unknown";
 

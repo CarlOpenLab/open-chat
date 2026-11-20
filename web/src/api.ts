@@ -17,6 +17,8 @@ import type {
   Meta,
   Push,
   Settings,
+  TermInfo,
+  WorkspaceNode,
 } from "./types";
 
 export const inApp = isMyGo();
@@ -61,6 +63,16 @@ export const api = {
   gitCheckout: (path: string, branch: string) => call<GitInfo>("GitCheckout", path, branch),
   pickFolder: () => call<string>("PickFolder"),
   reveal: (path: string) => call<void>("Reveal", path),
+  notify: (conversationId: string, title: string, subtitle: string, body: string, sound: boolean) =>
+    call<void>("Notify", conversationId, title, subtitle, body, sound),
+  workspaceTree: (cwd: string) => call<WorkspaceNode[]>("WorkspaceTree", cwd),
+  workspaceReadFile: (cwd: string, relPath: string) => call<string>("WorkspaceReadFile", cwd, relPath),
+  workspaceWriteFile: (cwd: string, relPath: string, content: string) =>
+    call<void>("WorkspaceWriteFile", cwd, relPath, content),
+  termCreate: (cwd: string, cols: number, rows: number) => call<TermInfo>("TermCreate", cwd, cols, rows),
+  termWrite: (id: string, data: string) => call<void>("TermWrite", id, data),
+  termResize: (id: string, cols: number, rows: number) => call<void>("TermResize", id, cols, rows),
+  termClose: (id: string) => call<void>("TermClose", id),
 };
 
 /** Subscribes to the host's pushes. `onReconnect` runs after a dropped stream comes back. */

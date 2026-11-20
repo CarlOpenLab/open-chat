@@ -453,7 +453,15 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
           session = (await adapter.createSession({ cwd, resumeSessionId: resumeId })) as AcpSession;
           resumed = true;
         } catch (error) {
-          log("warn", `${agent.id}: session/load ${resumeId} failed, starting fresh: ${String(error)}`);
+          const detail =
+            error && typeof error === "object"
+              ? JSON.stringify({
+                  message: (error as { message?: unknown }).message,
+                  code: (error as { code?: unknown }).code,
+                  data: (error as { data?: unknown }).data,
+                })
+              : String(error);
+          log("warn", `${agent.id}: session/load ${resumeId} failed, starting fresh: ${detail}`);
           session = (await adapter.createSession({ cwd })) as AcpSession;
         }
       } else {

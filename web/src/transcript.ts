@@ -157,8 +157,15 @@ function applyOne(tr: Transcript, e: HostEvent): void {
     }
     case "notice": {
       const turn = tr.turns[tr.turns.length - 1];
-      if (turn && !turn.end) turn.segments.push({ kind: "notice", id: sid(), level: e.level, text: e.text });
-      else tr.turns.push({ id: sid(), user: null, segments: [{ kind: "notice", id: sid(), level: e.level, text: e.text }], startedAt: t, end: { stopReason: "notice", t } });
+      if (turn && !turn.end) {
+        const lastSeg = turn.segments[turn.segments.length - 1];
+        if (lastSeg?.kind === "notice" && lastSeg.text === e.text) return;
+        turn.segments.push({ kind: "notice", id: sid(), level: e.level, text: e.text });
+      } else {
+        const lastSeg = turn?.segments[turn.segments.length - 1];
+        if (lastSeg?.kind === "notice" && lastSeg.text === e.text) return;
+        tr.turns.push({ id: sid(), user: null, segments: [{ kind: "notice", id: sid(), level: e.level, text: e.text }], startedAt: t, end: { stopReason: "notice", t } });
+      }
       return;
     }
     case "turn_end": {

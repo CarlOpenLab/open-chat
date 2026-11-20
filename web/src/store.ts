@@ -1,6 +1,7 @@
 // App state: one reactive store, fed by the host's pushes.
 import { computed, reactive, ref, watch } from "vue";
 import { api, inApp, subscribe } from "./api";
+import { initNotifications, notifyNeedYou, notifyTurnDone } from "./notify";
 import { apply, emptyTranscript, type Transcript } from "./transcript";
 import type { AgentInfo, AgentUpdateProgress, Block, Bootstrap, ConfigOption, LiveState, Meta, Push, Settings } from "./types";
 
@@ -30,12 +31,17 @@ export const store = reactive({
   transcripts: {} as Record<string, Transcript>,
   lives: {} as Record<string, LiveState>,
   drafts: {} as Record<string, string>,
+  /** Per-conversation draft attachments (images & files) in the composer. */
+  draftAttachments: {} as Record<string, Block[]>,
   /** Per-conversation queued follow-up messages while a turn is running. */
   queues: {} as Record<string, QueuedMessage[]>,
   /** The open conversation; null shows the new-conversation screen. */
   activeId: null as string | null,
   loading: {} as Record<string, boolean>,
   sidebarCollapsed: localStorage.getItem("oc.sidebar") === "0",
+  workspaceOpen: localStorage.getItem("oc.workspaceOpen") === "1",
+  workspaceTab: (localStorage.getItem("oc.workspaceTab") === "terminal" ? "terminal" : "files") as "files" | "terminal",
+  workspaceWidth: Math.min(820, Math.max(340, Number(localStorage.getItem("oc.workspaceWidth")) || 480)),
   settingsOpen: false,
   search: "",
   userAvatar: localStorage.getItem("oc.userAvatar") || "",
@@ -90,6 +96,33 @@ watch(
   () => store.sidebarCollapsed,
   (v) => localStorage.setItem("oc.sidebar", v ? "0" : "1"),
 );
+watch(
+  () => store.workspaceOpen,
+  (v) => localStorage.setItem("oc.workspaceOpen", v ? "1" : "0"),
+);
+watch(
+  () => store.workspaceTab,
+  (v) => localStorage.setItem("oc.workspaceTab", v),
+);
+watch(
+  () => store.workspaceWidth,
+  (v) => localStorage.setItem("oc.workspaceWidth", String(Math.round(v))),
+);
+
+type TermOutListener = (id: string, data: string) => void;
+type TermExitListener = (id: string, exitCode: number) => void;
+const termOutListeners = new Set<TermOutListener>();
+const termExitListeners = new Set<TermExitListener>();
+
+export function onTermOut(fn: TermOutListener): () => void {
+  termOutListeners.add(fn);
+  return () => termOutListeners.delete(fn);
+}
+
+export function onTermExit(fn: TermExitListener): () => void {
+  termExitListeners.add(fn);
+  return () => termExitListeners.delete(fn);
+}
 
 // ------------------------------------------------------------------ theme
 
@@ -130,18 +163,35 @@ export const isMac = computed(() => platform.value === "darwin" || (!inApp && /M
 
 // ------------------------------------------------------------------ boot
 
+function notifyCtxFor(conversationId: string) {
+  return {
+    conversationId,
+    activeId: store.activeId,
+    meta: store.metas[conversationId],
+    settings: store.settings,
+    onSelect: (id: string) => void select(id),
+  };
+}
+
 function onPush(p: Push) {
   switch (p.kind) {
     case "events": {
       const tr = store.transcripts[p.conversationId];
       if (tr) apply(tr, p.events);
       for (const ev of p.events) {
-        if (ev.type === "turn_end") {
+        if (ev.type === "permission_request" && !ev.resolved) {
+          const detail = ev.toolCall?.title || ev.toolCall?.kind;
+          notifyNeedYou(notifyCtxFor(p.conversationId), detail);
+        } else if (ev.type === "turn_end") {
           const reason = String((ev as { stopReason?: string }).stopReason ?? "");
           if (reason === "error" || reason === "max_tokens") {
             store.turnOutcome[p.conversationId] = "error";
+            const errMsg =
+              (ev as { error?: string }).error || (reason === "max_tokens" ? "回答超长被截断" : undefined);
+            notifyTurnDone(notifyCtxFor(p.conversationId), "error", errMsg);
           } else if (reason === "end_turn") {
             store.turnOutcome[p.conversationId] = store.activeId === p.conversationId ? "done" : "unseen";
+            notifyTurnDone(notifyCtxFor(p.conversationId), "done");
           }
         }
       }
@@ -178,9 +228,16 @@ function onPush(p: Push) {
       delete store.lives[p.conversationId];
       delete store.turnOutcome[p.conversationId];
       delete store.queues[p.conversationId];
+      delete store.drafts[p.conversationId];
+      delete store.draftAttachments[p.conversationId];
       steerPending.delete(p.conversationId);
       manualStop.delete(p.conversationId);
       if (store.activeId === p.conversationId) store.activeId = null;
+      return;
+    case "focus":
+      if (p.conversationId && store.metas[p.conversationId]) {
+        void select(p.conversationId);
+      }
       return;
     case "settings":
       store.settings = p.settings;
@@ -190,6 +247,12 @@ function onPush(p: Push) {
       if (p.agentUpdate.agentId) {
         store.agentUpdateProgressById[p.agentUpdate.agentId] = p.agentUpdate;
       }
+      return;
+    case "term_out":
+      for (const fn of termOutListeners) fn(p.termOut.id, p.termOut.data);
+      return;
+    case "term_exit":
+      for (const fn of termExitListeners) fn(p.termExit.id, p.termExit.exitCode);
       return;
   }
 }
@@ -228,6 +291,7 @@ async function migrateLegacyArchives() {
 }
 
 export async function init() {
+  initNotifications();
   subscribe(onPush, () => void reload().catch(() => {}));
   try {
     await reload();
@@ -348,6 +412,10 @@ export function popQueuedToDraft(id: string, queueId: string) {
     .join("\n");
   if (text) {
     store.drafts[id] = store.drafts[id] ? `${text}\n${store.drafts[id]}` : text;
+  }
+  const attachments = target.blocks.filter((b) => b.type !== "text");
+  if (attachments.length) {
+    store.draftAttachments[id] = [...attachments, ...(store.draftAttachments[id] ?? [])];
   }
 }
 
