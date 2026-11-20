@@ -45,6 +45,66 @@ func (a *API) Bootstrap() Bootstrap {
 // Agents probes the agents again (after the user installed one, say).
 func (a *API) Agents() []AgentInfo { return a.h.agents() }
 
+// InspectAgentUpdates checks installed coding agents, their install channels,
+// and available updates without modifying anything on disk.
+func (a *API) InspectAgentUpdates(ctx context.Context, opts AgentUpdateOptions) (*AgentUpdateReport, error) {
+	return auInspectAll(context.WithoutCancel(ctx), a.h.environ(), opts)
+}
+
+// UpgradeAgents upgrades outdated coding agents via their original install channel
+// and refreshes the host login environment when any agent was updated.
+func (a *API) UpgradeAgents(ctx context.Context, opts AgentUpdateOptions) (*AgentUpdateReport, error) {
+	report, err := auUpgrade(context.WithoutCancel(ctx), a.h.environ(), opts, func(p AgentUpdateProgress) {
+		a.h.opts.Push(Push{Kind: "agent_update", AgentUpdate: &p})
+	})
+	if err != nil {
+		return nil, err
+	}
+	if report != nil && report.Summary.Updated > 0 {
+		a.h.refreshEnv()
+	}
+	return report, nil
+}
+
+// InstallAgent installs an agent via the chosen available channel (mise/npm/pnpm/bun/brew).
+func (a *API) InstallAgent(ctx context.Context, agentID string, channel AgentUpdateChannel) (*AgentUpdateResult, error) {
+	res, err := auInstall(context.WithoutCancel(ctx), a.h.environ(), agentID, channel, func(p AgentUpdateProgress) {
+		a.h.opts.Push(Push{Kind: "agent_update", AgentUpdate: &p})
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.h.refreshEnv()
+	// Re-inspect with refreshed environment so newly added shims/binaries are reflected accurately.
+	if report, ierr := auInspectAll(context.WithoutCancel(ctx), a.h.environ(), AgentUpdateOptions{Only: []string{agentID}}); ierr == nil && len(report.Results) > 0 {
+		r := report.Results[0]
+		a.h.opts.Push(Push{Kind: "agent_update", AgentUpdate: &AgentUpdateProgress{
+			Stage: "done", AgentID: r.ID, AgentName: r.Agent, Completed: 1, Total: 1, Percent: 100, Message: "安装完成", Result: &r,
+		}})
+		return &r, nil
+	}
+	return res, nil
+}
+
+// UninstallAgent removes an installed agent via its detected original channel.
+func (a *API) UninstallAgent(ctx context.Context, agentID string) (*AgentUpdateResult, error) {
+	res, err := auUninstall(context.WithoutCancel(ctx), a.h.environ(), agentID, func(p AgentUpdateProgress) {
+		a.h.opts.Push(Push{Kind: "agent_update", AgentUpdate: &p})
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.h.refreshEnv()
+	if report, ierr := auInspectAll(context.WithoutCancel(ctx), a.h.environ(), AgentUpdateOptions{Only: []string{agentID}}); ierr == nil && len(report.Results) > 0 {
+		r := report.Results[0]
+		a.h.opts.Push(Push{Kind: "agent_update", AgentUpdate: &AgentUpdateProgress{
+			Stage: "done", AgentID: r.ID, AgentName: r.Agent, Completed: 1, Total: 1, Percent: 100, Message: "卸载完成", Result: &r,
+		}})
+		return &r, nil
+	}
+	return res, nil
+}
+
 // CheckUpdates opens the app's update window; the check itself runs in the
 // background and the window reports the result. Only desktop builds have
 // one: `open-chat serve` updates by replacing the binary by hand.

@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { api, inApp, subscribe } from "./api";
 import { apply, emptyTranscript, type Transcript } from "./transcript";
-import type { AgentInfo, Block, Bootstrap, ConfigOption, LiveState, Meta, Push, Settings } from "./types";
+import type { AgentInfo, AgentUpdateProgress, Block, Bootstrap, ConfigOption, LiveState, Meta, Push, Settings } from "./types";
 
 export interface QueuedMessage {
   id: string;
@@ -51,6 +51,8 @@ export const store = reactive({
   })(),
   probingModels: {} as Record<string, boolean>,
   probeErrors: {} as Record<string, string>,
+  agentUpdateProgress: null as AgentUpdateProgress | null,
+  agentUpdateProgressById: {} as Record<string, AgentUpdateProgress>,
 });
 
 function captureModels(agentId: string | undefined, configOptions: ConfigOption[] | undefined) {
@@ -182,6 +184,12 @@ function onPush(p: Push) {
       return;
     case "settings":
       store.settings = p.settings;
+      return;
+    case "agent_update":
+      store.agentUpdateProgress = p.agentUpdate;
+      if (p.agentUpdate.agentId) {
+        store.agentUpdateProgressById[p.agentUpdate.agentId] = p.agentUpdate;
+      }
       return;
   }
 }

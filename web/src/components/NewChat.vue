@@ -161,7 +161,7 @@ const noAgent = computed(() => agents.value.length === 0);
   color: var(--text);
 }
 .mac {
-  margin-left: 74px;
+  margin-left: 72px;
 }
 
 .body {

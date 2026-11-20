@@ -13,7 +13,7 @@ import {
   RollbackOutlined,
 } from "@antdv-next/icons";
 import { Dropdown, Input, Modal, Tooltip, message } from "antdv-next";
-import { computed, h, nextTick, ref } from "vue";
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { isArchived, isDark, isMac, newConversation, pin, remove, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
 import type { Meta } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
@@ -24,6 +24,62 @@ const renameInput = ref<{ focus: () => void } | null>(null);
 const toDelete = ref<Meta | null>(null);
 const avatarInput = ref<HTMLInputElement | null>(null);
 const showArchived = ref(false);
+
+const convCtx = ref<{ open: boolean; x: number; y: number; meta: Meta | null }>({
+  open: false,
+  x: 0,
+  y: 0,
+  meta: null,
+});
+
+function closeConvCtx() {
+  if (convCtx.value.open) convCtx.value.open = false;
+}
+
+function onListContextMenu(e: MouseEvent) {
+  if (e.shiftKey) return;
+  const target = e.target as HTMLElement | null;
+  const itemEl = target?.closest(".antd-conversations-item");
+  const id = itemEl?.querySelector<HTMLElement>("[data-conv-id]")?.dataset.convId;
+  if (!id) return;
+  const m = filtered.value.find((x) => x.id === id);
+  if (!m) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const menuW = 152;
+  const menuH = isArchived(m.id) ? 128 : 160;
+  convCtx.value = {
+    open: true,
+    x: Math.min(e.clientX, window.innerWidth - menuW - 8),
+    y: Math.min(e.clientY, window.innerHeight - menuH - 8),
+    meta: m,
+  };
+}
+
+function onConvCtxAction(action: "pin" | "rename" | "archive" | "delete") {
+  const m = convCtx.value.meta;
+  closeConvCtx();
+  if (!m) return;
+  if (action === "pin") void pin(m.id, !m.pinned);
+  if (action === "rename") void startRename(m);
+  if (action === "archive") void toggleArchive(m);
+  if (action === "delete") toDelete.value = m;
+}
+
+function onCtxKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") closeConvCtx();
+}
+
+onMounted(() => {
+  window.addEventListener("pointerdown", closeConvCtx);
+  window.addEventListener("blur", closeConvCtx);
+  window.addEventListener("keydown", onCtxKeydown);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("pointerdown", closeConvCtx);
+  window.removeEventListener("blur", closeConvCtx);
+  window.removeEventListener("keydown", onCtxKeydown);
+});
 
 const groupRank = (m: Meta) => {
   if (m.pinned) return 0;
@@ -116,7 +172,7 @@ function statusNodeFor(m: Meta) {
 
 function labelRender(item: ConversationItemType) {
   const m = (item as unknown as { "data-meta": Meta })["data-meta"];
-  return h("div", { class: "conv" }, [
+  return h("div", { class: "conv", "data-conv-id": m.id }, [
     h("div", { class: "conv-row" }, [
       h(ProviderIcon, { id: m.agentId, name: m.agentName, size: 13, class: "conv-logo" }),
       h("span", { class: "conv-title" }, m.title || "新对话"),
@@ -322,7 +378,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
       <span class="archive-count mono">{{ archivedCount }}</span>
     </div>
 
-    <div class="list">
+    <div class="list" @contextmenu="onListContextMenu" @scroll="closeConvCtx">
       <Conversations
         v-if="items.length"
         :items="items"
@@ -475,6 +531,36 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         「{{ toDelete?.title }}」的记录会从本机删除，无法恢复。agent 那边的会话不受影响。
       </p>
     </Modal>
+
+    <Teleport to="body">
+      <div
+        v-if="convCtx.open && convCtx.meta"
+        class="sb-ctx-menu"
+        :style="{ left: `${convCtx.x}px`, top: `${convCtx.y}px` }"
+        @pointerdown.stop
+        @contextmenu.prevent
+      >
+        <button v-if="!isArchived(convCtx.meta.id)" class="sb-ctx-item" @click="onConvCtxAction('pin')">
+          <PushpinFilled v-if="convCtx.meta.pinned" class="sb-ctx-ic" />
+          <PushpinOutlined v-else class="sb-ctx-ic" />
+          <span>{{ convCtx.meta.pinned ? '取消置顶' : '置顶' }}</span>
+        </button>
+        <button class="sb-ctx-item" @click="onConvCtxAction('rename')">
+          <EditOutlined class="sb-ctx-ic" />
+          <span>重命名</span>
+        </button>
+        <button class="sb-ctx-item" @click="onConvCtxAction('archive')">
+          <RollbackOutlined v-if="isArchived(convCtx.meta.id)" class="sb-ctx-ic" />
+          <InboxOutlined v-else class="sb-ctx-ic" />
+          <span>{{ isArchived(convCtx.meta.id) ? '取消归档' : '归档' }}</span>
+        </button>
+        <div class="sb-ctx-div" />
+        <button class="sb-ctx-item danger" @click="onConvCtxAction('delete')">
+          <DeleteOutlined class="sb-ctx-ic" />
+          <span>删除对话</span>
+        </button>
+      </div>
+    </Teleport>
   </aside>
 </template>
 
@@ -1077,5 +1163,61 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   place-items: center;
   color: var(--text-3);
   font-size: 13px;
+}
+</style>
+
+<style>
+.sb-ctx-menu {
+  position: fixed;
+  z-index: 2100;
+  min-width: 146px;
+  padding: 5px;
+  border-radius: 11px;
+  background: var(--surface-strong);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.sb-ctx-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.12s, color 0.12s;
+}
+.sb-ctx-item:hover {
+  background: var(--hover);
+}
+.sb-ctx-ic {
+  font-size: 13px;
+  color: var(--text-3);
+}
+.sb-ctx-item.danger {
+  color: var(--err);
+}
+.sb-ctx-item.danger .sb-ctx-ic {
+  color: var(--err);
+}
+.sb-ctx-item.danger:hover {
+  background: var(--err-soft);
+}
+.sb-ctx-div {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 6px;
 }
 </style>

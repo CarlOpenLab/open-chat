@@ -217,7 +217,7 @@ function toggle(id: string) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding-top: 7px;
+  padding-top: 4px;
 }
 
 .tool-status-ic {
@@ -245,15 +245,15 @@ function toggle(id: string) {
 .tool-line {
   flex: 1;
   width: 0;
-  min-height: 10px;
-  margin: 4px 0 2px;
+  min-height: 4px;
+  margin: 2px 0 -2px;
   border-left: 1px dashed var(--border-strong);
 }
 
 .tool-main {
   flex: 1;
   min-width: 0;
-  padding-bottom: 4px;
+  padding-bottom: 2px;
 }
 .tool-row.last .tool-main {
   padding-bottom: 0;
@@ -265,8 +265,8 @@ function toggle(id: string) {
   justify-content: flex-start;
   gap: 8px;
   width: 100%;
-  min-height: 28px;
-  padding: 3px 4px;
+  min-height: 24px;
+  padding: 2px 4px;
   margin-left: -4px;
   border: none;
   border-radius: 6px;

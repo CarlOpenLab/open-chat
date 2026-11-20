@@ -5,11 +5,11 @@ import {
   PlusOutlined,
   ReloadOutlined,
 } from "@antdv-next/icons";
-import { Button, Input, Modal, Switch, Tabs, Tag, Tooltip, message } from "antdv-next";
+import { Button, Dropdown, Input, Modal, Switch, Tabs, Tag, Tooltip, message } from "antdv-next";
 import { computed, ref, watch } from "vue";
 import { api } from "../api";
-import { isMac, refreshAgents, saveSettings, store } from "../store";
-import type { CustomAgent, Settings } from "../types";
+import { refreshAgents, saveSettings, store } from "../store";
+import type { AgentUpdateChannel, AgentUpdateReport, AgentUpdateResult, CustomAgent, Settings } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
 
 const props = defineProps<{ open: boolean }>();
@@ -20,6 +20,16 @@ const local = ref<Settings | null>(null);
 const saving = ref(false);
 const editingCmd = ref<Record<string, boolean>>({});
 
+// Agent CLI updater state
+const updateReport = ref<AgentUpdateReport | null>(null);
+const inspectingUpdates = ref(false);
+const upgradingAll = ref(false);
+const upgradingIds = ref<Record<string, boolean>>({});
+const installingIds = ref<Record<string, boolean>>({});
+const uninstallingIds = ref<Record<string, boolean>>({});
+const uninstallTarget = ref<AgentUpdateResult | null>(null);
+const miseBump = ref(true);
+
 watch(
   () => props.open,
   (open) => {
@@ -29,11 +39,261 @@ watch(
       local.value.recentDirs = local.value.recentDirs ?? [];
       editingCmd.value = {};
       void refreshAgents();
+      if (tab.value === "updates" && !updateReport.value) {
+        void inspectUpdates();
+      }
     }
   },
 );
 
+watch(tab, (next) => {
+  if (props.open && next === "updates" && !updateReport.value && !inspectingUpdates.value) {
+    void inspectUpdates();
+  }
+});
+
 const agents = computed(() => store.agents);
+const outdatedCount = computed(() => updateReport.value?.summary.outdated ?? 0);
+const anyUpgrading = computed(
+  () =>
+    upgradingAll.value ||
+    Object.values(upgradingIds.value).some(Boolean) ||
+    Object.values(installingIds.value).some(Boolean) ||
+    Object.values(uninstallingIds.value).some(Boolean),
+);
+const batchProgress = computed(() => (upgradingAll.value ? store.agentUpdateProgress : null));
+const activeBatchId = computed(() =>
+  upgradingAll.value && store.agentUpdateProgress?.stage !== "done"
+    ? store.agentUpdateProgress?.agentId ?? ""
+    : "",
+);
+
+function isAgentUpdating(id: string): boolean {
+  return (
+    Boolean(upgradingIds.value[id]) ||
+    Boolean(installingIds.value[id]) ||
+    Boolean(uninstallingIds.value[id]) ||
+    activeBatchId.value === id
+  );
+}
+
+function busyLabelOf(id: string): string {
+  if (installingIds.value[id]) return "安装中…";
+  if (uninstallingIds.value[id]) return "卸载中…";
+  return "更新中…";
+}
+
+function progressOf(id: string) {
+  return store.agentUpdateProgressById[id] ?? null;
+}
+
+watch(
+  () => store.agentUpdateProgress,
+  (p) => {
+    if (!p?.result || !updateReport.value) return;
+    const updated = p.result;
+    const nextResults = updateReport.value.results.map((r) => (r.id === updated.id ? updated : r));
+    updateReport.value = {
+      ...updateReport.value,
+      results: nextResults,
+      summary: summarizeResults(nextResults),
+    };
+  },
+);
+
+async function inspectUpdates() {
+  if (inspectingUpdates.value) return;
+  inspectingUpdates.value = true;
+  try {
+    updateReport.value = await api.inspectAgentUpdates({ bump: miseBump.value });
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    inspectingUpdates.value = false;
+  }
+}
+
+async function upgradeOne(item: AgentUpdateResult) {
+  if (upgradingIds.value[item.id] || upgradingAll.value) return;
+  upgradingIds.value = { ...upgradingIds.value, [item.id]: true };
+  store.agentUpdateProgressById[item.id] = {
+    stage: "inspecting",
+    agentId: item.id,
+    agentName: item.agent,
+    completed: 0,
+    total: 1,
+    percent: 10,
+    message: "准备更新…",
+  };
+  try {
+    const res = await api.upgradeAgents({ only: [item.id], bump: miseBump.value });
+    const updated = res.results?.[0];
+    if (updated && updateReport.value) {
+      const nextResults = updateReport.value.results.map((r) => (r.id === updated.id ? updated : r));
+      updateReport.value = {
+        ...updateReport.value,
+        mise: res.mise ?? updateReport.value.mise,
+        results: nextResults,
+        summary: summarizeResults(nextResults),
+        warnings: res.warnings?.length ? res.warnings : updateReport.value.warnings,
+      };
+    }
+    if (updated?.status === "updated") {
+      message.success(`${item.agent} 已更新到 ${updated.current ?? updated.target ?? "最新版"}`);
+      void refreshAgents();
+    } else if (updated?.status === "failed") {
+      message.error(`${item.agent} 更新失败：${updated.note || "请检查终端输出"}`);
+    } else if (updated?.note) {
+      message.info(`${item.agent}：${updated.note}`);
+    }
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    upgradingIds.value = { ...upgradingIds.value, [item.id]: false };
+    delete store.agentUpdateProgressById[item.id];
+  }
+}
+
+async function upgradeAll() {
+  if (upgradingAll.value || outdatedCount.value === 0) return;
+  upgradingAll.value = true;
+  store.agentUpdateProgress = {
+    stage: "inspecting",
+    completed: 0,
+    total: outdatedCount.value,
+    percent: 4,
+    message: "准备更新…",
+  };
+  try {
+    const res = await api.upgradeAgents({ bump: miseBump.value });
+    updateReport.value = res;
+    if (res.summary.updated > 0) {
+      message.success(`已更新 ${res.summary.updated} 个 Agent`);
+      void refreshAgents();
+    } else if (res.summary.failed > 0) {
+      message.error(`${res.summary.failed} 个 Agent 更新失败`);
+    } else {
+      message.info("没有需要更新的 Agent");
+    }
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    upgradingAll.value = false;
+  }
+}
+
+function patchReportResult(updated: AgentUpdateResult) {
+  if (!updateReport.value) return;
+  const nextResults = updateReport.value.results.map((r) => (r.id === updated.id ? updated : r));
+  updateReport.value = {
+    ...updateReport.value,
+    results: nextResults,
+    summary: summarizeResults(nextResults),
+  };
+}
+
+function installMenuFor(item: AgentUpdateResult) {
+  const chs = item.installChannels ?? [];
+  return {
+    items: chs.map((ch) => ({
+      key: ch,
+      label: `通过 ${ch === "brew" ? "Homebrew" : ch} 安装`,
+    })),
+    onClick: ({ key }: { key: string }) => {
+      void installOne(item, key as AgentUpdateChannel);
+    },
+  };
+}
+
+async function installOne(item: AgentUpdateResult, channel: AgentUpdateChannel) {
+  if (isAgentUpdating(item.id) || upgradingAll.value) return;
+  installingIds.value = { ...installingIds.value, [item.id]: true };
+  store.agentUpdateProgressById[item.id] = {
+    stage: "installing",
+    agentId: item.id,
+    agentName: item.agent,
+    completed: 0,
+    total: 1,
+    percent: 12,
+    message: `准备通过 ${channel} 安装 ${item.agent}…`,
+  };
+  try {
+    const updated = await api.installAgent(item.id, channel);
+    if (updated) patchReportResult(updated);
+    message.success(`${item.agent} 已通过 ${channel} 安装完成`);
+    void refreshAgents();
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    installingIds.value = { ...installingIds.value, [item.id]: false };
+    delete store.agentUpdateProgressById[item.id];
+  }
+}
+
+async function confirmUninstall() {
+  const item = uninstallTarget.value;
+  uninstallTarget.value = null;
+  if (!item || isAgentUpdating(item.id) || upgradingAll.value) return;
+  uninstallingIds.value = { ...uninstallingIds.value, [item.id]: true };
+  store.agentUpdateProgressById[item.id] = {
+    stage: "uninstalling",
+    agentId: item.id,
+    agentName: item.agent,
+    completed: 0,
+    total: 1,
+    percent: 15,
+    message: `准备卸载 ${item.agent}…`,
+  };
+  try {
+    const updated = await api.uninstallAgent(item.id);
+    if (updated) patchReportResult(updated);
+    message.success(`${item.agent} 已卸载`);
+    void refreshAgents();
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    uninstallingIds.value = { ...uninstallingIds.value, [item.id]: false };
+    delete store.agentUpdateProgressById[item.id];
+  }
+}
+
+function summarizeResults(results: AgentUpdateResult[]) {
+  const s = { total: results.length, updated: 0, upToDate: 0, outdated: 0, skipped: 0, notInstalled: 0, failed: 0 };
+  for (const r of results) {
+    if (r.status === "updated") s.updated++;
+    else if (r.status === "up-to-date" || r.status === "ahead") s.upToDate++;
+    else if (r.status === "outdated") s.outdated++;
+    else if (r.status === "skipped") s.skipped++;
+    else if (r.status === "not-installed") s.notInstalled++;
+    else if (r.status === "failed") s.failed++;
+  }
+  return s;
+}
+
+function statusText(status: AgentUpdateResult["status"]): string {
+  switch (status) {
+    case "updated":
+      return "已更新";
+    case "up-to-date":
+      return "已是最新";
+    case "ahead":
+      return "高于最新";
+    case "outdated":
+      return "可更新";
+    case "skipped":
+      return "已跳过";
+    case "failed":
+      return "失败";
+    case "not-installed":
+      return "未安装";
+  }
+}
+
+function channelText(ch?: AgentUpdateResult["channel"]): string {
+  if (!ch) return "";
+  if (ch === "unknown") return "未知渠道";
+  return ch;
+}
 
 async function checkUpdates() {
   try {
@@ -77,13 +337,12 @@ function toggleCmdEditor(id: string) {
   editingCmd.value[id] = !editingCmd.value[id];
 }
 
-const modKey = computed(() => (isMac.value ? "⌘" : "Ctrl"));
 </script>
 
 <template>
   <Modal
     :open="props.open"
-    :width="560"
+    :width="600"
     :footer="null"
     centered
     title="设置"
@@ -170,6 +429,161 @@ const modKey = computed(() => (isMac.value ? "⌘" : "Ctrl"));
         </div>
       </Tabs.TabPane>
 
+      <Tabs.TabPane key="updates" tab="Agent 管理">
+        <div class="pane">
+          <div class="pane-bar">
+            <span class="hint">
+              按本机环境安装、原渠道升级或卸载 Agent
+            </span>
+            <div class="update-actions">
+              <Tooltip title="开启后允许 mise upgrade --bump 改写全局 config.toml 中钉死的版本号">
+                <label class="bump-toggle">
+                  <span>mise bump</span>
+                  <Switch v-model:checked="miseBump" size="small" :disabled="inspectingUpdates || anyUpgrading" />
+                </label>
+              </Tooltip>
+              <button class="link" :disabled="inspectingUpdates || anyUpgrading" @click="inspectUpdates">
+                <ReloadOutlined :spin="inspectingUpdates" /> 检查
+              </button>
+              <Button
+                v-if="outdatedCount > 0"
+                size="small"
+                type="primary"
+                :loading="upgradingAll"
+                :disabled="inspectingUpdates || anyUpgrading"
+                @click="upgradeAll"
+              >
+                全部更新 ({{ outdatedCount }})
+              </Button>
+            </div>
+          </div>
+
+          <div v-if="upgradingAll && batchProgress" class="update-progress">
+            <div class="update-progress-head">
+              <span class="update-progress-msg">{{ batchProgress.message || "正在批量更新 Agent…" }}</span>
+              <span class="update-progress-pct mono">
+                <template v-if="batchProgress.total > 0">{{ batchProgress.completed }}/{{ batchProgress.total }} · </template>
+                {{ batchProgress.percent }}%
+              </span>
+            </div>
+            <div class="update-progress-track">
+              <div class="update-progress-fill" :style="{ width: `${Math.max(4, Math.min(100, batchProgress.percent))}%` }" />
+            </div>
+          </div>
+
+          <div v-if="inspectingUpdates && !updateReport" class="update-empty">
+            正在扫描本机 Agent 安装渠道与最新版本…
+          </div>
+
+          <div v-else-if="updateReport" class="agent-list">
+            <div v-for="r in updateReport.results" :key="r.id" class="agent" :class="{ updating: isAgentUpdating(r.id) }">
+              <div class="agent-head">
+                <span class="agent-ic-box">
+                  <ProviderIcon :id="r.id" :name="r.agent" :size="15" />
+                </span>
+                <span class="aname">{{ r.agent }}</span>
+                <Tag v-if="r.channel" :bordered="false" class="mini-tag mono">
+                  {{ channelText(r.channel) }}
+                </Tag>
+                <span v-if="isAgentUpdating(r.id)" class="status-pill busy">
+                  <i class="status-dot" />
+                  {{ busyLabelOf(r.id) }}
+                </span>
+                <span
+                  v-else
+                  class="status-pill"
+                  :class="{
+                    ok: r.status === 'up-to-date' || r.status === 'ahead' || r.status === 'updated',
+                    warn: r.status === 'outdated' || r.status === 'skipped',
+                    err: r.status === 'failed',
+                  }"
+                >
+                  <i class="status-dot" />
+                  {{ statusText(r.status) }}
+                </span>
+                <span class="spacer" />
+                <span v-if="r.current" class="ver-text mono">
+                  {{ r.current }}
+                  <template v-if="r.target && r.target !== r.current"> → {{ r.target }}</template>
+                </span>
+                <Button
+                  v-if="r.status === 'outdated'"
+                  size="small"
+                  type="primary"
+                  :loading="Boolean(upgradingIds[r.id])"
+                  :disabled="upgradingAll || inspectingUpdates || isAgentUpdating(r.id)"
+                  @click="upgradeOne(r)"
+                >
+                  更新
+                </Button>
+                <template v-if="r.status === 'not-installed'">
+                  <Dropdown
+                    v-if="r.installChannels && r.installChannels.length > 1"
+                    :menu="installMenuFor(r)"
+                    :trigger="['click']"
+                    placement="bottomRight"
+                    :disabled="upgradingAll || inspectingUpdates || isAgentUpdating(r.id)"
+                  >
+                    <Button
+                      size="small"
+                      :loading="Boolean(installingIds[r.id])"
+                      :disabled="upgradingAll || inspectingUpdates"
+                    >
+                      安装 ▾
+                    </Button>
+                  </Dropdown>
+                  <Button
+                    v-else-if="r.installChannels && r.installChannels.length === 1"
+                    size="small"
+                    :loading="Boolean(installingIds[r.id])"
+                    :disabled="upgradingAll || inspectingUpdates"
+                    @click="installOne(r, r.installChannels[0])"
+                  >
+                    安装 ({{ channelText(r.installChannels[0]) }})
+                  </Button>
+                  <Tooltip v-else title="未检测到可用的包管理器（mise / npm / pnpm / bun / brew）">
+                    <Button size="small" disabled>无可用环境</Button>
+                  </Tooltip>
+                </template>
+                <Tooltip v-if="r.canUninstall" :title="`通过 ${channelText(r.channel)} 卸载`">
+                  <button
+                    class="cmd-btn danger"
+                    :disabled="upgradingAll || inspectingUpdates || isAgentUpdating(r.id)"
+                    @click="uninstallTarget = r"
+                  >
+                    <DeleteOutlined />
+                  </button>
+                </Tooltip>
+              </div>
+
+              <div v-if="isAgentUpdating(r.id)" class="item-progress">
+                <div class="item-progress-row">
+                  <span class="item-progress-msg">{{ progressOf(r.id)?.message || "正在更新…" }}</span>
+                  <span class="item-progress-pct mono">{{ progressOf(r.id)?.percent ?? 12 }}%</span>
+                </div>
+                <div class="update-progress-track slim">
+                  <div
+                    class="update-progress-fill"
+                    :style="{ width: `${Math.max(8, Math.min(100, progressOf(r.id)?.percent ?? 12))}%` }"
+                  />
+                </div>
+              </div>
+
+              <div v-if="r.note || (r.shadowed && r.shadowed.length > 0)" class="update-meta">
+                <div v-if="r.note" class="update-note">{{ r.note }}</div>
+                <div v-if="r.shadowed && r.shadowed.length > 0" class="update-shadow">
+                  另检测到未生效安装：{{ r.shadowed.map((s) => `${s.channel} (${s.path})`).join("；") }}
+                </div>
+              </div>
+            </div>
+
+            <div v-if="updateReport.warnings && updateReport.warnings.length > 0" class="update-warnings">
+              <div v-for="(w, idx) in updateReport.warnings" :key="idx">{{ w }}</div>
+            </div>
+          </div>
+        </div>
+      </Tabs.TabPane>
+
       <Tabs.TabPane key="general" tab="偏好">
         <div v-if="local" class="pane">
           <section class="row">
@@ -216,14 +630,11 @@ const modKey = computed(() => (isMac.value ? "⌘" : "Ctrl"));
           </section>
 
           <div class="meta-box">
-            <div class="shortcuts">
-              <span><kbd>{{ modKey }} N</kbd> 新对话</span>
-              <span><kbd>{{ modKey }} K</kbd> 搜索</span>
-              <span><kbd>{{ modKey }} B</kbd> 侧栏</span>
-              <span><kbd>{{ modKey }} ,</kbd> 设置</span>
-            </div>
             <div class="version mono">
-              open-chat {{ store.boot?.version || "" }} · ACP
+              open-chat {{ store.boot?.version || "" }}
+            </div>
+            <div class="stack">
+              基于 antdv-next、@antdv-next/x 与 @antdv-next/x-pro 构建
             </div>
           </div>
         </div>
@@ -235,6 +646,22 @@ const modKey = computed(() => (isMac.value ? "⌘" : "Ctrl"));
       <Button size="small" @click="emit('update:open', false)">取消</Button>
       <Button size="small" type="primary" :loading="saving" @click="save">保存</Button>
     </div>
+  </Modal>
+
+  <Modal
+    :open="Boolean(uninstallTarget)"
+    :title="`卸载 ${uninstallTarget?.agent ?? ''}？`"
+    :width="380"
+    centered
+    ok-text="确认卸载"
+    ok-type="danger"
+    cancel-text="取消"
+    @ok="confirmUninstall"
+    @cancel="uninstallTarget = null"
+  >
+    <p class="muted" style="margin: 0">
+      将通过原安装渠道 <b>{{ channelText(uninstallTarget?.channel) }}</b> 卸载 {{ uninstallTarget?.agent }}，不会删除你的历史对话记录。
+    </p>
   </Modal>
 </template>
 
@@ -272,9 +699,148 @@ const modKey = computed(() => (isMac.value ? "⌘" : "Ctrl"));
   border-radius: 6px;
   transition: background 0.12s, color 0.12s;
 }
-.link:hover {
+.link:hover:not(:disabled) {
   background: var(--hover);
   color: var(--text);
+}
+.link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.update-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.bump-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.update-progress {
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.update-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.update-progress-msg {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.update-progress-pct {
+  font-size: 11px;
+  color: var(--text-3);
+  flex: none;
+}
+.update-progress-track {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--hover);
+  overflow: hidden;
+}
+.update-progress-track.slim {
+  height: 3.5px;
+}
+.update-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ink);
+  transition: width 0.35s var(--ease);
+}
+.item-progress {
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.item-progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+.item-progress-msg {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.item-progress-pct {
+  color: var(--text-3);
+  flex: none;
+}
+.agent.updating {
+  border-color: var(--border-strong);
+}
+.status-pill.busy {
+  color: var(--text-2);
+}
+.status-pill.busy .status-dot {
+  background: var(--ink);
+  opacity: 1;
+  animation: oc-pulse 1.2s ease-in-out infinite;
+}
+.update-empty {
+  padding: 28px 12px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.ver-text {
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.update-meta {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.45;
+}
+.update-note {
+  color: var(--text-2);
+}
+.update-shadow {
+  color: var(--text-3);
+  word-break: break-all;
+}
+.update-warnings {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--hover);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .agent-list {
@@ -339,6 +905,20 @@ const modKey = computed(() => (isMac.value ? "⌘" : "Ctrl"));
   background: var(--ok);
   opacity: 1;
 }
+.status-pill.warn {
+  color: #d97706;
+}
+.status-pill.warn .status-dot {
+  background: #d97706;
+  opacity: 1;
+}
+.status-pill.err {
+  color: #dc2626;
+}
+.status-pill.err .status-dot {
+  background: #dc2626;
+  opacity: 1;
+}
 
 .cmd-btn {
   display: inline-grid;
@@ -353,10 +933,18 @@ const modKey = computed(() => (isMac.value ? "⌘" : "Ctrl"));
   font-size: 12px;
   transition: background 0.12s, color 0.12s;
 }
-.cmd-btn:hover,
+.cmd-btn:hover:not(:disabled),
 .cmd-btn.active {
   background: var(--active);
   color: var(--text);
+}
+.cmd-btn.danger:hover:not(:disabled) {
+  background: var(--err-soft);
+  color: var(--err);
+}
+.cmd-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .override {
@@ -452,22 +1040,15 @@ const modKey = computed(() => (isMac.value ? "⌘" : "Ctrl"));
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-.shortcuts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-.shortcuts span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  gap: 4px;
 }
 .version {
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.stack {
+  font-size: 11.5px;
   color: var(--text-3);
 }
 

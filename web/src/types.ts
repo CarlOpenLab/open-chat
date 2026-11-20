@@ -190,9 +190,78 @@ export interface GitInfo {
   branches: string[];
 }
 
+export interface AgentUpdateProgress {
+  stage: "inspecting" | "upgrading" | "installing" | "uninstalling" | "verifying" | "reshim" | "done";
+  agentId?: string;
+  agentName?: string;
+  completed: number;
+  total: number;
+  percent: number;
+  message?: string;
+  result?: AgentUpdateResult;
+}
+
 export type Push =
   | { kind: "events"; conversationId: string; events: HostEvent[] }
   | { kind: "live"; conversationId: string; live: LiveState }
   | { kind: "meta"; conversationId: string; meta: Meta }
   | { kind: "removed"; conversationId: string }
-  | { kind: "settings"; settings: Settings };
+  | { kind: "settings"; settings: Settings }
+  | { kind: "agent_update"; agentUpdate: AgentUpdateProgress };
+
+export type AgentUpdateChannel = "mise" | "npm" | "bun" | "pnpm" | "brew" | "native" | "unknown";
+
+export type AgentUpdateStatus =
+  | "up-to-date"
+  | "ahead"
+  | "outdated"
+  | "skipped"
+  | "updated"
+  | "failed"
+  | "not-installed";
+
+export interface AgentUpdateOptions {
+  only?: string[];
+  bump?: boolean;
+  minimumReleaseAge?: string;
+}
+
+export interface AgentUpdateShadowed {
+  channel: AgentUpdateChannel;
+  path: string;
+}
+
+export interface AgentUpdateResult {
+  id: string;
+  agent: string;
+  bin: string;
+  status: AgentUpdateStatus;
+  channel?: AgentUpdateChannel;
+  identity?: string;
+  path?: string;
+  current?: string;
+  target?: string;
+  command?: string[];
+  note?: string;
+  shadowed?: AgentUpdateShadowed[];
+  installChannels?: AgentUpdateChannel[];
+  canUninstall?: boolean;
+}
+
+export interface AgentUpdateSummary {
+  total: number;
+  updated: number;
+  upToDate: number;
+  outdated: number;
+  skipped: number;
+  notInstalled: number;
+  failed: number;
+}
+
+export interface AgentUpdateReport {
+  mise?: { bin: string; version: string };
+  availableChannels?: AgentUpdateChannel[];
+  results: AgentUpdateResult[];
+  summary: AgentUpdateSummary;
+  warnings?: string[];
+}

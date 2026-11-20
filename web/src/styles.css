@@ -113,17 +113,6 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overflow: hidden;
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-button,
-.drag,
-.topbar,
-.sidebar .top,
-.sidebar .controls,
-.sidebar .foot,
-.kbd {
   user-select: none;
   -webkit-user-select: none;
 }
@@ -132,9 +121,19 @@ input,
 textarea,
 [contenteditable="true"],
 .selectable,
-.selectable * {
+.selectable *,
+.oc-md,
+.oc-md *,
+.user-text,
+.notice {
   user-select: text;
   -webkit-user-select: text;
+}
+
+input::placeholder,
+textarea::placeholder {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 button {

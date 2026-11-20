@@ -135,14 +135,27 @@ type Command struct {
 	Description string `json:"description,omitempty"`
 }
 
+// AgentUpdateProgress reports real-time progress while upgrading agents.
+type AgentUpdateProgress struct {
+	Stage     string             `json:"stage"` // inspecting | upgrading | verifying | reshim | done
+	AgentID   string             `json:"agentId,omitempty"`
+	AgentName string             `json:"agentName,omitempty"`
+	Completed int                `json:"completed"`
+	Total     int                `json:"total"`
+	Percent   int                `json:"percent"`
+	Message   string             `json:"message,omitempty"`
+	Result    *AgentUpdateResult `json:"result,omitempty"`
+}
+
 // Push is what the host tells the pages, as the "push" event.
 type Push struct {
-	Kind           string     `json:"kind"` // events | live | meta | removed | settings
-	ConversationID string     `json:"conversationId,omitempty"`
-	Events         []Event    `json:"events,omitempty"`
-	Live           *LiveState `json:"live,omitempty"`
-	Meta           *Meta      `json:"meta,omitempty"`
-	Settings       *Settings  `json:"settings,omitempty"`
+	Kind           string               `json:"kind"` // events | live | meta | removed | settings | agent_update
+	ConversationID string               `json:"conversationId,omitempty"`
+	Events         []Event              `json:"events,omitempty"`
+	Live           *LiveState           `json:"live,omitempty"`
+	Meta           *Meta                `json:"meta,omitempty"`
+	Settings       *Settings            `json:"settings,omitempty"`
+	AgentUpdate    *AgentUpdateProgress `json:"agentUpdate,omitempty"`
 }
 
 // Bootstrap is everything the page needs to draw its first frame.

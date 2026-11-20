@@ -360,14 +360,14 @@ async function changeDir(path: string) {
 <template>
   <div class="chat">
     <header class="topbar">
-      <div class="left drag">
+      <div class="left drag" :class="{ mac: isMac && store.sidebarCollapsed }">
         <Tooltip v-if="store.sidebarCollapsed" :title="`展开侧栏 (${isMac ? '⌘' : 'Ctrl'} B)`" :mouse-enter-delay="0.4">
-          <button class="icon-btn no-drag" :class="{ mac: isMac && store.sidebarCollapsed }" @click="store.sidebarCollapsed = false">
+          <button class="icon-btn no-drag" @click="store.sidebarCollapsed = false">
             <MenuUnfoldOutlined />
           </button>
         </Tooltip>
 
-        <div class="title-line" :class="{ mac: isMac && store.sidebarCollapsed }">
+        <div class="title-line">
           <Input
             v-if="editing"
             id="title-edit"
@@ -620,6 +620,7 @@ async function changeDir(path: string) {
   border-bottom: 1px solid var(--border);
   position: relative;
   z-index: 12;
+  container-type: inline-size;
 }
 
 .left {
@@ -636,8 +637,8 @@ async function changeDir(path: string) {
   min-width: 0;
   flex: 1;
 }
-.mac {
-  padding-left: 74px;
+.left.mac {
+  padding-left: 66px;
 }
 
 .title {
@@ -654,7 +655,8 @@ async function changeDir(path: string) {
   line-height: 20px;
   display: flex;
   align-items: center;
-  min-width: 0;
+  flex: 0 1 auto;
+  min-width: 60px;
 }
 .title-text {
   overflow: hidden;
@@ -713,6 +715,8 @@ async function changeDir(path: string) {
   font-size: 11px;
   color: var(--text-3);
   max-width: 240px;
+  min-width: 0;
+  flex: 0 1 auto;
   cursor: pointer;
   transition: background 0.14s, color 0.14s;
 }
@@ -724,6 +728,27 @@ async function changeDir(path: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@container (max-width: 660px) {
+  .cwd-text {
+    display: none;
+  }
+  .cwd-chip {
+    padding: 0 5px;
+  }
+  .title-line {
+    gap: 6px;
+  }
+}
+
+@container (max-width: 520px) {
+  .cwd-chip {
+    display: none;
+  }
+  .agent-badge {
+    padding: 0 6px;
+  }
 }
 
 .right {

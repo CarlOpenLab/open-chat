@@ -801,6 +801,10 @@ defineExpose({ addFiles });
   line-height: 1.62 !important;
   padding: 0 !important;
 }
+.sender :deep(textarea:focus-visible),
+.sender :deep(.ant-input:focus-visible) {
+  box-shadow: none !important;
+}
 .sender :deep(.antd-sender-footer) {
   padding: 4px 12px 10px 10px !important;
   border-top: none !important;

@@ -45,8 +45,9 @@ type Host struct {
 	opts  Options
 	store *store
 
-	envOnce sync.Once
-	env     []string
+	envMu     sync.Mutex
+	envLoaded bool
+	env       []string
 
 	settingsMu sync.Mutex
 	settings   Settings
@@ -99,8 +100,21 @@ func (h *Host) Close() {
 }
 
 func (h *Host) environ() []string {
-	h.envOnce.Do(func() { h.env = loginEnv() })
+	h.envMu.Lock()
+	defer h.envMu.Unlock()
+	if !h.envLoaded {
+		h.env = loginEnv()
+		h.envLoaded = true
+	}
 	return h.env
+}
+
+func (h *Host) refreshEnv() {
+	env := loginEnv()
+	h.envMu.Lock()
+	h.env = env
+	h.envLoaded = true
+	h.envMu.Unlock()
 }
 
 func (h *Host) getSettings() Settings {
