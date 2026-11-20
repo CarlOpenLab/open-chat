@@ -85,6 +85,45 @@ open-chat serve -no-auth            # 只在内网/本机
 
 HTTP 模式把 `Host` 的每个方法映射成 `POST /api/call/<Method>`（body 是参数数组），推送走 `GET /api/push` 的 SSE。没有 IPC，所以页面代码不用分叉——`web/src/api.ts` 里 `isMyGo()` 一处分流。
 
+## 自动更新与发布
+
+桌面构建内置 [mygo updater](https://github.com/egoist/mygo/blob/main/docs/updates.md)：启动约 10 秒后检查一次，此后每天一次；有新版本时弹出更新窗口（发布说明 / 安装 / 稍后 / 跳过），下载完成后校验 Ed25519 签名再原地替换，重启即进入新版本。macOS 的菜单栏有「Check for Updates…」，设置 → 偏好里有「检查更新」。
+
+更新只会在**用更新密钥签过名的发布构建**里生效：开发构建、`open-chat serve`、以及包管理器安装的版本不会自动替换自己。
+
+### 一次性配置签名密钥
+
+```bash
+go tool mygo keygen          # 写出 mygo-update.key 与 mygo-update.pub
+gh secret set MYGO_UPDATER_PRIVATE_KEY < \
+  "$HOME/Library/Application Support/mygo/update-keys/mygo-update.key"
+```
+
+私钥只放在本地密码管理器和 GitHub 仓库 secret 里，**不要提交进仓库**。CI 会从私钥推导公钥（Ed25519 私钥的后 32 字节），因此不需要第二个变量；本地想做可更新的发布构建时自行传入：
+
+```bash
+MYGO_UPDATER_PUBLIC_KEY="$(cat mygo-update.pub)" \
+MYGO_UPDATER_PRIVATE_KEY="$(cat mygo-update.key)" \
+pnpm build
+```
+
+### 发一个版本
+
+1. 改 `package.json` 的 `version`（`mygo.config.ts` 直接读它），在 `CHANGELOG.md` 写 `## X.Y.Z` 段落，提交。
+2. 打标签并推送：
+
+   ```bash
+   git tag v0.0.3
+   git push origin v0.0.3
+   ```
+
+`.github/workflows/release.yml` 随后会：
+
+- 校验标签与 `package.json` 版本一致，跑 `pnpm typecheck` 与 `go test ./...`；
+- 建一个 draft Release（发布说明取 CHANGELOG 的对应段落）；
+- 在 macOS / Windows / Linux runner 上执行 `mygo build -upload`，把 dmg、Windows setup exe、deb / rpm / tar.gz，以及签名更新包、增量包和 `update-<target>.json` 上传到该 Release；
+- 全部成功后把 Release 发布为 latest —— 已安装的应用从此刻起就能检查到新版本。
+
 ## 目录
 
 | 路径 | 内容 |

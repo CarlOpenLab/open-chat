@@ -1,29 +1,67 @@
 name: Release
 
+# Pushing a vX.Y.Z tag builds every platform and publishes it, with the
+# signed update files, to the GitHub release of that tag:
+#
+#   git tag v0.0.3
+#   git push origin v0.0.3
+#
+# The updater signing key is the repository secret MYGO_UPDATER_PRIVATE_KEY:
+# the contents of the mygo-update.key that `mygo keygen` writes. Installed
+# apps verify every update against the public key built into the release, so
+# the same key has to sign every future version. The public half is derived
+# from the secret below, so there is no second value to keep in sync.
 on:
   push:
-    tags:
-      - "v*"
-  workflow_dispatch:
+    tags: ["v*"]
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   check:
     name: Typecheck & Test
     runs-on: ubuntu-latest
+    outputs:
+      public_key: ${{ steps.key.outputs.public_key }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Check tag matches package.json version
-        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           EXPECTED="v$(jq -r .version package.json)"
           if [ "$GITHUB_REF_NAME" != "$EXPECTED" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match package.json version ($EXPECTED)"
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version ($EXPECTED)"
             exit 1
           fi
+
+      - name: Derive the update public key
+        id: key
+        env:
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MYGO_UPDATER_PRIVATE_KEY" ]; then
+            echo "::error title=Update signing key missing::MYGO_UPDATER_PRIVATE_KEY is not set. Run 'mygo keygen' once, then 'gh secret set MYGO_UPDATER_PRIVATE_KEY < mygo-update.key'."
+            exit 1
+          fi
+          # Ed25519 private keys are the 32-byte seed followed by the 32-byte
+          # public key, both base64-encoded as a whole by mygo keygen.
+          public_key="$(printf '%s' "$MYGO_UPDATER_PRIVATE_KEY" | base64 -d | tail -c 32 | base64 | tr -d '\n')"
+          if [ -z "$public_key" ]; then
+            echo "::error title=Update signing key invalid::MYGO_UPDATER_PRIVATE_KEY does not decode to an Ed25519 private key."
+            exit 1
+          fi
+          echo "public_key=$public_key" >> "$GITHUB_OUTPUT"
+          echo "MYGO_UPDATER_PUBLIC_KEY=$public_key" >> "$GITHUB_ENV"
 
       - uses: pnpm/action-setup@v4
 
@@ -41,9 +79,40 @@ jobs:
       - run: pnpm typecheck
       - run: go test ./...
 
+  draft:
+    name: Create Draft Release
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The draft exists before any build starts, so every platform uploads
+      # into the same release; without it each `mygo build -upload` would
+      # create a draft of its own.
+      - name: Create the draft release with the changelog notes
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists; keeping it"
+            exit 0
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          notes="$RUNNER_TEMP/notes.md"
+          awk -v v="$version" '
+            $0 ~ "^## " v "[[:space:]]*$" { found = 1; next }
+            found && $0 ~ "^## " { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes"
+          [ -s "$notes" ] || printf 'open-chat %s\n' "$GITHUB_REF_NAME" > "$notes"
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "$notes"
+
   build:
     name: Build (${{ matrix.name }})
-    needs: check
+    needs: [check, draft]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -81,58 +150,22 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Build ${{ matrix.name }} packages
-        run: pnpm exec mygo build -platform "${{ matrix.platform }}"
+      # -upload puts the installers (dmg, setup exe, deb, rpm, tar.gz) and the
+      # signed update files (archives, deltas, update-<target>.json) on the
+      # draft release. The manifests go last, so they never point at a file
+      # that is not there yet.
+      - name: Build and upload ${{ matrix.name }} packages
+        env:
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          MYGO_UPDATER_PUBLIC_KEY: ${{ needs.check.outputs.public_key }}
+        run: pnpm exec mygo build -platform "${{ matrix.platform }}" -upload
 
-      - name: Collect release files
-        shell: bash
-        run: |
-          mkdir -p dist-release
-          shopt -s nullglob
-          for f in \
-            build/*/*.dmg \
-            build/*/*-setup-*.exe \
-            build/windows-*/open-chat.exe \
-            build/*/*.deb \
-            build/*/*.rpm \
-            build/*/*.tar.gz \
-            build/*/*.zip; do
-            cp "$f" dist-release/
-          done
-          ls -lh dist-release
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: open-chat-${{ matrix.name }}
-          path: dist-release/*
-          if-no-files-found: error
-
-  release:
-    name: Create Draft Release
+  publish:
+    name: Publish Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist-release
-          merge-multiple: true
-
-      - name: Create or update draft GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ls -lh dist-release
-          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" \
-              --repo "$GITHUB_REPOSITORY" \
-              --draft \
-              --verify-tag \
-              --title "$GITHUB_REF_NAME" \
-              --generate-notes
-          fi
-          gh release upload "$GITHUB_REF_NAME" dist-release/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --clobber
+      # Publishing makes the release the latest, which is where installed
+      # apps read their update manifests from.
+      - name: Publish the release
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

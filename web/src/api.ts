@@ -33,6 +33,7 @@ async function call<T>(method: string, ...args: unknown[]): Promise<T> {
 export const api = {
   bootstrap: () => call<Bootstrap>("Bootstrap"),
   agents: () => call<AgentInfo[]>("Agents"),
+  checkUpdates: () => call<void>("CheckUpdates"),
   probeModels: (agentId: string, cwd: string) => call<ConfigOption[]>("ProbeModels", agentId, cwd),
   create: (agentId: string, cwd: string) => call<Meta>("Create", agentId, cwd),
   open: (id: string) => call<Conversation>("Open", id),

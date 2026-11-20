@@ -36,6 +36,8 @@ type Options struct {
 	// Desktop integrations; nil in web mode.
 	PickFolder func(ctx context.Context) (string, error)
 	Reveal     func(path string) error
+	// CheckUpdates opens the update window; nil in web mode.
+	CheckUpdates func()
 }
 
 // Host owns the conversations and the sidecar.

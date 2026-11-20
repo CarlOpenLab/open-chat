@@ -45,6 +45,17 @@ func (a *API) Bootstrap() Bootstrap {
 // Agents probes the agents again (after the user installed one, say).
 func (a *API) Agents() []AgentInfo { return a.h.agents() }
 
+// CheckUpdates opens the app's update window; the check itself runs in the
+// background and the window reports the result. Only desktop builds have
+// one: `open-chat serve` updates by replacing the binary by hand.
+func (a *API) CheckUpdates() error {
+	if a.h.opts.CheckUpdates == nil {
+		return errors.New("自动更新只在桌面应用中可用")
+	}
+	a.h.opts.CheckUpdates()
+	return nil
+}
+
 // ProbeModels briefly connects to an agent to read its available configOptions (including models) without creating a conversation.
 func (a *API) ProbeModels(ctx context.Context, agentID, cwd string) ([]any, error) {
 	return a.h.probeAgent(context.WithoutCancel(ctx), agentID, cwd)

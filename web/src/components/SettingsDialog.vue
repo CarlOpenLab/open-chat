@@ -7,6 +7,7 @@ import {
 } from "@antdv-next/icons";
 import { Button, Input, Modal, Switch, Tabs, Tag, Tooltip, message } from "antdv-next";
 import { computed, ref, watch } from "vue";
+import { api } from "../api";
 import { isMac, refreshAgents, saveSettings, store } from "../store";
 import type { CustomAgent, Settings } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
@@ -33,6 +34,14 @@ watch(
 );
 
 const agents = computed(() => store.agents);
+
+async function checkUpdates() {
+  try {
+    await api.checkUpdates();
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  }
+}
 
 async function save() {
   if (!local.value) return;
@@ -196,6 +205,14 @@ const modKey = computed(() => (isMac.value ? "⌘" : "Ctrl"));
               </div>
             </div>
             <Input v-model:value="local.nodePath" size="small" placeholder="默认 PATH" class="mono widen" />
+          </section>
+
+          <section v-if="store.boot?.mode === 'desktop'" class="row">
+            <div class="label">
+              <div class="title">软件更新</div>
+              <div class="desc">每日自动检查一次，发现新版本会弹窗提示</div>
+            </div>
+            <Button size="small" @click="checkUpdates">检查更新</Button>
           </section>
 
           <div class="meta-box">
