@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // API is the service the page calls: bound as "Host" in the desktop app and
@@ -241,6 +242,16 @@ func (a *API) SaveSettings(s Settings) (Settings, error) {
 	h.settingsMu.Unlock()
 	if err := saveSettings(h.opts.DataDir, s); err != nil {
 		return Settings{}, err
+	}
+	h.scMu.Lock()
+	sc := h.sc
+	h.scMu.Unlock()
+	if sc != nil && sc.alive() {
+		go func(autoAllow bool) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = sc.call(ctx, "setAutoAllow", map[string]any{"autoAllow": autoAllow}, nil)
+		}(s.AutoAllow)
 	}
 	h.opts.Push(Push{Kind: "settings", Settings: &s})
 	return s, nil

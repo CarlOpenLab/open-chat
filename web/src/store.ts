@@ -359,6 +359,78 @@ export function newConversation() {
   void select(null);
 }
 
+export type PermissionMode = "supervised" | "auto" | "full";
+
+const PERM_MODE_CANDIDATES: Record<PermissionMode, string[]> = {
+  supervised: ["default", "read-only", "readonly", "ask", "supervised", "standard", "manual"],
+  auto: ["acceptedits", "accept-edits", "accept_edits", "agent", "auto", "agent-auto-review", "workspace-write", "default"],
+  full: [
+    "bypasspermissions",
+    "bypass-permissions",
+    "bypass_permissions",
+    "agent-full-access",
+    "full-access",
+    "full_access",
+    "danger-full-access",
+    "yolo",
+    "dontask",
+    "dont-ask",
+    "acceptedits",
+    "accept-edits",
+    "agent",
+  ],
+};
+
+function pickBestModeId(mode: PermissionMode, availableIds: string[]): string | null {
+  if (!availableIds.length) return null;
+  const byLower = new Map(availableIds.map((id) => [id.toLowerCase(), id]));
+  for (const candidate of PERM_MODE_CANDIDATES[mode]) {
+    const hit = byLower.get(candidate);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+export function resolvePermissionTarget(
+  mode: PermissionMode,
+  live: LiveState,
+): { kind: "mode"; modeId: string } | { kind: "config"; configId: string; value: string } | null {
+  const availableModes = live.modes?.availableModes ?? [];
+  if (availableModes.length) {
+    const target = pickBestModeId(
+      mode,
+      availableModes.map((m) => m.id),
+    );
+    if (target && target !== live.modes?.currentModeId) {
+      return { kind: "mode", modeId: target };
+    }
+    return null;
+  }
+  const cfg = (live.configOptions ?? []).find((o) => o.category === "mode" || o.id === "mode");
+  if (!cfg) return null;
+  const raw = cfg.options ?? [];
+  const values =
+    Array.isArray(raw) && raw.length && "group" in (raw[0] as object)
+      ? (raw as { options: { value: string }[] }[]).flatMap((g) => g.options.map((x) => x.value))
+      : (raw as { value: string }[]).map((x) => x.value);
+  const target = pickBestModeId(mode, values);
+  if (target && target !== String(cfg.currentValue ?? "")) {
+    return { kind: "config", configId: cfg.id, value: target };
+  }
+  return null;
+}
+
+export function currentPermissionMode(): PermissionMode {
+  const saved = localStorage.getItem("oc.permMode") as PermissionMode | null;
+  if (saved === "supervised" || saved === "auto" || saved === "full") return saved;
+  return store.settings?.autoAllow ? "auto" : "supervised";
+}
+
+function isPiAgent(agentId: string): boolean {
+  const id = (agentId ?? "").toLowerCase();
+  return id === "pi" || id === "omp" || id.includes("oh-my-pi");
+}
+
 export async function start(
   agentId: string,
   cwd: string,
@@ -370,12 +442,22 @@ export async function start(
   store.transcripts[meta.id] = emptyTranscript();
   store.lives[meta.id] = { ...idleLive(), status: "connecting" };
   await select(meta.id);
-  if (initialModel?.configId && initialModel.value) {
+  if (blocks.length || (initialModel?.configId && initialModel.value)) {
     try {
-      await api.connect(meta.id);
-      await api.setConfig(meta.id, initialModel.configId, initialModel.value);
+      const live = await api.connect(meta.id);
+      if (initialModel?.configId && initialModel.value) {
+        await api.setConfig(meta.id, initialModel.configId, initialModel.value).catch(() => {});
+      }
+      if (!isPiAgent(agentId)) {
+        const target = resolvePermissionTarget(currentPermissionMode(), live);
+        if (target?.kind === "mode") {
+          await api.setMode(meta.id, target.modeId).catch(() => {});
+        } else if (target?.kind === "config") {
+          await api.setConfig(meta.id, target.configId, target.value).catch(() => {});
+        }
+      }
     } catch {
-      /* fall back to agent default model if pre-selection fails */
+      /* fall back to agent defaults if pre-connect fails */
     }
   }
   if (blocks.length) await send(meta.id, blocks);

@@ -4,12 +4,10 @@ import type { SenderPasteInfo } from "@antdv-next/x";
 import { Dropdown, Tooltip, message } from "antdv-next";
 import { computed, h, ref, watch } from "vue";
 import { api } from "../api";
-import { saveSettings, store, type QueuedMessage } from "../store";
+import { resolvePermissionTarget, saveSettings, store, type PermissionMode, type QueuedMessage } from "../store";
 import { userText } from "../transcript";
 import type { Block, ConfigOption, GitInfo, LiveState, PermissionOption } from "../types";
 import ProviderPicker from "./ProviderPicker.vue";
-
-type PermissionMode = "supervised" | "auto" | "full";
 type DeckKind = "permission" | "queue" | "files";
 
 export interface PendingPermission {
@@ -154,7 +152,35 @@ function selectPermissionMode(mode: PermissionMode) {
   storedPerm.value = mode;
   localStorage.setItem("oc.permMode", mode);
   void saveSettings({ autoAllow: mode !== "supervised" });
+  syncPermissionModeToAgent(mode);
 }
+
+function syncPermissionModeToAgent(mode: PermissionMode) {
+  if (isPi.value || !props.conversationId) return;
+  if (props.live.status !== "ready" && props.live.status !== "running") return;
+  const target = resolvePermissionTarget(mode, props.live);
+  if (!target) return;
+  if (target.kind === "mode") {
+    emit("pick-mode", target.modeId);
+  } else {
+    emit("pick-model", target.configId, target.value);
+  }
+}
+
+watch(
+  () => [
+    props.conversationId,
+    props.live.status,
+    props.live.modes?.availableModes?.length ?? 0,
+    props.live.configOptions?.length ?? 0,
+  ],
+  ([convId, status]) => {
+    if (convId && status === "ready") {
+      syncPermissionModeToAgent(effectivePerm.value);
+    }
+  },
+  { immediate: true },
+);
 
 const checkSvg = () =>
   h(

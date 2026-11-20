@@ -557,6 +557,18 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
     return { configOptions };
   },
 
+  async setAutoAllow(params) {
+    const val = params?.autoAllow === true;
+    const key = typeof params?.key === "string" ? params.key : "";
+    if (key) {
+      const live = lives.get(key);
+      if (live) live.autoAllow = val;
+    } else {
+      for (const live of lives.values()) live.autoAllow = val;
+    }
+    return { ok: true };
+  },
+
   async close(params) {
     const key = String(params?.key ?? "");
     const live = lives.get(key);
