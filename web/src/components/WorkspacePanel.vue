@@ -14,6 +14,7 @@ import { Folder } from "@antdv-next/x";
 import type { FileContentService, FolderTreeData } from "@antdv-next/x";
 import { App, Spin, Tooltip, message } from "antdv-next";
 import { computed, h, onBeforeUnmount, ref, watch } from "vue";
+import type { VNodeChild } from "vue";
 import { api } from "../api";
 import { directoryIcons } from "../fileIcons";
 import { isDark, store } from "../store";
@@ -152,7 +153,7 @@ async function copyContent() {
   }
 }
 
-function renderPreviewTitle(file: { title?: string; path: string[] }) {
+function renderPreviewTitle(file: { title?: VNodeChild; path: string[] }) {
   const name = file.title || file.path[file.path.length - 1] || "";
   return h("div", { class: "ws-pv-head" }, [
     h("div", { class: "ws-pv-name" }, [
