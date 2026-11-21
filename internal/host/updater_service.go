@@ -364,6 +364,17 @@ func auDiscoverMise(env []string, cwd string) *auMise {
 		"/usr/local/bin/mise",
 		filepath.Join(home, ".local", "share", "mise", "bin", "mise"),
 	}
+	if runtime.GOOS == "windows" {
+		localAppData := os.Getenv("LOCALAPPDATA")
+		if localAppData == "" {
+			localAppData = filepath.Join(home, "AppData", "Local")
+		}
+		candidates = append(candidates, filepath.Join(localAppData, "mise", "bin", "mise.exe"))
+		// WinGet 把 mise 装在 Packages\jdx.mise_* 下，且不一定在 PATH 里。
+		if winget, _ := filepath.Glob(filepath.Join(localAppData, "Microsoft", "WinGet", "Packages", "jdx.mise_*", "mise", "bin", "mise.exe")); len(winget) > 0 {
+			candidates = append(candidates, winget...)
+		}
+	}
 	for _, p := range candidates {
 		if p == "" {
 			continue
@@ -485,6 +496,28 @@ func auCollectSystemFacts(ctx context.Context, env []string) auSystemFacts {
 			}
 		}
 	}
+	// On Unix the global bin entry is a symlink into node_modules, so realpath
+	// already lands the binary inside the package root. Windows shims are plain
+	// files sitting in the global bin dir (e.g. %APPDATA%\npm\claude.cmd), so the
+	// bin dirs themselves have to count as install roots too.
+	if runtime.GOOS == "windows" {
+		if lookPath(env, "npm") != "" {
+			res := auRunCmd(ctx, env, home, 30*time.Second, []string{"npm", "prefix", "-g"})
+			if res.Code == 0 {
+				if prefix := auFirstNonEmptyLine(res.Stdout); prefix != "" {
+					npmRoots = append(npmRoots, auNormalizeRoot(prefix))
+				}
+			}
+		}
+		if lookPath(env, "pnpm") != "" {
+			res := auRunCmd(ctx, env, home, 30*time.Second, []string{"pnpm", "bin", "-g"})
+			if res.Code == 0 {
+				if dir := auFirstNonEmptyLine(res.Stdout); dir != "" {
+					pnpmRoots = append(pnpmRoots, auNormalizeRoot(dir))
+				}
+			}
+		}
+	}
 	if brewPath := lookPath(env, "brew"); brewPath != "" {
 		brewPrefixes = append(brewPrefixes, auNormalizeRoot(filepath.Dir(filepath.Dir(brewPath))))
 	}
@@ -497,7 +530,7 @@ func auCollectSystemFacts(ctx context.Context, env []string) auSystemFacts {
 
 	_, _, miseDataDir := envLookup(env, "MISE_DATA_DIR")
 	if miseDataDir == "" {
-		miseDataDir = filepath.Join(home, ".local", "share", "mise")
+		miseDataDir = auDefaultMiseDataDir(home)
 	}
 	miseDataDir = auNormalizeRoot(miseDataDir)
 
@@ -506,14 +539,33 @@ func auCollectSystemFacts(ctx context.Context, env []string) auSystemFacts {
 		bunInstall = filepath.Join(home, ".bun")
 	}
 
+	bunRoots := []string{auNormalizeRoot(filepath.Join(bunInstall, "install", "global", "node_modules"))}
+	if runtime.GOOS == "windows" {
+		// Same shim story as npm/pnpm: bun's Windows bin dir holds plain files.
+		bunRoots = append(bunRoots, auNormalizeRoot(filepath.Join(bunInstall, "bin")))
+	}
+
 	return auSystemFacts{
 		MiseDataDir:  miseDataDir,
 		MiseShimDir:  filepath.Join(miseDataDir, "shims"),
 		NpmRoots:     npmRoots,
-		BunRoots:     []string{auNormalizeRoot(filepath.Join(bunInstall, "install", "global", "node_modules"))},
+		BunRoots:     bunRoots,
 		PnpmRoots:    pnpmRoots,
 		BrewPrefixes: brewPrefixes,
 	}
+}
+
+// auDefaultMiseDataDir is mise's data dir when MISE_DATA_DIR is unset:
+// ~/.local/share/mise on Unix, %LOCALAPPDATA%\mise on Windows.
+func auDefaultMiseDataDir(home string) string {
+	if runtime.GOOS != "windows" {
+		return filepath.Join(home, ".local", "share", "mise")
+	}
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		localAppData = filepath.Join(home, "AppData", "Local")
+	}
+	return filepath.Join(localAppData, "mise")
 }
 
 func auBrewOutdatedMap(ctx context.Context, env []string) map[string]auBrewOutdatedEntry {

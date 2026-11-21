@@ -134,10 +134,12 @@ func auDefaultAgents() []auAgentSpec {
 	localBin := filepath.Join(home, ".local", "bin")
 	return []auAgentSpec{
 		{
+			// mise 里既可能是 registry 短名（mise use -g claude），也可能是
+			// npm backend 全名（mise use -g npm:@anthropic-ai/claude-code）。
 			ID:           "claude-code",
 			Name:         "Claude Code",
 			Bin:          "claude",
-			MiseTools:    []string{"npm:@anthropic-ai/claude-code"},
+			MiseTools:    []string{"claude", "npm:@anthropic-ai/claude-code"},
 			NpmPackage:   "@anthropic-ai/claude-code",
 			BrewCask:     "claude-code",
 			NativeUpdate: []string{"claude", "install", "latest"},
@@ -147,7 +149,7 @@ func auDefaultAgents() []auAgentSpec {
 			ID:           "codex",
 			Name:         "Codex",
 			Bin:          "codex",
-			MiseTools:    []string{"npm:@openai/codex"},
+			MiseTools:    []string{"codex", "npm:@openai/codex"},
 			NpmPackage:   "@openai/codex",
 			NativeUpdate: []string{"codex", "update"},
 			NativeDirs:   []string{localBin},
@@ -156,7 +158,7 @@ func auDefaultAgents() []auAgentSpec {
 			ID:           "opencode",
 			Name:         "OpenCode",
 			Bin:          "opencode",
-			MiseTools:    []string{"npm:@opencode/cli"},
+			MiseTools:    []string{"opencode", "npm:@opencode/cli"},
 			NpmPackage:   "@opencode/cli",
 			NativeUpdate: []string{"opencode", "upgrade"},
 			NativeDirs:   []string{localBin, filepath.Join(home, ".opencode", "bin")},
@@ -165,7 +167,7 @@ func auDefaultAgents() []auAgentSpec {
 			ID:           "pi",
 			Name:         "Pi",
 			Bin:          "pi",
-			MiseTools:    []string{"npm:@earendil-works/pi-coding-agent"},
+			MiseTools:    []string{"pi", "npm:@earendil-works/pi-coding-agent"},
 			NpmPackage:   "@earendil-works/pi-coding-agent",
 			NativeUpdate: []string{"pi", "update", "self"},
 			NativeDirs:   []string{localBin},
