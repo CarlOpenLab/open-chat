@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.6
+
+- Windows 修复：新建/切换会话不再弹出三个一闪而过的控制台窗口（git 子进程漏了 `CREATE_NO_WINDOW`）。
+- Windows 修复：Agent 更新页此前全部显示「跳过」——现在能正确识别 mise 安装（数据目录取 `%LOCALAPPDATA%\mise`、支持 registry 短名 claude/codex/opencode/pi）以及 npm/pnpm/bun 全局安装（Windows 的全局 shim 是普通文件而非 symlink，需把 bin 目录算进安装根）。
+
 ## 0.0.5
 
 - 工作区面板：右侧新增可拖拽宽度的工作区面板（文件树 + 内置终端），文件树采用离线 Catppuccin 图标主题，内置 CodeMirror 6 实时语法高亮编辑器（支持直接编辑、`⌘S`/`Ctrl+S` 保存、撤回与未保存提醒）。
