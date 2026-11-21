@@ -1,0 +1,3 @@
+[submodule "acp-hub"]
+	path = acp-hub
+	url = https://github.com/CarlOpenLab/acp-hub.git
