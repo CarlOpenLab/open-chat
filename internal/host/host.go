@@ -829,6 +829,7 @@ func (h *Host) runGit(ctx context.Context, dir string, args ...string) (string, 
 	fullArgs := append([]string{"-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, gitBin, fullArgs...)
 	cmd.Env = h.environ()
+	hideWindow(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
