@@ -119,7 +119,14 @@ func (a *API) CheckUpdates() error {
 
 // ProbeModels briefly connects to an agent to read its available configOptions (including models) without creating a conversation.
 func (a *API) ProbeModels(ctx context.Context, agentID, cwd string) ([]any, error) {
-	return a.h.probeAgent(context.WithoutCancel(ctx), agentID, cwd)
+	return a.h.probeAgent(context.WithoutCancel(ctx), agentID, cwd, false)
+}
+
+// RefreshModels re-reads configOptions from a freshly spawned agent process,
+// so models added outside (dsh profile, npm install, provider config) show up
+// without restarting open-chat.
+func (a *API) RefreshModels(ctx context.Context, agentID, cwd string) ([]any, error) {
+	return a.h.probeAgent(context.WithoutCancel(ctx), agentID, cwd, true)
 }
 
 // Create starts a conversation with an agent in a working directory and

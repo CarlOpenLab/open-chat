@@ -45,6 +45,7 @@ export const api = {
   uninstallAgent: (agentId: string) => call<AgentUpdateResult>("UninstallAgent", agentId),
   checkUpdates: () => call<void>("CheckUpdates"),
   probeModels: (agentId: string, cwd: string) => call<ConfigOption[]>("ProbeModels", agentId, cwd),
+  refreshModels: (agentId: string, cwd: string) => call<ConfigOption[]>("RefreshModels", agentId, cwd),
   create: (agentId: string, cwd: string) => call<Meta>("Create", agentId, cwd),
   open: (id: string) => call<Conversation>("Open", id),
   connect: (id: string) => call<LiveState>("Connect", id),

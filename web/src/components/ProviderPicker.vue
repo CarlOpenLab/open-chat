@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { Popover } from "antdv-next";
+import { Popover, message } from "antdv-next";
 import { computed, nextTick, ref } from "vue";
-import { isMac, probeModels, store } from "../store";
+import { isMac, probeModels, refreshModels, store } from "../store";
 import type { AgentInfo, ConfigOption } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
 
@@ -244,6 +244,23 @@ function openSettings() {
   open.value = false;
   emit("manage");
 }
+
+const refreshTarget = computed(() =>
+  activeRail.value !== "fav" && activeRail.value !== "all" ? activeRail.value : currentAgent.value?.id ?? "",
+);
+const refreshing = computed(() => Boolean(refreshTarget.value && store.probingModels[refreshTarget.value]));
+
+/** Re-read models from a fresh agent process; only meaningful for new conversations, a live session keeps its own list. */
+async function refreshCurrent() {
+  const id = refreshTarget.value;
+  if (!id || refreshing.value) return;
+  try {
+    await refreshModels(id, props.cwd ?? "");
+    message.success("模型列表已刷新，对新建会话生效");
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  }
+}
 </script>
 
 <template>
@@ -372,6 +389,25 @@ function openSettings() {
           </div>
 
           <div class="pane-foot">
+            <button v-if="!locked" class="manage-btn refresh-btn" :disabled="refreshing" @click="refreshCurrent">
+              <!-- Lucide RefreshCw -->
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="foot-ic"
+                :class="{ spin: refreshing }"
+              >
+                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                <path d="M3 21v-5h5" />
+              </svg>
+              <span>刷新模型</span>
+            </button>
             <button class="manage-btn" @click="openSettings">
               <!-- Lucide Plus -->
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="foot-ic">
@@ -684,11 +720,14 @@ function openSettings() {
 }
 
 .pane-foot {
+  display: flex;
+  gap: 6px;
   border-top: 1px solid var(--border);
   padding: 5px 6px;
 }
 .manage-btn {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -701,9 +740,20 @@ function openSettings() {
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
 }
-.manage-btn:hover {
+.manage-btn:hover:not(:disabled) {
   background: var(--hover);
   color: var(--text);
+}
+.manage-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.refresh-btn {
+  flex: none;
+  color: var(--text-2);
+}
+.refresh-btn .spin {
+  animation: picker-spin 0.75s linear infinite;
 }
 .foot-ic,
 .foot-gear {

@@ -158,8 +158,25 @@ const lives = new Map<string, Live>();
 /** Sentinel pushed into a session's own queue so it arrives after every event of the turn. */
 const TURN_END = "__open_chat_turn_end__";
 
-function agentKeyOf(agent: AgentLaunch): string {
+/**
+ * Cache key for a shared agent process. A per-launch generation counter lets
+ * "refresh model list" force a fresh process: bump the generation, and the
+ * next adapterFor spawns anew while already-live sessions keep their old
+ * process (they hold the old key) until they close naturally.
+ */
+const launchGeneration = new Map<string, number>();
+
+function launchBase(agent: AgentLaunch): string {
   return JSON.stringify([agent.command, agent.args ?? [], agent.env ?? {}]);
+}
+
+function bumpGeneration(agent: AgentLaunch): void {
+  const base = launchBase(agent);
+  launchGeneration.set(base, (launchGeneration.get(base) ?? 0) + 1);
+}
+
+function agentKeyOf(agent: AgentLaunch): string {
+  return `${launchBase(agent)}#${launchGeneration.get(launchBase(agent)) ?? 0}`;
 }
 
 function isPnpmShimDir(dir: string): boolean {
@@ -332,10 +349,18 @@ function pump(live: Live): void {
               event.options.find((option) => option.kind === "allow_once") ??
               event.options.find((option) => option.kind.startsWith("allow"));
             if (allow) {
-              enqueue(live, event);
-              await live.session.respondPermission(event.requestId, allow.optionId).catch(() => {});
+              // Deliver the request and its auto-resolution in ONE batch.
+              // respondPermission is an async round trip to the agent; the 24ms
+              // debounce would otherwise flush the bare request first, flashing
+              // a confirm card for every auto-approved call. The request itself
+              // carries `resolved` so no consumer mistakes it for pending.
+              enqueue(live, {
+                ...event,
+                resolved: { optionId: allow.optionId, auto: true },
+              } as never);
               enqueue(live, { type: "permission_resolved", requestId: event.requestId, optionId: allow.optionId, auto: true } as never);
               flush(live);
+              await live.session.respondPermission(event.requestId, allow.optionId).catch(() => {});
               continue;
             }
           }
@@ -423,7 +448,11 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
   async probe(params) {
     const agent = params?.agent as AgentLaunch;
     const cwd = String(params?.cwd ?? process.cwd());
+    // refresh: probe a freshly spawned process instead of the cached one, so
+    // config changed outside (new models, new providers) is picked up.
+    const refresh = params?.refresh === true;
     if (!agent?.command) throw new AdapterError("unknown", "probe 需要 agent");
+    if (refresh) bumpGeneration(agent);
     const { key: agentKey, adapter, caps, stderrTail } = await adapterFor(agent);
     const entry = adapters.get(agentKey);
     if (entry) entry.users += 1;
@@ -436,6 +465,12 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
       return await withStderrContext(error, stderrTail);
     } finally {
       if (session) await session.dispose().catch(() => {});
+      if (refresh) {
+        // The probe process only existed to read config; reclaim it right away
+        // instead of parking it in the idle cache for five minutes.
+        adapters.delete(agentKey);
+        await adapter.dispose().catch(() => {});
+      }
       release(agentKey);
     }
   },

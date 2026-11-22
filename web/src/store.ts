@@ -178,8 +178,13 @@ function onPush(p: Push) {
     case "events": {
       const tr = store.transcripts[p.conversationId];
       if (tr) apply(tr, p.events);
+      // Requests auto-resolved within the same batch (the sidecar answers them
+      // before flushing) must not fire "需要你的确认" toasts.
+      const settled = new Set(
+        p.events.filter((e) => e.type === "permission_resolved").map((e) => e.requestId),
+      );
       for (const ev of p.events) {
-        if (ev.type === "permission_request" && !ev.resolved) {
+        if (ev.type === "permission_request" && !ev.resolved && !settled.has(ev.requestId)) {
           const detail = ev.toolCall?.title || ev.toolCall?.kind;
           notifyNeedYou(notifyCtxFor(p.conversationId), detail);
         } else if (ev.type === "turn_end") {
@@ -322,6 +327,21 @@ export async function probeModels(agentId: string, cwd = "", force = false) {
     captureModels(agentId, opts);
   } catch (e) {
     store.probeErrors[agentId] = e instanceof Error ? e.message : String(e);
+  } finally {
+    store.probingModels[agentId] = false;
+  }
+}
+
+/** Re-read an agent's model list from a freshly spawned agent process; errors propagate to the caller. */
+export async function refreshModels(agentId: string, cwd = "") {
+  if (!agentId || store.probingModels[agentId]) return;
+  const agent = agentById(agentId);
+  if (!agent?.available) return;
+  store.probingModels[agentId] = true;
+  delete store.probeErrors[agentId];
+  try {
+    const opts = await api.refreshModels(agentId, cwd || store.boot?.home || "");
+    captureModels(agentId, opts);
   } finally {
     store.probingModels[agentId] = false;
   }

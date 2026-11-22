@@ -506,7 +506,7 @@ func (h *Host) shouldEmitResetNotice(id, text string) bool {
 	return hasActivity
 }
 
-func (h *Host) probeAgent(ctx context.Context, agentID, cwd string) ([]any, error) {
+func (h *Host) probeAgent(ctx context.Context, agentID, cwd string, refresh bool) ([]any, error) {
 	a, ok := h.agent(agentID)
 	if !ok {
 		return nil, fmt.Errorf("agent %s 不存在或已被移除", agentID)
@@ -530,6 +530,9 @@ func (h *Host) probeAgent(ctx context.Context, agentID, cwd string) ([]any, erro
 	params := map[string]any{
 		"agent": map[string]any{"id": a.ID, "command": a.Command, "args": a.Args, "env": a.Env},
 		"cwd":   cwd,
+		// refresh makes the sidecar spawn a fresh agent process, so config
+		// changed outside (new models in dsh/magpie etc.) is picked up.
+		"refresh": refresh,
 	}
 	if err := sc.call(ctx, "probe", params, &res); err != nil {
 		return nil, friendlyError(a, err)
