@@ -279,7 +279,7 @@ async function loadTree() {
 function treeHasPath(nodes: WorkspaceNode[], segments: string[]): boolean {
   let list: WorkspaceNode[] | undefined = nodes;
   for (let i = 0; i < segments.length; i++) {
-    const hit = list?.find((n) => n.path === segments[i] || n.title === segments[i]);
+    const hit: WorkspaceNode | undefined = list?.find((n) => n.path === segments[i] || n.title === segments[i]);
     if (!hit) return false;
     if (i === segments.length - 1) return true;
     list = hit.children;

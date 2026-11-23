@@ -566,7 +566,7 @@ function submit(msgFromSender?: string, _slotConfig?: SlotConfigType[], skillFro
       ? msgFromSender
       : (senderRef.value?.getValue?.().value ?? props.value);
   const body = rawText.trim();
-  const skillVal = skillFromSender?.value ?? selectedSkill.value?.value;
+  const skillVal = skillFromSender?.value ?? selectedSkill.value?.name;
   const text = skillVal ? (body ? `/${skillVal} ${body}` : `/${skillVal}`) : body;
   if (text) blocks.push({ type: "text", text });
   for (const a of attached.value) blocks.push(a);
