@@ -7,7 +7,8 @@ import AppSidebar from "./components/AppSidebar.vue";
 import ChatView from "./components/ChatView.vue";
 import NewChat from "./components/NewChat.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
-import { init, isDark, newConversation, store } from "./store";
+import { api, inApp } from "./api";
+import { activeMeta, init, isDark, newConversation, store } from "./store";
 import { antdThemeFor } from "./theme";
 
 const theme = computed(() => antdThemeFor(isDark.value));
@@ -106,14 +107,31 @@ function ctxSelectAll() {
   }
 }
 
+// Links in the transcript (and anywhere else) go through the host: http(s)
+// opens the browser, paths open their location in the file manager. In a
+// browser the page's own handling is already right.
+function onLinkClick(e: MouseEvent) {
+  if (!inApp) return;
+  const anchor = e.target instanceof Element ? e.target.closest("a[href]") : null;
+  const href = anchor?.getAttribute("href") ?? "";
+  if (!href || href.startsWith("#")) return;
+  e.preventDefault();
+  e.stopPropagation();
+  void api
+    .openLink(href, activeMeta.value?.cwd ?? "")
+    .catch((err) => message.error(err instanceof Error ? err.message : String(err)));
+}
+
 onMounted(() => {
   window.addEventListener("keydown", onKey);
+  window.addEventListener("click", onLinkClick, true);
   window.addEventListener("pointerdown", closeCtxMenu);
   window.addEventListener("blur", closeCtxMenu);
   void init();
 });
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKey);
+  window.removeEventListener("click", onLinkClick, true);
   window.removeEventListener("pointerdown", closeCtxMenu);
   window.removeEventListener("blur", closeCtxMenu);
 });

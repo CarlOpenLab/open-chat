@@ -102,6 +102,9 @@ func desktop() {
 			return paths[0], nil
 		},
 		Reveal: func(path string) error { mygo.Shell.ShowItemInFolder(path); return nil },
+		OpenExternal: func(target string) error {
+			return mygo.Shell.OpenExternal(target)
+		},
 		Notify: func(conversationID, title, subtitle, body string, sound bool) error {
 			if !mygo.NotificationsSupported() {
 				return nil

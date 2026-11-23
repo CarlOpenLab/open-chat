@@ -17,6 +17,7 @@ import type {
   Meta,
   Push,
   Settings,
+  SkillInfo,
   TermInfo,
   WorkspaceNode,
 } from "./types";
@@ -60,10 +61,12 @@ export const api = {
   remove: (id: string) => call<void>("Delete", id),
   saveSettings: (s: Settings) => call<Settings>("SaveSettings", s),
   listDir: (path: string) => call<DirListing>("ListDir", path),
+  listSkills: (cwd: string) => call<SkillInfo[]>("ListSkills", cwd),
   gitInfo: (path: string) => call<GitInfo>("GitInfo", path),
   gitCheckout: (path: string, branch: string) => call<GitInfo>("GitCheckout", path, branch),
   pickFolder: () => call<string>("PickFolder"),
   reveal: (path: string) => call<void>("Reveal", path),
+  openLink: (target: string, cwd: string) => call<void>("OpenLink", target, cwd),
   notify: (conversationId: string, title: string, subtitle: string, body: string, sound: boolean) =>
     call<void>("Notify", conversationId, title, subtitle, body, sound),
   workspaceTree: (cwd: string) => call<WorkspaceNode[]>("WorkspaceTree", cwd),

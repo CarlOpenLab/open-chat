@@ -34,9 +34,10 @@ type Options struct {
 	// Push delivers updates to every page.
 	Push func(Push)
 	// Desktop integrations; nil in web mode.
-	PickFolder func(ctx context.Context) (string, error)
-	Reveal     func(path string) error
-	Notify     func(conversationID, title, subtitle, body string, sound bool) error
+	PickFolder   func(ctx context.Context) (string, error)
+	Reveal       func(path string) error
+	OpenExternal func(target string) error
+	Notify       func(conversationID, title, subtitle, body string, sound bool) error
 	// CheckUpdates opens the update window; nil in web mode.
 	CheckUpdates func()
 }

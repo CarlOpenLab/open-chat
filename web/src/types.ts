@@ -106,6 +106,13 @@ export interface LiveState {
   turnStartedAt?: number;
 }
 
+export interface SkillInfo {
+  name: string;
+  description?: string;
+  source: "project" | "user";
+  path?: string;
+}
+
 export type Block =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string; uri?: string }

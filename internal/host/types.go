@@ -138,6 +138,14 @@ type Command struct {
 	Description string `json:"description,omitempty"`
 }
 
+// SkillInfo describes a local skill discovered from SKILL.md.
+type SkillInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Source      string `json:"source"` // "project" | "user"
+	Path        string `json:"path,omitempty"`
+}
+
 // AgentUpdateProgress reports real-time progress while upgrading agents.
 type AgentUpdateProgress struct {
 	Stage     string             `json:"stage"` // inspecting | upgrading | verifying | reshim | done

@@ -5,7 +5,8 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { Tooltip, message } from "antdv-next";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { api } from "../api";
+import type { ILink, ILinkProvider } from "@xterm/xterm";
+import { api, inApp } from "../api";
 import { isDark, onTermExit, onTermOut } from "../store";
 
 const props = defineProps<{
@@ -29,8 +30,19 @@ const stageRef = ref<HTMLElement | null>(null);
 const mountRefs = new Map<string, HTMLElement>();
 const instances = new Map<string, { term: Terminal; fit: FitAddon }>();
 const pendingChunks = new Map<string, Uint8Array[]>();
+/** Output from one push batch, merged so xterm parses it once. */
+const writeQueues = new Map<string, Uint8Array[]>();
+const writeScheduled = new Set<string>();
+const lastWriteAt = new Map<string, number>();
+/** Keystrokes waiting for the previous TermWrite call to finish. */
+const inputQueues = new Map<string, string>();
+const inputBusy = new Set<string>();
+const inputScheduled = new Set<string>();
 let seqByCwd: Record<string, number> = {};
 let ro: ResizeObserver | null = null;
+let fitTimer: number | null = null;
+let lastStageW = 0;
+let lastStageH = 0;
 let offOut: (() => void) | null = null;
 let offExit: (() => void) | null = null;
 
@@ -100,6 +112,148 @@ function decodeBase64(b64: string): Uint8Array {
   return out;
 }
 
+/** flushWrites hands everything queued for a terminal to xterm at once. */
+function flushWrites(id: string) {
+  writeScheduled.delete(id);
+  const chunks = writeQueues.get(id);
+  writeQueues.delete(id);
+  if (!chunks?.length) return;
+  const inst = instances.get(id);
+  if (!inst) {
+    const queued = pendingChunks.get(id) ?? [];
+    for (const chunk of chunks) queued.push(chunk);
+    pendingChunks.set(id, queued);
+    return;
+  }
+  if (chunks.length === 1) {
+    inst.term.write(chunks[0]);
+    return;
+  }
+  let total = 0;
+  for (const chunk of chunks) total += chunk.length;
+  const all = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, offset);
+    offset += chunk.length;
+  }
+  inst.term.write(all);
+}
+
+function queueWrite(id: string, bytes: Uint8Array) {
+  const chunks = writeQueues.get(id);
+  if (chunks) chunks.push(bytes);
+  else writeQueues.set(id, [bytes]);
+  if (writeScheduled.has(id)) return;
+  writeScheduled.add(id);
+  const now = performance.now();
+  const prev = lastWriteAt.get(id) ?? 0;
+  lastWriteAt.set(id, now);
+  // Echo after a short quiet gap flushes immediately via microtask; rapid
+  // output bursts coalesce onto the next animation frame so keyboard events
+  // are never starved on the main thread.
+  if (now - prev > 16) {
+    queueMicrotask(() => flushWrites(id));
+  } else {
+    requestAnimationFrame(() => flushWrites(id));
+  }
+}
+
+/**
+ * queueInput serializes and coalesces keystrokes per terminal so fast typing
+ * never races across IPC or drops characters on transient failures.
+ */
+function queueInput(id: string, data: string) {
+  if (!data) return;
+  inputQueues.set(id, (inputQueues.get(id) ?? "") + data);
+  if (inputBusy.has(id) || inputScheduled.has(id)) return;
+  inputScheduled.add(id);
+  queueMicrotask(() => {
+    inputScheduled.delete(id);
+    if (!inputBusy.has(id) && inputQueues.has(id)) {
+      void pumpInput(id);
+    }
+  });
+}
+
+async function pumpInput(id: string) {
+  inputBusy.add(id);
+  let retries = 0;
+  try {
+    for (;;) {
+      const data = inputQueues.get(id);
+      if (!data) break;
+      inputQueues.delete(id);
+      try {
+        await api.termWrite(id, data);
+        retries = 0;
+      } catch {
+        const tab = tabs.value.find((t) => t.id === id);
+        if (!tab || tab.exited || !instances.has(id) || retries >= 2) {
+          inputQueues.delete(id);
+          break;
+        }
+        // Put unsent bytes back at the head and retry once after a brief yield.
+        retries += 1;
+        inputQueues.set(id, data + (inputQueues.get(id) ?? ""));
+        await new Promise((resolve) => window.setTimeout(resolve, 16));
+      }
+    }
+  } finally {
+    inputBusy.delete(id);
+    if (inputQueues.has(id) && instances.has(id)) {
+      void pumpInput(id);
+    }
+  }
+}
+
+async function openLink(target: string, cwd: string) {
+  try {
+    if (!inApp && /^https?:\/\//i.test(target)) {
+      window.open(target, "_blank", "noopener");
+      return;
+    }
+    await api.openLink(target, cwd);
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  }
+}
+
+// URLs and absolute-ish paths (with optional :line[:col]) in terminal output.
+const linkPattern = /(?:https?:\/\/|file:\/\/)[^\s"'<>]+|(?:~|\.{1,2})?\/[^\s"'<>]+(?::\d+(?::\d+)?)?/g;
+
+/** terminalLinks makes URLs and paths in the scrollback clickable. */
+function terminalLinks(term: Terminal, cwd: string): ILinkProvider {
+  return {
+    provideLinks(y, callback) {
+      const line = term.buffer.active.getLine(y - 1);
+      if (!line) {
+        callback(undefined);
+        return;
+      }
+      const text = line.translateToString(true);
+      const links: ILink[] = [];
+      linkPattern.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = linkPattern.exec(text))) {
+        const value = match[0].replace(/[),.;:!?]+$/, "");
+        if (!value) continue;
+        const start = match.index;
+        links.push({
+          range: { start: { x: start + 1, y }, end: { x: start + value.length, y } },
+          text: value,
+          activate: (event, target) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            void openLink(target, cwd);
+          },
+        });
+      }
+      callback(links.length ? links : undefined);
+    },
+  };
+}
+
 function setMountRef(id: string, el: unknown) {
   if (el instanceof HTMLElement) {
     mountRefs.set(id, el);
@@ -127,13 +281,20 @@ function ensureMounted(id: string) {
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(el);
+  if (term.textarea) {
+    term.textarea.setAttribute("autocorrect", "off");
+    term.textarea.setAttribute("autocapitalize", "off");
+    term.textarea.setAttribute("autocomplete", "off");
+    term.textarea.setAttribute("spellcheck", "false");
+    term.textarea.spellcheck = false;
+  }
 
-  term.onData((data) => {
-    void api.termWrite(id, data).catch(() => {});
-  });
+  term.onData((data) => queueInput(id, data));
+  term.onBinary((data) => queueInput(id, data));
   term.onResize(({ cols, rows }) => {
     void api.termResize(id, cols, rows).catch(() => {});
   });
+  term.registerLinkProvider(terminalLinks(term, tabs.value.find((t) => t.id === id)?.cwd ?? props.cwd));
 
   instances.set(id, { term, fit });
 
@@ -143,11 +304,20 @@ function ensureMounted(id: string) {
     pendingChunks.delete(id);
   }
 
-  requestAnimationFrame(() => fitActive());
+  requestAnimationFrame(() => fitActive(true));
 }
 
-function fitActive() {
+function fitActive(force = false) {
   if (!props.visible || !activeId.value) return;
+  const stage = stageRef.value;
+  if (stage) {
+    const w = stage.clientWidth;
+    const h = stage.clientHeight;
+    if (w <= 0 || h <= 0) return;
+    if (!force && w === lastStageW && h === lastStageH) return;
+    lastStageW = w;
+    lastStageH = h;
+  }
   const inst = instances.get(activeId.value);
   if (!inst) return;
   try {
@@ -155,6 +325,14 @@ function fitActive() {
   } catch {
     /* ignore while hidden or zero-sized */
   }
+}
+
+function scheduleFit() {
+  if (fitTimer !== null) window.clearTimeout(fitTimer);
+  fitTimer = window.setTimeout(() => {
+    fitTimer = null;
+    fitActive(false);
+  }, 60);
 }
 
 async function createTerminal() {
@@ -170,7 +348,7 @@ async function createTerminal() {
     await nextTick();
     ensureMounted(info.id);
     requestAnimationFrame(() => {
-      fitActive();
+      fitActive(true);
       instances.get(info.id)?.term.focus();
     });
   } catch (e) {
@@ -190,6 +368,11 @@ async function closeTerminal(id: string) {
   }
   mountRefs.delete(id);
   pendingChunks.delete(id);
+  writeQueues.delete(id);
+  writeScheduled.delete(id);
+  lastWriteAt.delete(id);
+  inputQueues.delete(id);
+  inputScheduled.delete(id);
   if (target && activeByCwd.value[target.cwd] === id) {
     const next = tabs.value.find((t) => t.cwd === target.cwd);
     activeByCwd.value = { ...activeByCwd.value, [target.cwd]: next?.id ?? "" };
@@ -197,7 +380,7 @@ async function closeTerminal(id: string) {
   await api.termClose(id).catch(() => {});
   if (activeId.value) {
     requestAnimationFrame(() => {
-      fitActive();
+      fitActive(true);
       instances.get(activeId.value)?.term.focus();
     });
   }
@@ -212,7 +395,7 @@ function clearActive() {
 function selectTab(id: string) {
   activeId.value = id;
   nextTick(() => {
-    fitActive();
+    fitActive(true);
     instances.get(id)?.term.focus();
   });
 }
@@ -227,7 +410,7 @@ watch(
     }
     await nextTick();
     requestAnimationFrame(() => {
-      fitActive();
+      fitActive(true);
       if (activeId.value) instances.get(activeId.value)?.term.focus();
     });
   },
@@ -243,15 +426,7 @@ watch(isDark, (dark) => {
 
 onMounted(() => {
   offOut = onTermOut((id, b64) => {
-    const bytes = decodeBase64(b64);
-    const inst = instances.get(id);
-    if (inst) {
-      inst.term.write(bytes);
-    } else {
-      const q = pendingChunks.get(id) ?? [];
-      q.push(bytes);
-      pendingChunks.set(id, q);
-    }
+    queueWrite(id, decodeBase64(b64));
   });
   offExit = onTermExit((id, exitCode) => {
     const tab = tabs.value.find((t) => t.id === id);
@@ -259,10 +434,11 @@ onMounted(() => {
       tab.exited = true;
       tab.exitCode = exitCode;
     }
+    flushWrites(id);
     instances.get(id)?.term.writeln(`\r\n\x1b[90m[进程已退出，状态码 ${exitCode}]\x1b[0m`);
   });
   if (stageRef.value && typeof ResizeObserver !== "undefined") {
-    ro = new ResizeObserver(() => fitActive());
+    ro = new ResizeObserver(() => scheduleFit());
     ro.observe(stageRef.value);
   }
 });
@@ -271,6 +447,12 @@ onBeforeUnmount(() => {
   offOut?.();
   offExit?.();
   ro?.disconnect();
+  if (fitTimer !== null) window.clearTimeout(fitTimer);
+  writeScheduled.clear();
+  writeQueues.clear();
+  lastWriteAt.clear();
+  inputQueues.clear();
+  inputScheduled.clear();
   for (const [id, inst] of instances.entries()) {
     inst.term.dispose();
     void api.termClose(id).catch(() => {});
@@ -447,15 +629,16 @@ defineExpose({ createTerminal });
 }
 
 .term-stage {
+  --term-bg: #f8fafc;
   flex: 1;
   min-height: 0;
   position: relative;
-  background: #f8fafc;
+  background: var(--term-bg);
   padding: 6px 8px;
   overflow: hidden;
 }
 :root[data-theme="dark"] .term-stage {
-  background: #0d1017;
+  --term-bg: #0d1017;
 }
 
 .term-mount {
@@ -464,9 +647,13 @@ defineExpose({ createTerminal });
 }
 .term-mount :deep(.xterm) {
   height: 100%;
+  background: var(--term-bg);
 }
 .term-mount :deep(.xterm-viewport) {
   overflow-y: auto !important;
+  /* xterm.css paints the viewport black; the strip below the last row (or
+     beside the canvas) would show it through instead of the theme. */
+  background-color: var(--term-bg) !important;
 }
 
 .term-empty {

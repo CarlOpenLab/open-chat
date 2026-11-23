@@ -3,7 +3,10 @@ package host
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -267,6 +270,9 @@ func (a *API) SaveSettings(s Settings) (Settings, error) {
 // ListDir lists the subdirectories of path, for the folder picker.
 func (a *API) ListDir(path string) (DirListing, error) { return listDir(path) }
 
+// ListSkills returns local skills discovered in project and user skill directories.
+func (a *API) ListSkills(cwd string) []SkillInfo { return listSkills(cwd) }
+
 // GitInfo returns the current git branch and local branches for path.
 func (a *API) GitInfo(ctx context.Context, path string) (GitInfo, error) {
 	return a.h.gitInfo(ctx, path)
@@ -291,6 +297,100 @@ func (a *API) Reveal(path string) error {
 		return errors.New("网页模式下不能打开文件管理器")
 	}
 	return a.h.opts.Reveal(expandHome(path))
+}
+
+// OpenLink opens a link clicked in a transcript or a terminal: web links go
+// to the default browser, file links (paths, file:// URLs, and paths with
+// :line suffixes) go to the file manager. Relative paths resolve against cwd.
+func (a *API) OpenLink(target, cwd string) error {
+	target = strings.TrimSpace(target)
+	if target == "" || strings.HasPrefix(target, "#") {
+		return nil
+	}
+	u, uerr := url.Parse(target)
+	scheme := ""
+	if uerr == nil {
+		scheme = strings.ToLower(u.Scheme)
+	}
+	if runtime.GOOS == "windows" && len(scheme) == 1 {
+		// C:\dir\file looks like the URL scheme "c".
+		scheme, u, uerr = "", nil, errors.New("path")
+	}
+	switch scheme {
+	case "", "file":
+		if uerr != nil {
+			u = nil
+		}
+		return a.openLocalLink(target, u, cwd)
+	case "javascript", "data", "vbscript":
+		return fmt.Errorf("不支持的链接：%s", target)
+	}
+	if a.h.opts.OpenExternal == nil {
+		return errors.New("网页模式下不能打开外部链接")
+	}
+	return a.h.opts.OpenExternal(target)
+}
+
+func (a *API) openLocalLink(target string, u *url.URL, cwd string) error {
+	p := target
+	if u != nil && u.Path != "" {
+		p = u.Path
+		if u.Scheme == "file" {
+			if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+				p = "//" + u.Host + p
+			}
+			if runtime.GOOS == "windows" && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+				p = p[1:]
+			}
+		}
+	}
+	p = expandHome(filepath.FromSlash(strings.TrimSpace(p)))
+	if p == "" {
+		return fmt.Errorf("无效的链接：%s", target)
+	}
+	if !filepath.IsAbs(p) {
+		base := expandHome(strings.TrimSpace(cwd))
+		if base == "" {
+			return fmt.Errorf("无法解析相对路径：%s", target)
+		}
+		p = filepath.Join(base, p)
+	}
+	p = filepath.Clean(p)
+	if _, err := os.Stat(p); err != nil {
+		// Agents often link to "file.go:12" or "file.go:12:3".
+		if trimmed, ok := trimLineSuffix(p); ok {
+			p = trimmed
+		}
+	}
+	if _, err := os.Stat(p); err != nil {
+		return fmt.Errorf("文件不存在：%s", p)
+	}
+	if a.h.opts.Reveal == nil {
+		return errors.New("网页模式下不能打开文件管理器")
+	}
+	return a.h.opts.Reveal(p)
+}
+
+// trimLineSuffix drops one or two trailing :number parts when the path
+// before them exists.
+func trimLineSuffix(p string) (string, bool) {
+	base := p
+	for range 2 {
+		idx := strings.LastIndex(base, ":")
+		if idx <= 0 || idx == len(base)-1 {
+			return "", false
+		}
+		for _, r := range base[idx+1:] {
+			if r < '0' || r > '9' {
+				return "", false
+			}
+		}
+		base = base[:idx]
+		if _, err := os.Stat(base); err == nil {
+			return base, true
+		}
+	}
+	return "", false
 }
 
 // Notify displays a native OS desktop notification.
