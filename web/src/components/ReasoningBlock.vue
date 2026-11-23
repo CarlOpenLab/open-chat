@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 
 const props = defineProps<{ text: string; live: boolean; durationSec?: number }>();
 
@@ -14,8 +14,40 @@ interface TextRun {
   bold: boolean;
 }
 
-/** Normalize raw thought_delta text: trim leading blank space and split concatenated **heading****heading** chunks. */
+// Collapsed by default; expansion is user-controlled only (no auto open/close while streaming).
+const open = ref(false);
+const everOpened = ref(false);
+let pendingOpen = false;
+
+function toggleOpen() {
+  if (open.value || pendingOpen) {
+    pendingOpen = false;
+    open.value = false;
+    return;
+  }
+  if (!everOpened.value) {
+    everOpened.value = true;
+    pendingOpen = true;
+    // Mount in 0fr state first, then open on the next paint frame so CSS transition runs.
+    void nextTick(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!pendingOpen) return;
+          pendingOpen = false;
+          open.value = true;
+        });
+      });
+    });
+    return;
+  }
+  open.value = true;
+}
+
+const hasContent = computed(() => Boolean(props.text && props.text.trim().length > 0));
+
+/** Normalize raw thought_delta text lazily only after the user opens the block. */
 const lines = computed<TextRun[][]>(() => {
+  if (!everOpened.value) return [];
   const raw = (props.text ?? "")
     .replace(/\r\n/g, "\n")
     .replace(/\*\*\s*\*\*/g, "**\n**")
@@ -41,14 +73,11 @@ const lines = computed<TextRun[][]>(() => {
     return runs;
   });
 });
-
-// Collapsed by default; expansion is user-controlled only (no auto open/close while streaming).
-const open = ref(false);
 </script>
 
 <template>
-  <div v-if="lines.length || live" class="think" :class="{ open, live }">
-    <button type="button" class="think-head" @click="open = !open" :aria-expanded="open">
+  <div v-if="hasContent || live" class="think" :class="{ open, live }">
+    <button type="button" class="think-head" @click="toggleOpen" :aria-expanded="open">
       <!-- Lucide Sparkles -->
       <svg
         viewBox="0 0 24 24"
@@ -82,7 +111,7 @@ const open = ref(false);
       </svg>
     </button>
 
-    <div class="think-collapse" :class="{ open }">
+    <div v-if="everOpened" class="think-collapse" :class="{ open }">
       <div class="think-collapse-inner">
         <div class="think-body selectable">
           <p v-for="(line, i) in lines" :key="i" class="think-line" :class="{ empty: line.length === 0 }">

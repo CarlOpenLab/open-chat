@@ -42,6 +42,8 @@ export const store = reactive({
   workspaceOpen: localStorage.getItem("oc.workspaceOpen") === "1",
   workspaceTab: (localStorage.getItem("oc.workspaceTab") === "terminal" ? "terminal" : "files") as "files" | "terminal",
   workspaceWidth: Math.min(820, Math.max(340, Number(localStorage.getItem("oc.workspaceWidth")) || 480)),
+  /** Pending file to open and highlight in the WorkspacePanel file tree. */
+  workspaceReveal: null as { path: string[]; seq: number } | null,
   settingsOpen: false,
   search: "",
   userAvatar: localStorage.getItem("oc.userAvatar") || "",
@@ -108,6 +110,103 @@ watch(
   () => store.workspaceWidth,
   (v) => localStorage.setItem("oc.workspaceWidth", String(Math.round(v))),
 );
+
+function normalizeSlashPath(p: string): string {
+  const parts = p.replace(/\\/g, "/").split("/");
+  const isAbs = p.startsWith("/") || /^[a-zA-Z]:\//.test(p.replace(/\\/g, "/"));
+  const drive = /^[a-zA-Z]:\//.test(p.replace(/\\/g, "/")) ? parts.shift()! : "";
+  const stack: string[] = [];
+  for (const seg of parts) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") {
+      if (stack.length && stack[stack.length - 1] !== "..") stack.pop();
+      else if (!isAbs) stack.push("..");
+    } else {
+      stack.push(seg);
+    }
+  }
+  if (drive) return `${drive}/${stack.join("/")}`;
+  return (isAbs ? "/" : "") + stack.join("/");
+}
+
+/**
+ * Resolves a local file link or path (file://, absolute, ~/, or relative, with optional :line:col)
+ * into a workspace-relative path inside `cwd`. Returns null if it is a web URL or outside `cwd`.
+ */
+export function resolveWorkspaceRelPath(target: string, cwd: string): string | null {
+  let raw = target.trim();
+  if (!raw || raw.startsWith("#")) return null;
+
+  // Reject web or unsafe schemes, while allowing file:// and Windows drive letters (C:\...)
+  const schemeMatch = raw.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1].toLowerCase();
+    const isWinDrive = scheme.length === 1 && /^([a-zA-Z]):[\\/]/.test(raw);
+    if (scheme === "file") {
+      try {
+        const u = new URL(raw);
+        raw = decodeURIComponent(u.pathname);
+        if (/^\/[a-zA-Z]:\//.test(raw)) raw = raw.slice(1);
+      } catch {
+        raw = raw.replace(/^file:\/\/(?:localhost)?/i, "");
+        try {
+          raw = decodeURIComponent(raw);
+        } catch {
+          /* keep raw */
+        }
+      }
+    } else if (!isWinDrive) {
+      return null;
+    }
+  }
+
+  // Strip #L12 / :line / :line:col suffixes often attached by coding agents
+  raw = raw.replace(/#.*$/, "").replace(/:\d+(?::\d+)?$/, "").trim();
+  if (!raw) return null;
+
+  const home = (store.boot?.home ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+  const expand = (p: string) => {
+    const s = p.replace(/\\/g, "/");
+    if (home && (s === "~" || s.startsWith("~/"))) return home + s.slice(1);
+    return s;
+  };
+
+  const baseCwd = normalizeSlashPath(expand(cwd.trim())).replace(/\/+$/, "");
+  if (!baseCwd) return null;
+
+  const expanded = expand(raw);
+  const isAbs = expanded.startsWith("/") || /^[a-zA-Z]:\//.test(expanded);
+  if (isAbs) {
+    const clean = normalizeSlashPath(expanded);
+    const isWin = /^[a-zA-Z]:\//.test(baseCwd);
+    const prefix = baseCwd + "/";
+    const matches = isWin
+      ? clean.toLowerCase().startsWith(prefix.toLowerCase())
+      : clean.startsWith(prefix);
+    if (!matches) return null;
+    const rel = clean.slice(prefix.length).replace(/^\/+/, "");
+    return rel || null;
+  }
+
+  const rel = normalizeSlashPath(expanded);
+  if (!rel || rel === "." || rel === ".." || rel.startsWith("../")) return null;
+  return rel;
+}
+
+let workspaceRevealSeq = 0;
+
+/** Opens a file inside the current workspace in the right-hand WorkspacePanel file tree. */
+export function openWorkspaceFile(target: string, cwd?: string): boolean {
+  const base = cwd ?? activeMeta.value?.cwd ?? "";
+  const rel = resolveWorkspaceRelPath(target, base);
+  if (!rel) return false;
+  const segments = rel.split("/").filter(Boolean);
+  if (!segments.length) return false;
+  store.workspaceOpen = true;
+  store.workspaceTab = "files";
+  store.workspaceReveal = { path: segments, seq: ++workspaceRevealSeq };
+  return true;
+}
 
 type TermOutListener = (id: string, data: string) => void;
 type TermExitListener = (id: string, exitCode: number) => void;
@@ -348,6 +447,7 @@ export async function refreshModels(agentId: string, cwd = "") {
 }
 
 async function load(id: string) {
+  if (store.loading[id]) return;
   store.loading[id] = true;
   try {
     const conv = await api.open(id);

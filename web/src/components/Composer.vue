@@ -4,13 +4,13 @@ import type { SenderPasteInfo, SenderProps, SenderRef } from "@antdv-next/x";
 type SkillType = NonNullable<SenderProps["skill"]>;
 type SlotConfigType = NonNullable<SenderProps["slotConfig"]>[number];
 import { Dropdown, Tooltip, message } from "antdv-next";
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, h, nextTick, ref, watch } from "vue";
 import { api } from "../api";
 import { resolvePermissionTarget, saveSettings, store, type PermissionMode, type QueuedMessage } from "../store";
 import { userText } from "../transcript";
 import type { Block, ConfigOption, GitInfo, LiveState, PermissionOption, SkillInfo } from "../types";
 import ProviderPicker from "./ProviderPicker.vue";
-type DeckKind = "permission" | "queue" | "files";
+type DeckKind = "permission" | "queue" | "files" | "skills";
 
 export interface PendingPermission {
   turnId: string;
@@ -364,10 +364,7 @@ const branchMenu = computed(() => {
 const senderRef = ref<SenderRef | null>(null);
 const localSkills = ref<SkillInfo[]>([]);
 const selectedSkill = ref<SkillEntry | null>(null);
-const skillPickerOpen = ref(false);
-const skillPickerQuery = ref("");
-const skillSearchInput = ref<HTMLInputElement | null>(null);
-const skillPickerWrap = ref<HTMLElement | null>(null);
+const skillFilter = ref<"all" | "project" | "user" | "command">("all");
 
 async function refreshSkills(dir: string) {
   const key = dir || "__global__";
@@ -387,8 +384,7 @@ watch(
   () => {
     slashDismissed.value = false;
     selectedSkill.value = null;
-    skillPickerOpen.value = false;
-    skillPickerQuery.value = "";
+    skillFilter.value = "all";
     dragging.value = false;
     dragDepth = 0;
   },
@@ -434,12 +430,17 @@ const allSkills = computed<SkillEntry[]>(() => {
   return out;
 });
 
-const filteredPickerSkills = computed<SkillEntry[]>(() => {
-  const q = skillPickerQuery.value.trim().toLowerCase();
-  if (!q) return allSkills.value;
-  return allSkills.value.filter(
-    (s) => s.name.toLowerCase().includes(q) || (s.description?.toLowerCase().includes(q) ?? false),
-  );
+const skillFilterTabs = computed(() => {
+  const projectCount = allSkills.value.filter((s) => s.kind === "skill" && s.source === "project").length;
+  const userCount = allSkills.value.filter((s) => s.kind === "skill" && s.source === "user").length;
+  const cmdCount = allSkills.value.filter((s) => s.kind === "command").length;
+  const tabs: { key: "all" | "project" | "user" | "command"; label: string; count: number }[] = [
+    { key: "all", label: "全部", count: allSkills.value.length },
+  ];
+  if (projectCount) tabs.push({ key: "project", label: "项目", count: projectCount });
+  if (userCount) tabs.push({ key: "user", label: "全局", count: userCount });
+  if (cmdCount) tabs.push({ key: "command", label: "命令", count: cmdCount });
+  return tabs;
 });
 
 const slashQuery = computed(() => {
@@ -447,21 +448,33 @@ const slashQuery = computed(() => {
   const m = /^\/([^\s]*)$/.exec(props.value);
   return m ? m[1] : null;
 });
-const slashItems = computed(() => {
-  if (slashQuery.value == null) return [];
-  const q = slashQuery.value.toLowerCase();
-  return allSkills.value
-    .filter((c) => c.name.toLowerCase().includes(q) || (c.description?.toLowerCase().includes(q) ?? false))
-    .slice(0, 8);
-});
-const slashOpen = computed(() => slashQuery.value != null && slashItems.value.length > 0);
-const slashIndex = ref(0);
-watch(slashItems, () => (slashIndex.value = 0));
 const slashDismissed = ref(false);
 watch(
   () => props.value,
   () => (slashDismissed.value = false),
 );
+const slashOpen = computed(() => slashQuery.value != null && !slashDismissed.value);
+
+const slashItems = computed<SkillEntry[]>(() => {
+  if (slashQuery.value == null) return [];
+  const q = slashQuery.value.trim().toLowerCase();
+  return allSkills.value.filter((s) => {
+    if (skillFilter.value === "project" && (s.kind !== "skill" || s.source !== "project")) return false;
+    if (skillFilter.value === "user" && (s.kind !== "skill" || s.source !== "user")) return false;
+    if (skillFilter.value === "command" && s.kind !== "command") return false;
+    if (!q) return true;
+    return s.name.toLowerCase().includes(q) || (s.description?.toLowerCase().includes(q) ?? false);
+  });
+});
+const slashIndex = ref(0);
+watch(slashItems, () => (slashIndex.value = 0));
+watch(slashOpen, (open) => {
+  if (open) {
+    skillFilter.value = "all";
+    activeDeck.value = "skills";
+    void refreshSkills(props.cwd);
+  }
+});
 
 function clearSkill(refocus = false) {
   if (!selectedSkill.value) return;
@@ -478,8 +491,8 @@ const senderSkill = computed<SkillType | undefined>(() => {
   if (!s) return undefined;
   return {
     value: s.name,
-    title: h("span", { class: "oc-skill-label" }, [
-      h("span", { class: "oc-skill-slash mono" }, "/"),
+    title: h("span", { class: "oc-skill-label mono" }, [
+      h("span", { class: "oc-skill-slash" }, "/"),
       h("span", { class: "oc-skill-name" }, s.name),
     ]),
     toolTip: s.description ? { title: s.description } : undefined,
@@ -491,20 +504,11 @@ const senderSkill = computed<SkillType | undefined>(() => {
   };
 });
 
-function pickSkill(entry: SkillEntry, fromSlash = false) {
-  const hadSkill = Boolean(selectedSkill.value);
-  const preservedText = fromSlash ? "" : (senderRef.value?.getValue?.().value ?? props.value);
-  skillPickerOpen.value = false;
-  skillPickerQuery.value = "";
+function pickSkill(entry: SkillEntry) {
   slashDismissed.value = true;
   selectedSkill.value = entry;
-  if (fromSlash) {
-    emit("update:value", "");
-  }
+  emit("update:value", "");
   void nextTick(() => {
-    if (!hadSkill && preservedText) {
-      senderRef.value?.insert(preservedText, "end");
-    }
     senderRef.value?.focus({ cursor: "end" });
   });
 }
@@ -516,29 +520,6 @@ function onSenderChange(val: string, _event?: Event, _slotConfig?: SlotConfigTyp
     void nextTick(() => senderRef.value?.focus({ cursor: "end" }));
   }
 }
-
-function toggleSkillPicker() {
-  skillPickerOpen.value = !skillPickerOpen.value;
-  if (skillPickerOpen.value) {
-    skillPickerQuery.value = "";
-    void refreshSkills(props.cwd);
-    void nextTick(() => skillSearchInput.value?.focus());
-  }
-}
-
-function onOutsideSkillClick(e: MouseEvent) {
-  if (!skillPickerOpen.value) return;
-  const target = e.target as Node | null;
-  if (target && skillPickerWrap.value?.contains(target)) return;
-  skillPickerOpen.value = false;
-}
-
-onMounted(() => {
-  window.addEventListener("pointerdown", onOutsideSkillClick);
-});
-onBeforeUnmount(() => {
-  window.removeEventListener("pointerdown", onOutsideSkillClick);
-});
 
 function skillBadgeText(item: SkillEntry): string {
   if (item.kind === "command") return "命令";
@@ -605,38 +586,36 @@ function onKeydown(e: KeyboardEvent): void | false {
     if (e.key === "Enter") return false;
     return;
   }
-  if (slashOpen.value && !slashDismissed.value) {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      slashIndex.value = (slashIndex.value + 1) % slashItems.value.length;
-      return false;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      slashIndex.value = (slashIndex.value - 1 + slashItems.value.length) % slashItems.value.length;
-      return false;
-    }
+  if (slashOpen.value) {
+    const count = slashItems.value.length;
     if (e.key === "Escape") {
       e.preventDefault();
       slashDismissed.value = true;
       return false;
     }
-    if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)) {
-      e.preventDefault();
-      const item = slashItems.value[slashIndex.value];
-      if (item) pickSkill(item, true);
-      return false;
+    if (count > 0) {
+      if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+        e.preventDefault();
+        slashIndex.value = (slashIndex.value + 1) % count;
+        return false;
+      }
+      if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        slashIndex.value = (slashIndex.value - 1 + count) % count;
+        return false;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)) {
+        e.preventDefault();
+        const item = slashItems.value[slashIndex.value];
+        if (item) pickSkill(item);
+        return false;
+      }
     }
-  }
-  if (e.key === "Escape" && skillPickerOpen.value) {
-    e.preventDefault();
-    skillPickerOpen.value = false;
-    return false;
   }
   return;
 }
 
-// Unified 3-card interactive deck above Composer: permission / queue / files
+// Unified interactive deck above Composer: permission / skills / queue / files
 const permList = computed(() => props.pendingPerms ?? []);
 const queueList = computed(() => props.queuedMessages ?? []);
 const submittingPermId = ref<string | null>(null);
@@ -644,6 +623,7 @@ const submittingPermId = ref<string | null>(null);
 const availableDeckCards = computed<DeckKind[]>(() => {
   const list: DeckKind[] = [];
   if (permList.value.length > 0) list.push("permission");
+  if (slashOpen.value) list.push("skills");
   if (queueList.value.length > 0) list.push("queue");
   if (attached.value.length > 0) list.push("files");
   return list;
@@ -800,59 +780,7 @@ defineExpose({ addFiles });
     @dragleave="onDragLeave"
     @drop.prevent="onDrop"
   >
-    <Transition name="pop">
-      <div v-if="slashOpen && !slashDismissed" class="slash">
-        <div class="slash-hint">Skills 与命令 · ↑↓ 选择 · Enter 唤起</div>
-        <button
-          v-for="(c, i) in slashItems"
-          :key="c.name"
-          class="slash-item"
-          :class="{ active: i === slashIndex }"
-          @mousedown.prevent="pickSkill(c, true)"
-        >
-          <span class="cmd mono">/{{ c.name }}</span>
-          <span class="desc">{{ c.description || '无描述' }}</span>
-          <span class="skill-badge" :class="c.kind === 'command' ? 'is-cmd' : `is-${c.source}`">
-            {{ skillBadgeText(c) }}
-          </span>
-        </button>
-      </div>
-    </Transition>
 
-    <Transition name="pop">
-      <div v-if="skillPickerOpen" ref="skillPickerWrap" class="slash skill-picker" @pointerdown.stop>
-        <div class="skill-picker-head">
-          <input
-            ref="skillSearchInput"
-            v-model="skillPickerQuery"
-            type="text"
-            class="skill-picker-search"
-            placeholder="搜索 Skill 或斜杠命令…"
-            @keydown.esc.stop="skillPickerOpen = false"
-          />
-          <span class="skill-picker-count mono">{{ filteredPickerSkills.length }}</span>
-        </div>
-        <div v-if="filteredPickerSkills.length" class="skill-picker-list">
-          <button
-            v-for="c in filteredPickerSkills"
-            :key="c.name"
-            type="button"
-            class="slash-item"
-            :class="{ active: selectedSkill?.name === c.name }"
-            @mousedown.prevent="pickSkill(c, false)"
-          >
-            <span class="cmd mono">/{{ c.name }}</span>
-            <span class="desc">{{ c.description || '无描述' }}</span>
-            <span class="skill-badge" :class="c.kind === 'command' ? 'is-cmd' : `is-${c.source}`">
-              {{ skillBadgeText(c) }}
-            </span>
-          </button>
-        </div>
-        <div v-else class="skill-picker-empty">
-          {{ allSkills.length ? '未找到匹配的 Skill 或命令' : '暂无可用 Skills（可在 .claude/skills 或 ~/.claude/skills 添加）' }}
-        </div>
-      </div>
-    </Transition>
 
     <!-- Peeking back cards (click any card to bring it to the front) -->
     <div v-if="backDeckCards.length" class="deck-peeks">
@@ -863,7 +791,7 @@ defineExpose({ addFiles });
         class="deck-peek"
         :class="[
           `kind-${kind}`,
-          backDeckCards.length === 2 && idx === 0 ? 'tier-far' : 'tier-near',
+          backDeckCards.length >= 2 && idx === 0 ? 'tier-far' : 'tier-near',
         ]"
         @click="selectDeck(kind)"
       >
@@ -871,6 +799,12 @@ defineExpose({ addFiles });
           <span class="peek-dot warn" />
           <span class="peek-label">待确认{{ permList.length > 1 ? ` (${permList.length})` : '' }}</span>
           <span class="peek-text">{{ currentPerm.title }}</span>
+          <span class="peek-switch">切换</span>
+        </template>
+        <template v-else-if="kind === 'skills'">
+          <span class="peek-dot skills" />
+          <span class="peek-label">Skills 与命令 ({{ allSkills.length }})</span>
+          <span class="peek-text">{{ selectedSkill ? `当前：/${selectedSkill.name}` : '点击展开选择' }}</span>
           <span class="peek-switch">切换</span>
         </template>
         <template v-else-if="kind === 'queue'">
@@ -969,6 +903,61 @@ defineExpose({ addFiles });
         </div>
       </div>
 
+      <!-- Active Front Card: Skills & Commands Tray triggered by typing / -->
+      <div v-else-if="effectiveDeck === 'skills' && slashOpen" class="tray-panel skills-tray">
+        <div class="skills-tray-head">
+          <span class="skills-tray-title">
+            <span class="skills-slash-mark mono">/</span>
+            <span>{{ slashQuery ? slashQuery : 'Skills 与命令' }}</span>
+          </span>
+          <span class="skills-tray-hint">↑↓ 选择 · Enter 唤起 · Esc 收起</span>
+          <span class="grow" />
+          <div v-if="skillFilterTabs.length > 2" class="skills-tabs">
+            <button
+              v-for="tab in skillFilterTabs"
+              :key="tab.key"
+              type="button"
+              class="skills-tab"
+              :class="{ active: skillFilter === tab.key }"
+              @mousedown.prevent="skillFilter = tab.key"
+            >
+              {{ tab.label }}
+            </button>
+          </div>
+          <button type="button" class="skills-tray-close" aria-label="收起" @mousedown.prevent="slashDismissed = true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div v-if="slashItems.length" class="skills-grid">
+          <button
+            v-for="(c, i) in slashItems"
+            :key="c.name"
+            type="button"
+            class="skill-tile"
+            :class="{ active: i === slashIndex }"
+            :title="c.description || c.name"
+            @mouseenter="slashIndex = i"
+            @mousedown.prevent="pickSkill(c)"
+          >
+            <div class="skill-tile-top">
+              <span class="skill-tile-dot" :class="c.kind === 'command' ? 'is-cmd' : `is-${c.source}`" />
+              <span class="skill-tile-name mono">/{{ c.name }}</span>
+              <span class="skill-tile-tag" :class="c.kind === 'command' ? 'is-cmd' : `is-${c.source}`">
+                {{ skillBadgeText(c) }}
+              </span>
+            </div>
+            <div class="skill-tile-desc">{{ c.description || '点击或按 Enter 唤起' }}</div>
+          </button>
+        </div>
+        <div v-else class="skills-tray-empty">
+          {{ allSkills.length ? '未找到匹配的 Skill 或命令' : '暂无可用 Skills（可在项目 .claude/skills 或 ~/.claude/skills 添加）' }}
+        </div>
+      </div>
+
       <!-- Active Front Card: Uploaded Files / Images -->
       <div v-else-if="effectiveDeck === 'files' && attached.length" class="top-tray">
         <div
@@ -1052,23 +1041,7 @@ defineExpose({ addFiles });
               </button>
             </Tooltip>
 
-            <Tooltip title="唤起 Skill 或命令（也可输入 /）" :mouse-enter-delay="0.3">
-              <button
-                type="button"
-                class="icon-ctrl skill-btn"
-                :class="{ active: skillPickerOpen || Boolean(selectedSkill) }"
-                aria-label="唤起 Skill"
-                @pointerdown.stop
-                @click="toggleSkillPicker"
-              >
-                <!-- Lucide Sparkles -->
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="lucide">
-                  <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
-                  <path d="M20 3v4" />
-                  <path d="M22 5h-4" />
-                </svg>
-              </button>
-            </Tooltip>
+
 
             <span class="grow" />
 
@@ -1590,20 +1563,29 @@ defineExpose({ addFiles });
   padding: 12px 16px 6px 16px !important;
 }
 .sender :deep(textarea),
-.sender :deep(.ant-input),
-.sender :deep(.antd-sender-input-slot),
-.sender :deep(.antd-sender-input-slot .ProseMirror) {
+.sender :deep(.ant-input) {
   font-size: 14.5px !important;
   line-height: 1.62 !important;
   padding: 0 !important;
   color: var(--text) !important;
 }
 .sender :deep(.antd-sender-input-slot) {
+  font-size: 14.5px !important;
+  line-height: 24px !important;
+  padding: 0 !important;
+  color: var(--text) !important;
   outline: none !important;
+  overflow-x: hidden !important;
+  box-sizing: border-box !important;
 }
 .sender :deep(.antd-sender-input-slot .ProseMirror) {
+  font-size: 14.5px !important;
+  line-height: 24px !important;
+  padding: 0 !important;
+  color: var(--text) !important;
   outline: none !important;
-  min-height: inherit;
+  min-height: 24px !important;
+  overflow: visible !important;
 }
 .sender :deep(textarea:focus-visible),
 .sender :deep(.ant-input:focus-visible) {
@@ -1618,57 +1600,90 @@ defineExpose({ addFiles });
   border: none !important;
   box-shadow: none !important;
 }
+.sender :deep(.antd-sender-skill) {
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 21px !important;
+  line-height: 21px !important;
+  margin: 0 !important;
+  vertical-align: middle !important;
+  transform: translateY(-1px);
+}
 .sender :deep(.antd-sender-skill-wrapper) {
-  margin-inline-end: 6px;
-  vertical-align: middle;
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 21px !important;
+}
+.sender :deep(.antd-sender-skill-holder) {
+  width: 6px !important;
+  height: 21px !important;
 }
 .sender :deep(.antd-sender-skill-tag) {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 7px 0 8px;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--ink) 8%, var(--surface-2));
-  border: 1px solid color-mix(in srgb, var(--ink) 14%, var(--border-strong));
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 540;
-  line-height: 1;
-  transition: background 0.14s, border-color 0.14s;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  height: 21px !important;
+  padding: 0 4px 0 7px !important;
+  box-sizing: border-box !important;
+  border-radius: 6px !important;
+  background: color-mix(in srgb, #6366f1 10%, var(--surface-2)) !important;
+  border: 1px solid color-mix(in srgb, #6366f1 22%, var(--border-strong)) !important;
+  color: var(--text) !important;
+  font-size: 12px !important;
+  font-weight: 530 !important;
+  line-height: 1 !important;
+  box-shadow: none !important;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease) !important;
 }
 .sender :deep(.antd-sender-skill-tag:hover) {
-  background: color-mix(in srgb, var(--ink) 12%, var(--surface-2));
-  border-color: color-mix(in srgb, var(--ink) 24%, var(--border-strong));
+  background: color-mix(in srgb, #6366f1 15%, var(--surface-2)) !important;
+  border-color: color-mix(in srgb, #6366f1 34%, var(--border-strong)) !important;
+}
+.sender :deep(.antd-sender-skill-tag-text) {
+  display: inline-flex !important;
+  align-items: center !important;
+  line-height: 1 !important;
 }
 .sender :deep(.oc-skill-label) {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
+  font-size: 12px;
 }
 .sender :deep(.oc-skill-slash) {
-  opacity: 0.55;
+  color: #6366f1;
   font-weight: 600;
 }
+:root[data-theme="dark"] .sender :deep(.oc-skill-slash) {
+  color: #818cf8;
+}
+.sender :deep(.oc-skill-name) {
+  letter-spacing: -0.01em;
+}
 .sender :deep(.antd-sender-skill-close) {
-  display: inline-grid;
-  place-items: center;
-  width: 15px;
-  height: 15px;
-  border-radius: 4px;
-  color: var(--text-3);
-  font-size: 10px;
+  display: inline-grid !important;
+  place-items: center !important;
+  width: 14px !important;
+  height: 14px !important;
+  border-radius: 4px !important;
+  color: var(--text-3) !important;
+  font-size: 9px !important;
+  opacity: 0.72;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s, opacity 0.12s !important;
 }
 .sender :deep(.antd-sender-skill-close:hover) {
-  background: var(--hover);
-  color: var(--text);
+  opacity: 1;
+  background: color-mix(in srgb, var(--ink) 12%, transparent) !important;
+  color: var(--text) !important;
 }
 .skill-btn.active {
-  background: color-mix(in srgb, var(--ink) 10%, transparent);
-  border-color: var(--border-strong);
-  color: var(--text);
+  background: color-mix(in srgb, #6366f1 12%, transparent);
+  border-color: color-mix(in srgb, #6366f1 28%, var(--border));
+  color: #6366f1;
+}
+:root[data-theme="dark"] .skill-btn.active {
+  color: #818cf8;
 }
 
 .bar {
@@ -2054,112 +2069,185 @@ defineExpose({ addFiles });
   transform: scale(0.96);
 }
 
-.slash {
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  bottom: calc(100% + 8px);
-  background: var(--surface-strong);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--border-strong);
-  border-radius: 13px;
-  box-shadow: var(--shadow-pop);
-  padding: 6px;
-  z-index: 30;
-  max-height: 260px;
-  overflow-y: auto;
+.peek-dot.skills {
+  background: #6366f1;
 }
-.slash-hint {
-  font-size: 10.5px;
-  color: var(--text-3);
-  padding: 4px 8px;
-  letter-spacing: 0.02em;
+
+/* Integrated Skills Tray inside composer-shell (triggered by typing /) */
+.skills-tray {
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
 }
-.slash-item {
+.skills-tray-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  border: none;
-  background: transparent;
-  border-radius: 8px;
-  padding: 6px 8px;
-  text-align: left;
-  cursor: pointer;
-  color: var(--text-2);
+  gap: 8px;
+  padding: 0 2px;
 }
-.slash-item.active,
-.slash-item:hover {
-  background: var(--hover);
-}
-.cmd {
-  font-size: 12.5px;
-  font-weight: 540;
+.skills-tray-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 560;
   color: var(--text);
   flex: none;
 }
-.desc {
+.skills-slash-mark {
+  color: #6366f1;
+  font-weight: 700;
+}
+:root[data-theme="dark"] .skills-slash-mark {
+  color: #818cf8;
+}
+.skills-tray-hint {
+  font-size: 10.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.skills-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--hover);
+  flex: none;
+}
+.skills-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.skills-tab:hover {
+  color: var(--text-2);
+}
+.skills-tab.active {
+  background: var(--surface-strong);
+  color: var(--text);
+  font-weight: 540;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.skills-tray-close {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  flex: none;
+  transition: background 0.12s, color 0.12s;
+}
+.skills-tray-close svg {
+  width: 13px;
+  height: 13px;
+}
+.skills-tray-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 8px;
+  max-height: 168px;
+  overflow-y: auto;
+  padding: 1px;
+}
+.skill-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-card);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  transition: transform 0.15s var(--ease), border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.skill-tile:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, #6366f1 34%, var(--border-strong));
+  box-shadow: var(--shadow-pop);
+}
+.skill-tile.active {
+  border-color: color-mix(in srgb, #6366f1 52%, var(--border-strong));
+  background: color-mix(in srgb, #6366f1 7%, var(--surface-strong));
+}
+.skill-tile-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.skill-tile-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-3);
+}
+.skill-tile-dot.is-project {
+  background: #6366f1;
+}
+.skill-tile-dot.is-user {
+  background: #10b981;
+}
+.skill-tile-dot.is-cmd {
+  background: var(--text-3);
+}
+.skill-tile-name {
   flex: 1;
   min-width: 0;
-  font-size: 11.5px;
+  font-size: 12px;
+  font-weight: 580;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-tile-tag {
+  flex: none;
+  font-size: 10px;
+  line-height: 15px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--hover);
+  color: var(--text-3);
+}
+.skill-tile-tag.is-project {
+  color: #6366f1;
+  background: color-mix(in srgb, #6366f1 11%, transparent);
+}
+:root[data-theme="dark"] .skill-tile-tag.is-project {
+  color: #818cf8;
+}
+.skill-tile-desc {
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.skill-badge {
-  flex: none;
-  font-size: 10px;
-  line-height: 16px;
-  padding: 0 6px;
-  border-radius: 5px;
-  background: var(--hover);
-  color: var(--text-3);
-  border: 1px solid var(--border);
-}
-.skill-badge.is-project {
-  color: var(--text);
-  background: color-mix(in srgb, var(--ink) 9%, transparent);
-  border-color: color-mix(in srgb, var(--ink) 18%, var(--border));
-}
-.skill-picker {
-  max-height: 310px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.skill-picker-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px 6px;
-  border-bottom: 1px solid var(--border);
-}
-.skill-picker-search {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 12.5px;
-  line-height: 20px;
-}
-.skill-picker-search::placeholder {
-  color: var(--text-3);
-}
-.skill-picker-count {
-  font-size: 10.5px;
-  color: var(--text-3);
-  flex: none;
-}
-.skill-picker-list {
-  overflow-y: auto;
-  max-height: 244px;
-}
-.skill-picker-empty {
-  padding: 14px 10px;
+.skills-tray-empty {
+  padding: 12px 8px;
   text-align: center;
   font-size: 12px;
   color: var(--text-3);

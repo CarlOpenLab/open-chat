@@ -7,7 +7,7 @@ import { Tooltip, message } from "antdv-next";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { ILink, ILinkProvider } from "@xterm/xterm";
 import { api, inApp } from "../api";
-import { isDark, onTermExit, onTermOut } from "../store";
+import { isDark, onTermExit, onTermOut, openWorkspaceFile } from "../store";
 
 const props = defineProps<{
   cwd: string;
@@ -209,6 +209,7 @@ async function pumpInput(id: string) {
 
 async function openLink(target: string, cwd: string) {
   try {
+    if (openWorkspaceFile(target, cwd)) return;
     if (!inApp && /^https?:\/\//i.test(target)) {
       window.open(target, "_blank", "noopener");
       return;

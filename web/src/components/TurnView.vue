@@ -210,6 +210,11 @@ const actionItems = computed<ActionItemType[]>(() => {
 <style scoped>
 .turn {
   padding: 6px 0 4px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+}
+.turn.last {
+  content-visibility: visible;
 }
 .turn + .turn {
   padding-top: 18px;

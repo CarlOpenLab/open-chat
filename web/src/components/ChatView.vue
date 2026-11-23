@@ -57,9 +57,32 @@ const editing = ref(false);
 const titleDraft = ref("");
 const folderOpen = ref(false);
 
+const INITIAL_RENDER_TURNS = 10;
+const LOAD_MORE_STEP = 15;
+const renderLimit = ref(INITIAL_RENDER_TURNS);
+
 const running = computed(() => live.value.status === "running");
 const turns = computed(() => transcript.value?.turns ?? []);
+const hiddenTurnCount = computed(() => Math.max(0, turns.value.length - renderLimit.value));
+const visibleTurns = computed(() =>
+  hiddenTurnCount.value > 0 ? turns.value.slice(hiddenTurnCount.value) : turns.value,
+);
+const loadingHistory = computed(() => Boolean(store.loading[meta.value.id]) && !transcript.value);
 const queuedMessages = computed(() => store.queues[meta.value.id] ?? []);
+
+async function loadOlderTurns(count = LOAD_MORE_STEP) {
+  if (hiddenTurnCount.value <= 0) return;
+  const vp = scroller.value?.viewportElement;
+  const prevHeight = vp?.scrollHeight ?? 0;
+  const prevTop = vp?.scrollTop ?? 0;
+  renderLimit.value += count;
+  await nextTick();
+  if (vp) {
+    const delta = vp.scrollHeight - prevHeight;
+    if (delta > 0) vp.scrollTop = prevTop + delta;
+  }
+  updateScrollable();
+}
 
 function onEnqueue(blocks: Block[]) {
   enqueueMessage(meta.value.id, blocks);
@@ -140,14 +163,24 @@ function scrollToTurnStart(turnId: string | number, smooth = true) {
   vp.scrollTo({ top: targetTop, behavior });
 }
 
-function jumpToTurn(turnId: string) {
+async function ensureTurnRendered(turnId: string | number) {
+  const id = String(turnId);
+  const idx = turns.value.findIndex((t) => t.id === id);
+  if (idx >= 0 && idx < hiddenTurnCount.value) {
+    renderLimit.value = turns.value.length - idx;
+    await nextTick();
+  }
+}
+
+async function jumpToTurn(turnId: string) {
+  await ensureTurnRendered(turnId);
   scrollToTurnStart(turnId, true);
 }
 
 function onRailItemSelect(id: string | number) {
   // Run after MessageScroller's synchronous handleRailItemClick (which centers the full
   // turn or jumps to the bottom on the last item) so we always land at the message start.
-  void nextTick().then(() => {
+  void ensureTurnRendered(id).then(() => nextTick()).then(() => {
     scrollToTurnStart(id, true);
   });
 }
@@ -210,10 +243,14 @@ watch(
     editing.value = false;
     folderOpen.value = false;
     deleting.value = false;
+    renderLimit.value = INITIAL_RENDER_TURNS;
     await nextTick();
     scrollToBottom(false);
     updateScrollable();
-    if (live.value.status === "idle") void connect(id);
+    // Defer ACP session connect by one frame so the switched conversation paints first.
+    requestAnimationFrame(() => {
+      if (meta.value?.id === id && live.value.status === "idle") void connect(id);
+    });
   },
 );
 
@@ -222,7 +259,10 @@ onMounted(async () => {
   scrollToBottom();
   updateScrollable();
   window.addEventListener("resize", updateScrollable);
-  if (live.value.status === "idle") void connect(meta.value.id);
+  const id = meta.value.id;
+  requestAnimationFrame(() => {
+    if (meta.value?.id === id && live.value.status === "idle") void connect(id);
+  });
 });
 onBeforeUnmount(() => window.removeEventListener("resize", updateScrollable));
 
@@ -474,20 +514,32 @@ async function changeDir(path: string) {
       @scroll="updateScrollable"
     >
       <div class="inner">
-        <div v-if="live.status === 'connecting' && !turns.length" class="hint">
+        <div v-if="loadingHistory" class="hint">
+          <span class="spinner" />
+          <span>正在加载对话记录…</span>
+        </div>
+        <div v-else-if="live.status === 'connecting' && !turns.length" class="hint">
           <span class="spinner" />
           <span>正在和 {{ meta.agentName }} 建立连接…</span>
         </div>
+        <div v-if="hiddenTurnCount > 0" class="older-bar">
+          <button type="button" class="older-btn" @click="loadOlderTurns()">
+            展开更早的 {{ Math.min(hiddenTurnCount, LOAD_MORE_STEP) }} 轮（共剩余 {{ hiddenTurnCount }} 轮）
+          </button>
+          <button v-if="hiddenTurnCount > LOAD_MORE_STEP" type="button" class="older-btn ghost" @click="loadOlderTurns(hiddenTurnCount)">
+            全部展开
+          </button>
+        </div>
         <TurnView
-          v-for="(turn, i) in turns"
+          v-for="(turn, i) in visibleTurns"
           :key="turn.id"
           :data-message-id="turn.id"
           :turn="turn"
           :conversation-id="meta.id"
           :agent-id="meta.agentId"
           :agent-name="meta.agentName"
-          :live="i === turns.length - 1 && (running || live.status === 'connecting')"
-          :is-last="i === turns.length - 1"
+          :live="i === visibleTurns.length - 1 && (running || live.status === 'connecting')"
+          :is-last="i === visibleTurns.length - 1"
           :can-retry="!running"
           @retry="retry"
         />
@@ -834,6 +886,38 @@ async function changeDir(path: string) {
 .tail {
   height: 16px;
   flex: none;
+}
+
+.older-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 4px 0 14px;
+}
+.older-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.older-btn:hover {
+  background: var(--surface-strong);
+  color: var(--text);
+}
+.older-btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-3);
+}
+.older-btn.ghost:hover {
+  background: var(--hover);
+  color: var(--text-2);
 }
 
 .hint {

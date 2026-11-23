@@ -276,6 +276,51 @@ async function loadTree() {
   }
 }
 
+function treeHasPath(nodes: WorkspaceNode[], segments: string[]): boolean {
+  let list: WorkspaceNode[] | undefined = nodes;
+  for (let i = 0; i < segments.length; i++) {
+    const hit = list?.find((n) => n.path === segments[i] || n.title === segments[i]);
+    if (!hit) return false;
+    if (i === segments.length - 1) return true;
+    list = hit.children;
+  }
+  return false;
+}
+
+function revealInTree(segments: string[]) {
+  if (!segments.length) return;
+  filterText.value = "";
+  const parents: string[] = [];
+  for (let i = 0; i < segments.length - 1; i++) {
+    parents.push(segments.slice(0, i + 1).join("/"));
+  }
+  if (parents.length) {
+    const merged = new Set(expandedPaths.value);
+    for (const p of parents) merged.add(p);
+    expandedPaths.value = Array.from(merged);
+  }
+  const rel = segments.join("/");
+  if (rel === activeRelPath.value) {
+    if (!isDirty.value) void loadSelectedFile(rel);
+  } else {
+    onSelectedFileChange({ path: segments });
+  }
+  if (props.cwd && !loadingTree.value && !treeHasPath(tree.value, segments)) {
+    void loadTree();
+  }
+}
+
+watch(
+  () => store.workspaceReveal,
+  (req) => {
+    if (!req?.path.length) return;
+    const segments = req.path;
+    store.workspaceReveal = null;
+    revealInTree(segments);
+  },
+  { immediate: true },
+);
+
 watch(
   () => [props.open, props.cwd, store.workspaceTab] as const,
   ([open, cwd, tab], prev) => {

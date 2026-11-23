@@ -13,7 +13,10 @@ import {
   SearchOutlined,
   ToolOutlined,
 } from "@antdv-next/icons";
-import { h, ref } from "vue";
+import { message } from "antdv-next";
+import { h, nextTick, ref } from "vue";
+import { api, inApp } from "../api";
+import { activeMeta, openWorkspaceFile } from "../store";
 import type { ToolCall } from "../types";
 import DiffView from "./DiffView.vue";
 
@@ -57,6 +60,15 @@ function fileBadgeOf(call: ToolCall): string {
   return titleOf(call).includes(name) ? "" : name;
 }
 
+function openLocation(path?: string) {
+  if (!path) return;
+  const cwd = activeMeta.value?.cwd ?? "";
+  if (openWorkspaceFile(path, cwd)) return;
+  if (inApp) {
+    void api.openLink(path, cwd).catch((err) => message.error(err instanceof Error ? err.message : String(err)));
+  }
+}
+
 function diffsOf(call: ToolCall) {
   return (call.content ?? []).filter(
     (c): c is Extract<NonNullable<ToolCall["content"]>[number], { type: "diff" }> => c.type === "diff",
@@ -73,9 +85,25 @@ function textOutputOf(call: ToolCall): string {
   return text.join("\n").trim().slice(0, 6000);
 }
 
+function hasTextOutput(call: ToolCall): boolean {
+  for (const c of call.content ?? []) {
+    if (c.type === "content" && c.content.type === "text" && c.content.text && c.content.text.trim()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasDiff(call: ToolCall): boolean {
+  for (const c of call.content ?? []) {
+    if (c.type === "diff") return true;
+  }
+  return false;
+}
+
 function rawInputJsonOf(call: ToolCall): string {
   if (call.rawInput == null) return "";
-  if (diffsOf(call).length > 0 || textOutputOf(call).length > 0) return "";
+  if (hasDiff(call) || hasTextOutput(call)) return "";
   if (call.kind === "execute" && commandOf(call)) return "";
   try {
     return JSON.stringify(call.rawInput, null, 2).slice(0, 3000);
@@ -85,21 +113,50 @@ function rawInputJsonOf(call: ToolCall): string {
 }
 
 function hasDetail(call: ToolCall): boolean {
-  return Boolean(
-    diffsOf(call).length > 0 ||
-      textOutputOf(call).length > 0 ||
-      rawInputJsonOf(call).length > 0 ||
-      (call.kind === "execute" && (commandOf(call) || titleOf(call).length > 60)),
-  );
+  if (hasDiff(call) || hasTextOutput(call)) return true;
+  if (call.kind === "execute" && (commandOf(call) || titleOf(call).length > 60)) return true;
+  if (call.rawInput != null) {
+    if (typeof call.rawInput === "object") {
+      return Object.keys(call.rawInput as Record<string, unknown>).length > 0;
+    }
+    return true;
+  }
+  return false;
 }
 
-// Collapsed by default; expansion is user-controlled only (no auto open/close on status changes).
+// Collapsed by default; detail DOM (DiffView / pre) is only mounted when first expanded.
 const expandedKeys = ref<Set<string>>(new Set());
+const mountedKeys = ref<Set<string>>(new Set());
+const pendingExpand = new Set<string>();
 
 function toggle(id: string) {
+  if (expandedKeys.value.has(id) || pendingExpand.has(id)) {
+    pendingExpand.delete(id);
+    const next = new Set(expandedKeys.value);
+    next.delete(id);
+    expandedKeys.value = next;
+    return;
+  }
+  if (!mountedKeys.value.has(id)) {
+    const nextMounted = new Set(mountedKeys.value);
+    nextMounted.add(id);
+    mountedKeys.value = nextMounted;
+    pendingExpand.add(id);
+    // Mount in 0fr state first, then trigger .open on the next paint frame so CSS transition runs.
+    void nextTick(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!pendingExpand.delete(id)) return;
+          const next = new Set(expandedKeys.value);
+          next.add(id);
+          expandedKeys.value = next;
+        });
+      });
+    });
+    return;
+  }
   const next = new Set(expandedKeys.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
+  next.add(id);
   expandedKeys.value = next;
 }
 </script>
@@ -162,7 +219,15 @@ function toggle(id: string) {
             {{ titleOf(call) }}
           </span>
 
-          <span v-if="fileBadgeOf(call)" class="tool-file mono" :title="call.locations?.[0]?.path">
+          <span
+            v-if="fileBadgeOf(call)"
+            role="button"
+            tabindex="0"
+            class="tool-file mono"
+            :title="`在文件树中打开：${call.locations?.[0]?.path}`"
+            @click.stop="openLocation(call.locations?.[0]?.path)"
+            @keydown.enter.stop.prevent="openLocation(call.locations?.[0]?.path)"
+          >
             {{ fileBadgeOf(call) }}
           </span>
 
@@ -180,7 +245,7 @@ function toggle(id: string) {
           </svg>
         </button>
 
-        <div v-if="hasDetail(call)" class="tool-collapse" :class="{ open: expandedKeys.has(call.toolCallId) }">
+        <div v-if="mountedKeys.has(call.toolCallId)" class="tool-collapse" :class="{ open: expandedKeys.has(call.toolCallId) }">
           <div class="tool-collapse-inner">
             <div class="tool-detail">
               <div v-if="call.kind === 'execute' && (commandOf(call) || titleOf(call))" class="cmd-box mono selectable">
@@ -343,6 +408,16 @@ function toggle(id: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 1px 5px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: color 0.14s var(--ease), background 0.14s var(--ease);
+}
+.tool-file:hover {
+  color: var(--text);
+  background: var(--hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .tool-chev {

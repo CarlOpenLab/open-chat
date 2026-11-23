@@ -8,7 +8,7 @@ import ChatView from "./components/ChatView.vue";
 import NewChat from "./components/NewChat.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import { api, inApp } from "./api";
-import { activeMeta, init, isDark, newConversation, store } from "./store";
+import { activeMeta, init, isDark, newConversation, openWorkspaceFile, store } from "./store";
 import { antdThemeFor } from "./theme";
 
 const theme = computed(() => antdThemeFor(isDark.value));
@@ -107,18 +107,24 @@ function ctxSelectAll() {
   }
 }
 
-// Links in the transcript (and anywhere else) go through the host: http(s)
-// opens the browser, paths open their location in the file manager. In a
-// browser the page's own handling is already right.
+// Links in the transcript (and anywhere else): files inside the active
+// workspace open directly in the right-hand file tree; web links and external
+// paths go through the host (browser / file manager).
 function onLinkClick(e: MouseEvent) {
-  if (!inApp) return;
   const anchor = e.target instanceof Element ? e.target.closest("a[href]") : null;
   const href = anchor?.getAttribute("href") ?? "";
   if (!href || href.startsWith("#")) return;
+  const cwd = activeMeta.value?.cwd ?? "";
+  if (cwd && openWorkspaceFile(href, cwd)) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (!inApp) return;
   e.preventDefault();
   e.stopPropagation();
   void api
-    .openLink(href, activeMeta.value?.cwd ?? "")
+    .openLink(href, cwd)
     .catch((err) => message.error(err instanceof Error ? err.message : String(err)));
 }
 
@@ -254,12 +260,35 @@ onBeforeUnmount(() => {
   overflow: hidden;
   position: relative;
   z-index: 2;
-  transition: width 0.24s var(--ease), opacity 0.2s var(--ease);
+  background-color: var(--bg-sidebar);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-right: 1px solid var(--border);
+  transition:
+    width 0.24s var(--ease),
+    background-color 0.22s var(--ease),
+    border-color 0.22s var(--ease);
+}
+.sidebar-slot > :deep(.sidebar) {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+  will-change: opacity, transform;
+  transition: opacity 0.22s var(--ease), transform 0.24s var(--ease);
 }
 .sidebar-slot.collapsed {
   width: 0;
-  opacity: 0;
+  background-color: transparent;
+  border-right-color: transparent;
   pointer-events: none;
+  transition:
+    width 0.22s var(--ease),
+    background-color 0.18s var(--ease),
+    border-color 0.18s var(--ease);
+}
+.sidebar-slot.collapsed > :deep(.sidebar) {
+  opacity: 0;
+  transform: translate3d(-18px, 0, 0);
+  transition: opacity 0.18s var(--ease), transform 0.22s var(--ease);
 }
 
 .main {

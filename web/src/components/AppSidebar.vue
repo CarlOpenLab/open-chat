@@ -572,10 +572,6 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   display: flex;
   flex-direction: column;
   position: relative;
-  background: var(--bg-sidebar);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border-right: 1px solid var(--border);
   min-height: 0;
 }
 
@@ -642,6 +638,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   color: var(--text);
   font-size: 13px;
   font-weight: 530;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.14s var(--ease), border-color 0.14s var(--ease), transform 0.14s var(--ease);
 }
@@ -797,6 +794,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   margin: 0 !important;
 }
 .convs :deep(.antd-conversations-item) {
+  position: relative;
   border-radius: 10px;
   margin: 0 0 2px !important;
   padding: 7px 10px !important;
@@ -834,14 +832,32 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   overflow: hidden;
 }
 .convs :deep(.antd-conversations-menu-icon) {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 6px;
+  margin-left: 0 !important;
   opacity: 0;
+  pointer-events: none;
+  z-index: 2;
   color: var(--text-3);
-  margin-left: 4px;
-  transition: opacity 0.14s var(--ease), color 0.14s var(--ease);
+  transition: opacity 0.14s var(--ease), color 0.14s var(--ease), background 0.14s var(--ease);
 }
-.convs :deep(.antd-conversations-item:hover) .antd-conversations-menu-icon,
-.convs :deep(.antd-conversations-item-active) .antd-conversations-menu-icon {
+.convs :deep(.antd-conversations-item:hover .antd-conversations-menu-icon),
+.convs :deep(.antd-conversations-item:has(.ant-dropdown-open) .antd-conversations-menu-icon),
+.convs :deep(.antd-conversations-menu-icon.ant-dropdown-open) {
   opacity: 1;
+  pointer-events: auto;
+}
+.convs :deep(.antd-conversations-menu-icon:hover),
+.convs :deep(.antd-conversations-menu-icon.ant-dropdown-open) {
+  background: var(--active);
+  color: var(--text);
 }
 
 .convs :deep(.conv) {
@@ -856,6 +872,11 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   align-items: center;
   gap: 7px;
   min-width: 0;
+  transition: padding-right 0.14s var(--ease);
+}
+.convs :deep(.antd-conversations-item:hover .conv-row:not(:has(.st-pill))),
+.convs :deep(.antd-conversations-item:has(.ant-dropdown-open) .conv-row:not(:has(.st-pill))) {
+  padding-right: 22px;
 }
 .convs :deep(.conv-logo) {
   flex: none;
@@ -909,6 +930,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   font-size: 10.5px;
   opacity: 0.7;
   padding-left: 4px;
+  transition: opacity 0.14s var(--ease);
 }
 
 .convs :deep(.st-pill) {
@@ -922,6 +944,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   border-radius: 999px;
   font-weight: 560;
   letter-spacing: 0.01em;
+  transition: opacity 0.14s var(--ease);
 }
 .convs :deep(.st-pill.need) {
   background: var(--warn-soft);
@@ -969,6 +992,16 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
   justify-content: center;
   color: var(--ok);
   opacity: 0.72;
+  transition: opacity 0.14s var(--ease);
+}
+.convs :deep(.antd-conversations-item:hover .st-pill),
+.convs :deep(.antd-conversations-item:hover .st-done-ic),
+.convs :deep(.antd-conversations-item:hover .conv-time),
+.convs :deep(.antd-conversations-item:has(.ant-dropdown-open) .st-pill),
+.convs :deep(.antd-conversations-item:has(.ant-dropdown-open) .st-done-ic),
+.convs :deep(.antd-conversations-item:has(.ant-dropdown-open) .conv-time) {
+  opacity: 0;
+  pointer-events: none;
 }
 @keyframes oc-spin {
   to {

@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { message } from "antdv-next";
 import { computed, ref } from "vue";
+import { api, inApp } from "../api";
+import { activeMeta, openWorkspaceFile } from "../store";
 
 const props = defineProps<{ oldText?: string | null; newText: string; path?: string }>();
 
@@ -39,12 +42,30 @@ const shown = computed(() => (open.value ? rows.value : rows.value.slice(0, LIMI
 const hidden = computed(() => rows.value.length - shown.value.length);
 
 const name = computed(() => (props.path ?? "").split("/").filter(Boolean).pop() ?? props.path ?? "");
+
+function openFile() {
+  if (!props.path) return;
+  const cwd = activeMeta.value?.cwd ?? "";
+  if (openWorkspaceFile(props.path, cwd)) return;
+  if (inApp) {
+    void api.openLink(props.path, cwd).catch((err) => message.error(err instanceof Error ? err.message : String(err)));
+  }
+}
 </script>
 
 <template>
   <div class="diff">
     <div class="diff-head">
-      <span class="file mono">{{ name }}</span>
+      <button
+        v-if="props.path"
+        type="button"
+        class="file file-link mono"
+        :title="`在文件树中打开：${props.path}`"
+        @click="openFile"
+      >
+        {{ name }}
+      </button>
+      <span v-else class="file mono">{{ name }}</span>
       <span class="stat"><span class="add">+{{ stats.add }}</span> <span class="del">−{{ stats.del }}</span></span>
     </div>
     <div class="diff-body mono selectable">
@@ -79,6 +100,23 @@ const name = computed(() => (props.path ?? "").split("/").filter(Boolean).pop() 
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.file-link {
+  border: none;
+  background: transparent;
+  padding: 1px 4px;
+  margin-left: -4px;
+  border-radius: 5px;
+  font-size: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.14s var(--ease), background 0.14s var(--ease);
+}
+.file-link:hover {
+  color: var(--text);
+  background: var(--hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .stat {
   margin-left: auto;
