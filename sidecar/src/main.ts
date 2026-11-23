@@ -115,6 +115,15 @@ export function catalog(): AgentPreset[] {
       homepage: "https://github.com/earendil-works/pi",
     },
     {
+      id: "dsh",
+      name: "DeepSeek Harness",
+      description: "DeepSeek Harness，通过 dsh --profile acp 直连",
+      command: "dsh",
+      args: ["--profile", "acp"],
+      probe: "dsh",
+      homepage: "https://github.com/deepseek-ai/deepseek-harness",
+    },
+    {
       id: "demo",
       name: "Demo Agent",
       description: "内置演示 agent：思考、计划、工具调用、权限请求全流程",
