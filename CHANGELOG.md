@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.8
+
+- 新 Agent：接入 CodeBuddy 与 Qoder CLI（ACP 预设、品牌图标与更新源）；模型选择器展示倍率徽章，会话模型选择落盘并在重连后自动恢复。
+- 工作区：支持基于流式 HTTP 的图片、SVG、Markdown、PDF 及音视频预览；面板宽度按会话记忆、文件树 Git 状态着色、工具行悬停与窄屏布局优化；组件样式全量迁移至 UnoCSS。
+- 消息渲染：思考过程改用 XMarkdown 渲染；侧栏会话菜单悬停显示、头像菜单优化；移除内置 Demo Agent。
+- 修复：Windows 下 `file://` 盘符链接不再误判为 UNC 路径；macOS WKWebView 中 xterm.js 快速输入与 IME 丢字；mise 安装的 Qoder 识别与自动升级。
+
 ## 0.0.7
 
 - Skills 与斜杠命令：输入 `/` 直接在输入框上方展开堆叠卡片托盘，支持项目 / 全局 / 命令筛选与实时过滤，可用 ←→↑↓、Tab、Enter、Esc 完整键盘操作；选中的 Skill 以胶囊标签固定在输入框内，回车直接发送 `/skill`。
