@@ -106,6 +106,15 @@ export function catalog(): AgentPreset[] {
       homepage: "https://cnb.cool/codebuddy/codebuddy-code",
     },
     {
+      id: "qoder",
+      name: "Qoder",
+      description: "Qoder CLI，原生 ACP（qoder --acp）",
+      command: "qoder",
+      args: ["--acp"],
+      probe: "qoder",
+      homepage: "https://qoder.com",
+    },
+    {
       id: "oh-my-pi",
       name: "Oh My Pi",
       description: "omp acp，本地 CLI 直连",

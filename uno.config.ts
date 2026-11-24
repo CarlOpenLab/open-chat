@@ -62,6 +62,7 @@ export default defineConfig({
       brand: {
         claude: "#d97757",
         codebuddy: "#00bc90",
+        qoder: "#7c5cff",
         omp: "#38bdf8",
         deepseek: "#4d6bfe",
       },

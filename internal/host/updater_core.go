@@ -191,6 +191,15 @@ func auDefaultAgents() []auAgentSpec {
 			NativeDirs:   []string{localBin},
 		},
 		{
+			// Qoder installs through its own script, so only native detection
+			// and `qoder update` are wired up here (no mise/npm package).
+			ID:           "qoder",
+			Name:         "Qoder",
+			Bin:          "qoder",
+			NativeUpdate: []string{"qoder", "update"},
+			NativeDirs:   []string{localBin},
+		},
+		{
 			ID:         "dsh",
 			Name:       "DeepSeek Harness",
 			Bin:        "dsh",

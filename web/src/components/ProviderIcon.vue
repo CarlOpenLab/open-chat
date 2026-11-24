@@ -7,10 +7,11 @@ const props = defineProps<{
   size?: number;
 }>();
 
-const kind = computed<"claude" | "codex" | "codebuddy" | "pi" | "omp" | "deepseek" | "demo" | "acp">(() => {
+const kind = computed<"claude" | "codex" | "codebuddy" | "qoder" | "pi" | "omp" | "deepseek" | "demo" | "acp">(() => {
   const s = `${props.id} ${props.name ?? ""}`.toLowerCase();
   if (s.includes("claude")) return "claude";
   if (s.includes("codebuddy")) return "codebuddy";
+  if (s.includes("qoder")) return "qoder";
   if (s.includes("codex") || s.includes("openai") || s.includes("gpt")) return "codex";
   if (s.includes("omp") || s.includes("oh my pi") || s.includes("oh-my-pi")) return "omp";
   if (s === "pi" || /\bpi\b/.test(s)) return "pi";
@@ -30,6 +31,8 @@ const colorClass = computed(() => {
       return "text-ink";
     case "codebuddy":
       return "text-brand-codebuddy";
+    case "qoder":
+      return "text-brand-qoder";
     case "omp":
       return "text-brand-omp";
     case "deepseek":
@@ -67,6 +70,13 @@ const colorClass = computed(() => {
       <path d="M347.56 260.864L349.808 261.441C351.42 265.483 350.329 418.222 350.229 435.792C344.53 436.85 263.503 436.929 260.894 435.722L261.464 433.765C261.114 420.392 261.416 405.532 261.413 392.005L261.412 313.381C261.422 299.699 262.22 276.275 261.106 263.652C261.428 261.859 261.059 262.619 262.19 261.257C268.232 260.664 277.082 261.319 283.456 261.111C303.554 260.454 327.973 262.241 347.56 260.864Z" fill="currentColor"/>
       <path d="M608.752 260.881L610.641 261.353C612.854 266.169 610.268 347.019 611.302 358.962C611.693 363.539 611.436 434.199 610.892 435.767C610.293 435.847 609.248 436.027 608.685 436.028C584.88 436.436 548.549 435.89 523.533 435.943C522.702 435.945 522.567 435.098 522.127 434.149C522.787 429.284 522.445 415.565 522.445 410.114L522.415 362.246L522.457 298.316C522.463 288.598 522.94 272.837 522.097 263.668L522.586 261.78C525.887 259.891 595.756 261.699 608.752 260.881Z" fill="currentColor"/>
     </svg>
+    <!-- Qoder CLI — simple Q mark, optically centered -->
+    <svg v-else-if="kind === 'qoder'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="10.8" cy="10.8" r="6.6" />
+      <path d="M15.6 15.6 21 21" />
+      <path d="M10.8 7.6a3.2 3.2 0 1 0 3.2 3.2" opacity="0.55" />
+    </svg>
+
     <!-- Official Pi Coding Agent (pi.dev) geometric block mark — optically centered (x: 3..21, y: 3..21) -->
     <svg v-else-if="kind === 'pi'" viewBox="0 0 24 24" fill="currentColor">
       <path d="M3 3h12.5v4.5H7.5V12h8v4.5h-8V21H3V3zm12.5 9H21v9h-5.5v-9zm0-4.5H20V12h-4.5V7.5z" />

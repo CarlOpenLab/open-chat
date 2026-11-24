@@ -60,6 +60,7 @@ const MANAGED_AGENT_SPECS = [
   { id: "pi", agent: "Pi" },
   { id: "oh-my-pi", agent: "Oh My Pi" },
   { id: "codebuddy", agent: "CodeBuddy" },
+  { id: "qoder", agent: "Qoder" },
   { id: "dsh", agent: "DeepSeek Harness" },
 ];
 
