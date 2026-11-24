@@ -467,6 +467,23 @@ func (h *Host) open(ctx context.Context, m Meta) (LiveState, string, error) {
 	if res.ConfigOptions == nil {
 		res.ConfigOptions = []any{}
 	}
+	// A fresh (or re-created) ACP session starts with the agent's default
+	// model, and not every agent restores config options on session/load.
+	// Re-apply the model the user picked for this conversation.
+	if m.ModelConfigID != "" && m.ModelValue != "" {
+		if err := sc.call(ctx, "setConfig", map[string]any{
+			"key": m.ID, "configId": m.ModelConfigID, "value": m.ModelValue,
+		}, nil); err != nil {
+			logf("restore model for %s: %v", m.ID, err)
+		} else {
+			for _, raw := range res.ConfigOptions {
+				if opt, ok := raw.(map[string]any); ok && opt["id"] == m.ModelConfigID {
+					opt["currentValue"] = m.ModelValue
+					break
+				}
+			}
+		}
+	}
 	hadHistory := m.AcpSessionID != ""
 	// Only persist AcpSessionID when resuming an existing session; fresh
 	// sessions are persisted on the first sent prompt (Codex only writes a

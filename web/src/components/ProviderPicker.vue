@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { Popover, message } from "antdv-next";
 import { computed, nextTick, ref } from "vue";
-import { isMac, probeModels, refreshModels, store } from "../store";
-import type { AgentInfo, ConfigOption } from "../types";
+import { probeModels, refreshModels, store } from "../store";
+import type { AgentInfo, ConfigOption, ConfigSelectOption } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
 
 interface ModelRow {
@@ -12,6 +12,8 @@ interface ModelRow {
   configId: string | null;
   modelValue: string | null;
   modelLabel: string;
+  /** Credit multiplier supplied by the agent in the model option description (e.g. "x0.29 credits"). */
+  credit: string | null;
   available: boolean;
   probing?: boolean;
   probeError?: string;
@@ -60,15 +62,28 @@ function toggleFav(key: string) {
 const agents = computed(() => store.agents.filter((a) => !a.disabled));
 const currentAgent = computed(() => agents.value.find((a) => a.id === props.modelValue) ?? agents.value[0] ?? null);
 
-function flattenModels(o: ConfigOption | null | undefined): { value: string; label: string }[] {
+function flattenModels(o: ConfigOption | null | undefined): { value: string; label: string; description?: string | null }[] {
   if (!o?.options) return [];
   const list = o.options;
   if (Array.isArray(list) && list.length && "group" in (list[0] as object)) {
-    return (list as { group: string; name: string; options: { value: string; name: string }[] }[]).flatMap((g) =>
-      g.options.map((x) => ({ value: x.value, label: `${x.name} · ${g.name}` })),
+    return (list as { group: string; name: string; options: ConfigSelectOption[] }[]).flatMap((g) =>
+      g.options.map((x) => ({ value: x.value, label: `${x.name} · ${g.name}`, description: x.description })),
     );
   }
-  return (list as { value: string; name: string }[]).map((x) => ({ value: x.value, label: x.name }));
+  return (list as ConfigSelectOption[]).map((x) => ({ value: x.value, label: x.name, description: x.description }));
+}
+
+/** Agents like CodeBuddy put the billing multiplier in the option description ("x0.29 credits"). */
+function creditOf(description?: string | null): string | null {
+  if (!description) return null;
+  const prefixed = /(?:^|\s)[x×]\s*(\d+(?:\.\d+)?)\s*credits?/i.exec(description);
+  if (prefixed) return `x${prefixed[1]}`;
+  const suffixed = /(?:^|\s)(\d+(?:\.\d+)?)\s*[x×](?:\s|$)/i.exec(description);
+  return suffixed ? `x${suffixed[1]}` : null;
+}
+
+function isFreeCredit(credit: string): boolean {
+  return Number(credit.slice(1)) === 0;
 }
 
 function optionForAgent(agentId: string): ConfigOption | null {
@@ -92,6 +107,13 @@ const currentModelLabel = computed(() => {
   return found?.label ?? (currentAgent.value?.name || "选择 Agent");
 });
 
+const currentCredit = computed(() => {
+  const opt = activeModelOpt.value;
+  if (!opt) return null;
+  const found = flattenModels(opt).find((m) => m.value === activeModelValue.value);
+  return found ? creditOf(found.description) : null;
+});
+
 const allRows = computed<ModelRow[]>(() => {
   const rows: ModelRow[] = [];
   const list = props.locked ? agents.value.filter((a) => a.id === props.modelValue) : agents.value;
@@ -109,6 +131,7 @@ const allRows = computed<ModelRow[]>(() => {
             configId: opt.id,
             modelValue: m.value,
             modelLabel: m.label,
+            credit: creditOf(m.description),
             available: a.available,
             probe: a.probe,
           });
@@ -132,6 +155,7 @@ const allRows = computed<ModelRow[]>(() => {
           : probeError
             ? `${a.name} · 默认模型（同步失败，点此重试）`
             : `${a.name} · 默认模型`,
+      credit: null,
       available: a.available,
       probing,
       probeError,
@@ -230,14 +254,6 @@ function onSearchKeydown(e: KeyboardEvent) {
     open.value = false;
     return;
   }
-  if ((e.metaKey || e.ctrlKey) && e.key >= "1" && e.key <= "9") {
-    const idx = Number(e.key) - 1;
-    const row = visibleRows.value[idx];
-    if (row) {
-      e.preventDefault();
-      pickRow(row);
-    }
-  }
 }
 
 function openSettings() {
@@ -333,7 +349,7 @@ async function refreshCurrent() {
           </div>
 
           <div class="flex-1 min-h-0 overflow-y-auto p-[6px] flex flex-col gap-[2px]">
-            <template v-for="(r, idx) in visibleRows" :key="r.key">
+            <template v-for="r in visibleRows" :key="r.key">
               <button
                 class="group w-full flex items-center gap-2 px-2 py-[7px] border-0 rounded-[8px] text-ink text-[12.5px] text-left cursor-pointer transition-colors duration-120"
                 :class="[
@@ -386,11 +402,11 @@ async function refreshCurrent() {
                 </span>
 
                 <span
-                  v-if="!r.probing && idx < 9"
-                  class="flex-none text-[10.5px] leading-4 px-[5px] rounded-[5px] bg-hover border border-solid border-line text-ink-3 font-mono"
-                >
-                  {{ isMac ? '⌘' : 'Ctrl+' }}{{ idx + 1 }}
-                </span>
+                  v-if="r.credit"
+                  class="flex-none text-[10.5px] leading-4 px-[5px] rounded-[5px] bg-hover border border-solid border-line font-mono"
+                  :class="isFreeCredit(r.credit) ? 'text-brand-codebuddy' : 'text-ink-3'"
+                  :title="`模型倍率 ${r.credit}，数值越低消耗的积分越少`"
+                >{{ r.credit }}</span>
               </button>
               <div v-if="r.probeError" class="mx-[6px] mt-[2px] mb-1 px-2 py-[6px] rounded-[7px] bg-err-soft text-err text-[11px] leading-[1.45] break-words selectable">
                 {{ r.probeError }}
@@ -459,6 +475,12 @@ async function refreshCurrent() {
     >
       <ProviderIcon v-if="currentAgent" :id="currentAgent.id" :name="currentAgent.name" :size="15" />
       <span class="max-w-[158px] truncate">{{ currentModelLabel }}</span>
+      <span
+        v-if="currentCredit"
+        class="flex-none text-[10.5px] px-[5px] rounded-[5px] border border-solid border-line bg-hover font-mono"
+        :class="isFreeCredit(currentCredit) ? 'text-brand-codebuddy' : 'text-ink-2'"
+        :title="`模型倍率 ${currentCredit}，数值越低消耗的积分越少`"
+      >{{ currentCredit }}</span>
       <!-- Lucide ChevronDown -->
       <svg
         viewBox="0 0 24 24"

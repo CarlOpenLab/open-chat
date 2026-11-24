@@ -117,6 +117,16 @@ func TestDemoConversation(t *testing.T) {
 		t.Fatal("turn never ended")
 	}
 	h.store.flush()
+	// The model picked mid-conversation must survive a store reload, so a
+	// fresh session can re-apply it instead of falling back to the default.
+	reloaded, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := reloaded.meta(m.ID)
+	if !ok || saved.ModelConfigID != "model" || saved.ModelValue != "demo-opus" {
+		t.Fatalf("saved model = %+v (ok=%v)", saved, ok)
+	}
 	conv, _ := api.Open(m.ID)
 	seen := map[string]int{}
 	for _, e := range conv.Events {
@@ -145,6 +155,15 @@ func TestDemoConversation(t *testing.T) {
 	}
 	if !st2.Resumed {
 		t.Fatalf("expected the demo session to resume")
+	}
+	// The model chosen before the restart must be the one shown on re-entry.
+	for _, raw := range st2.ConfigOptions {
+		if opt, ok := raw.(map[string]any); ok && opt["id"] == "model" {
+			if got := opt["currentValue"]; got != "demo-opus" {
+				t.Fatalf("model after reconnect = %v, want demo-opus", got)
+			}
+			break
+		}
 	}
 }
 

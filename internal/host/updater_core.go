@@ -182,6 +182,15 @@ func auDefaultAgents() []auAgentSpec {
 			NativeDirs:   []string{localBin},
 		},
 		{
+			ID:           "codebuddy",
+			Name:         "CodeBuddy",
+			Bin:          "codebuddy",
+			MiseTools:    []string{"npm:@tencent-ai/codebuddy-code"},
+			NpmPackage:   "@tencent-ai/codebuddy-code",
+			NativeUpdate: []string{"codebuddy", "update"},
+			NativeDirs:   []string{localBin},
+		},
+		{
 			ID:         "dsh",
 			Name:       "DeepSeek Harness",
 			Bin:        "dsh",

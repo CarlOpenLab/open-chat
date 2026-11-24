@@ -97,6 +97,15 @@ export function catalog(): AgentPreset[] {
       homepage: "https://github.com/openai/codex",
     },
     {
+      id: "codebuddy",
+      name: "CodeBuddy",
+      description: "腾讯 CodeBuddy Code，原生 ACP（codebuddy --acp）",
+      command: "codebuddy",
+      args: ["--acp"],
+      probe: "codebuddy",
+      homepage: "https://cnb.cool/codebuddy/codebuddy-code",
+    },
+    {
       id: "oh-my-pi",
       name: "Oh My Pi",
       description: "omp acp，本地 CLI 直连",

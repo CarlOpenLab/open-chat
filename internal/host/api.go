@@ -188,7 +188,32 @@ func (a *API) SetMode(ctx context.Context, id, modeID string) error {
 
 // SetConfig changes a session config option, such as the model.
 func (a *API) SetConfig(ctx context.Context, id, configID string, value any) error {
-	return a.h.callLive(ctx, id, "setConfig", map[string]any{"configId": configID, "value": value})
+	if err := a.h.callLive(ctx, id, "setConfig", map[string]any{"configId": configID, "value": value}); err != nil {
+		return err
+	}
+	// ACP keeps config options in the session only. Remember the model choice
+	// on the conversation so open() can re-apply it after a restart or resume.
+	if chosen, ok := value.(string); ok && isModelConfigOption(configID, a.h.liveState(id).ConfigOptions) {
+		a.h.store.update(id, func(m *Meta) {
+			m.ModelConfigID = configID
+			m.ModelValue = chosen
+		})
+	}
+	return nil
+}
+
+func isModelConfigOption(configID string, options []any) bool {
+	for _, raw := range options {
+		opt, ok := raw.(map[string]any)
+		if !ok || opt["id"] != configID {
+			continue
+		}
+		if category, _ := opt["category"].(string); category == "model" {
+			return true
+		}
+		break
+	}
+	return strings.Contains(strings.ToLower(configID), "model")
 }
 
 // Rename sets a conversation's title; agents no longer retitle it.
