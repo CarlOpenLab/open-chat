@@ -214,6 +214,7 @@ export interface AgentUpdateProgress {
 export interface WorkspaceNode {
   title: string;
   path: string;
+  gitStatus?: "M" | "A" | "R" | "U";
   children?: WorkspaceNode[];
 }
 

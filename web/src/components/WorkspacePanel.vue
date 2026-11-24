@@ -14,7 +14,7 @@ import {
 import { Folder } from "@antdv-next/x";
 import type { FileContentService, FolderTreeData } from "@antdv-next/x";
 import { App, Spin, Tooltip, message } from "antdv-next";
-import { computed, h, onBeforeUnmount, ref, watch } from "vue";
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { VNodeChild } from "vue";
 import { api, inApp } from "../api";
 import { directoryIcons } from "../fileIcons";
@@ -208,6 +208,7 @@ async function saveEdit() {
     await api.workspaceWriteFile(props.cwd, rel, draft.value);
     originalContent.value = draft.value;
     message.success(`已保存 ${rel.split("/").pop() || rel}`);
+    void loadTree();
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e));
   } finally {
@@ -242,7 +243,7 @@ async function openExternally() {
 }
 
 function renderPreviewTitle(file: { title?: VNodeChild; path: string[] }) {
-  const name = file.title || file.path[file.path.length - 1] || "";
+  const name = file.path[file.path.length - 1] || (typeof file.title === "string" ? file.title : "");
   const showSourceActions =
     !isBinaryMedia.value &&
     !loadingFile.value &&
@@ -384,7 +385,15 @@ const shortFolder = computed(() => {
   return parts[parts.length - 1] || props.cwd || "~";
 });
 
-const treeWidth = computed(() => (store.workspaceWidth < 520 ? 172 : 210));
+const viewportWidth = ref(typeof window !== "undefined" ? window.innerWidth : 1200);
+const availableMainWidth = computed(() => Math.max(320, viewportWidth.value - (store.sidebarCollapsed ? 0 : 262)));
+const maxWorkspaceWidth = computed(() => {
+  const avail = availableMainWidth.value;
+  const minChat = Math.min(380, Math.floor(avail * 0.48));
+  return Math.max(240, avail - minChat);
+});
+const effectiveWidth = computed(() => Math.min(store.workspaceWidth, maxWorkspaceWidth.value));
+const treeWidth = computed(() => (effectiveWidth.value < 400 ? 136 : effectiveWidth.value < 520 ? 172 : 210));
 
 function filterNodes(nodes: WorkspaceNode[], q: string): WorkspaceNode[] {
   const out: WorkspaceNode[] = [];
@@ -402,10 +411,34 @@ function filterNodes(nodes: WorkspaceNode[], q: string): WorkspaceNode[] {
   return out;
 }
 
+function decorateTreeNodes(nodes: WorkspaceNode[]): FolderTreeData[] {
+  return nodes.map((n) => {
+    const isDir = Array.isArray(n.children);
+    const status = n.gitStatus;
+    const title: VNodeChild = status
+      ? h(
+          "span",
+          {
+            class: ["ws-tree-label", `is-git-${status.toLowerCase()}`],
+          },
+          [
+            h("span", { class: "ws-tree-name" }, n.title),
+            !isDir ? h("span", { class: "ws-tree-git-tag" }, status) : null,
+          ],
+        )
+      : n.title;
+    return {
+      title,
+      path: n.path,
+      children: n.children ? decorateTreeNodes(n.children) : undefined,
+    };
+  });
+}
+
 const filteredTree = computed<FolderTreeData[]>(() => {
   const q = filterText.value.trim().toLowerCase();
   const list = q ? filterNodes(tree.value, q) : tree.value;
-  return list as unknown as FolderTreeData[];
+  return decorateTreeNodes(list);
 });
 
 async function loadTree() {
@@ -509,8 +542,9 @@ function onResizeStart(e: PointerEvent) {
 
 function onResizeMove(e: PointerEvent) {
   const delta = startX - e.clientX;
-  const maxW = Math.min(820, Math.max(420, window.innerWidth - 420));
-  store.workspaceWidth = Math.min(maxW, Math.max(340, startW + delta));
+  const maxW = Math.min(820, maxWorkspaceWidth.value);
+  const minW = Math.min(340, maxW);
+  store.workspaceWidth = Math.min(maxW, Math.max(minW, startW + delta));
 }
 
 function onResizeEnd() {
@@ -519,7 +553,16 @@ function onResizeEnd() {
   window.removeEventListener("pointerup", onResizeEnd);
 }
 
+function onWindowResize() {
+  viewportWidth.value = window.innerWidth;
+}
+
+onMounted(() => {
+  window.addEventListener("resize", onWindowResize);
+});
+
 onBeforeUnmount(() => {
+  window.removeEventListener("resize", onWindowResize);
   window.removeEventListener("pointermove", onResizeMove);
   window.removeEventListener("pointerup", onResizeEnd);
 });
@@ -538,7 +581,7 @@ async function refreshFiles() {
     v-show="props.open"
     class="flex-none h-full min-h-0 relative flex flex-col bg-sidebar glass border-0 border-l border-solid border-line z-8"
     :class="{ 'select-none': resizing }"
-    :style="{ width: `${store.workspaceWidth}px` }"
+    :style="{ width: `${effectiveWidth}px` }"
   >
     <div
       class="group/resizer absolute top-0 bottom-0 -left-[3px] w-[6px] cursor-col-resize z-20"

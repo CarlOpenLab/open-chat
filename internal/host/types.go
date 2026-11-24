@@ -173,9 +173,10 @@ type Push struct {
 
 // WorkspaceNode describes a file or directory for the workspace file tree.
 type WorkspaceNode struct {
-	Title    string          `json:"title"`
-	Path     string          `json:"path"`
-	Children []WorkspaceNode `json:"children,omitempty"`
+	Title     string          `json:"title"`
+	Path      string          `json:"path"`
+	GitStatus string          `json:"gitStatus,omitempty"` // M | A | R | U
+	Children  []WorkspaceNode `json:"children,omitempty"`
 }
 
 // WorkspaceFileInfo describes a workspace file and its streaming HTTP preview URL.

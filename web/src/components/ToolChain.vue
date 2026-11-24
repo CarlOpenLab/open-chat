@@ -196,7 +196,7 @@ function toggle(id: string) {
       <div class="flex-1 min-w-0" :class="idx === calls.length - 1 ? 'pb-0' : 'pb-[2px]'">
         <button
           type="button"
-          class="group flex items-center justify-start gap-2 w-full min-h-6 px-1 py-[2px] -ml-1 border-0 rounded-[6px] bg-transparent text-ink-2 text-left transition-colors duration-140 ease-oc"
+          class="group/tool flex items-center justify-start gap-2 w-full min-h-6 px-1 py-[2px] -ml-1 border-0 rounded-[6px] bg-transparent text-ink-2 text-left transition-colors duration-140 ease-oc"
           :class="hasDetail(call) ? 'cursor-pointer' : 'cursor-default'"
           :disabled="!hasDetail(call)"
           :aria-expanded="expandedKeys.has(call.toolCallId)"
@@ -208,7 +208,7 @@ function toggle(id: string) {
               expandedKeys.has(call.toolCallId) && hasDetail(call)
                 ? 'text-ink border-line-strong'
                 : hasDetail(call)
-                  ? 'text-ink-2 border-line group-hover:text-ink group-hover:border-line-strong'
+                  ? 'text-ink-2 border-line group-hover/tool:text-ink group-hover/tool:border-line-strong'
                   : 'text-ink-2 border-line'
             "
           >
@@ -224,7 +224,7 @@ function toggle(id: string) {
               expandedKeys.has(call.toolCallId) && hasDetail(call)
                 ? 'text-ink'
                 : hasDetail(call)
-                  ? 'text-ink-2 group-hover:text-ink'
+                  ? 'text-ink-2 group-hover/tool:text-ink'
                   : 'text-ink-2',
             ]"
             :title="titleOf(call)"
@@ -256,7 +256,7 @@ function toggle(id: string) {
             :class="
               expandedKeys.has(call.toolCallId)
                 ? 'rotate-90 text-ink'
-                : 'text-ink-3 group-hover:text-ink'
+                : 'text-ink-3 group-hover/tool:text-ink'
             "
           >
             <polyline points="9 18 15 12 9 6" />

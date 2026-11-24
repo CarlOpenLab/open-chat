@@ -402,14 +402,14 @@ async function changeDir(path: string) {
   <div class="flex h-full min-h-0 min-w-0 w-full">
     <div class="flex-1 min-w-0 flex flex-col h-full min-h-0 relative">
       <header class="oc-chat-topbar flex-none h-titlebar flex items-center gap-[10px] pl-[18px] pr-3 bg-sidebar glass border-0 border-b border-solid border-line relative z-12">
-        <div class="flex items-center gap-2 min-w-0 flex-1 drag" :class="{ 'pl-[66px]': isMac && store.sidebarCollapsed }">
+        <div class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden drag" :class="{ 'pl-[66px]': isMac && store.sidebarCollapsed }">
           <Tooltip v-if="store.sidebarCollapsed" :title="`展开侧栏 (${isMac ? '⌘' : 'Ctrl'} B)`" :mouse-enter-delay="0.4">
             <button class="icon-btn text-[14px] no-drag" @click="store.sidebarCollapsed = false">
               <MenuUnfoldOutlined />
             </button>
           </Tooltip>
 
-          <div class="oc-title-line flex items-center gap-2 min-w-0 flex-1">
+          <div class="oc-title-line flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
             <Input
               v-if="editing"
               id="title-edit"
@@ -422,7 +422,7 @@ async function changeDir(path: string) {
             />
             <button
               v-else
-              class="border-0 bg-transparent p-0 text-[13.5px] font-semibold tracking-[-0.015em] text-ink text-left max-w-[340px] cursor-default leading-5 flex items-center flex-[0_1_auto] min-w-[60px] no-drag"
+              class="border-0 bg-transparent p-0 text-[13.5px] font-semibold tracking-[-0.015em] text-ink text-left max-w-[340px] cursor-default leading-5 flex items-center flex-[0_1_auto] min-w-0 no-drag"
               :title="`${meta.title}（双击重命名）`"
               @dblclick="startEdit"
             >

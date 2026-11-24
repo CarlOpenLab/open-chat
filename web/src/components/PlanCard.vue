@@ -38,7 +38,7 @@ const open = ref(true);
   >
     <button
       type="button"
-      class="group flex items-center gap-2 w-full px-3 py-[9px] border-0 bg-transparent text-ink text-[12.5px] text-left cursor-pointer select-none"
+      class="group/plan flex items-center gap-2 w-full px-3 py-[9px] border-0 bg-transparent text-ink text-[12.5px] text-left cursor-pointer select-none"
       :aria-expanded="open"
       @click="open = !open"
     >
@@ -68,7 +68,7 @@ const open = ref(true);
         stroke-width="2"
         stroke-linecap="round"
         stroke-linejoin="round"
-        class="w-[13px] h-[13px] text-ink-3 flex-none transition-[transform,color] duration-200 ease-oc group-hover:text-ink-2"
+        class="w-[13px] h-[13px] text-ink-3 flex-none transition-[transform,color] duration-200 ease-oc group-hover/plan:text-ink-2"
         :class="{ 'rotate-90': open }"
       >
         <polyline points="9 18 15 12 9 6" />

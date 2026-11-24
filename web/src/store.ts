@@ -39,7 +39,7 @@ export const store = reactive({
   activeId: null as string | null,
   loading: {} as Record<string, boolean>,
   sidebarCollapsed: localStorage.getItem("oc.sidebar") === "0",
-  workspaceOpen: localStorage.getItem("oc.workspaceOpen") === "1",
+  workspaceOpen: false,
   workspaceTab: (localStorage.getItem("oc.workspaceTab") === "terminal" ? "terminal" : "files") as "files" | "terminal",
   workspaceWidth: Math.min(820, Math.max(340, Number(localStorage.getItem("oc.workspaceWidth")) || 480)),
   /** Pending file to open and highlight in the WorkspacePanel file tree. */
@@ -98,9 +98,36 @@ watch(
   () => store.sidebarCollapsed,
   (v) => localStorage.setItem("oc.sidebar", v ? "0" : "1"),
 );
+const workspaceOpenById: Record<string, boolean> = (() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem("oc.workspaceOpenById") || "{}") as Record<string, unknown>;
+    const out: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (v === true) out[k] = true;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+})();
+
+function saveWorkspaceOpenMap() {
+  try {
+    localStorage.setItem("oc.workspaceOpenById", JSON.stringify(workspaceOpenById));
+  } catch {
+    /* ignore quota errors */
+  }
+}
+
 watch(
   () => store.workspaceOpen,
-  (v) => localStorage.setItem("oc.workspaceOpen", v ? "1" : "0"),
+  (v) => {
+    const id = store.activeId;
+    if (!id) return;
+    if (v) workspaceOpenById[id] = true;
+    else delete workspaceOpenById[id];
+    saveWorkspaceOpenMap();
+  },
 );
 watch(
   () => store.workspaceTab,
@@ -334,9 +361,16 @@ function onPush(p: Push) {
       delete store.queues[p.conversationId];
       delete store.drafts[p.conversationId];
       delete store.draftAttachments[p.conversationId];
+      if (workspaceOpenById[p.conversationId]) {
+        delete workspaceOpenById[p.conversationId];
+        saveWorkspaceOpenMap();
+      }
       steerPending.delete(p.conversationId);
       manualStop.delete(p.conversationId);
-      if (store.activeId === p.conversationId) store.activeId = null;
+      if (store.activeId === p.conversationId) {
+        store.activeId = null;
+        store.workspaceOpen = false;
+      }
       return;
     case "focus":
       if (p.conversationId && store.metas[p.conversationId]) {
@@ -466,6 +500,7 @@ async function load(id: string) {
 
 export async function select(id: string | null) {
   store.activeId = id;
+  store.workspaceOpen = id ? Boolean(workspaceOpenById[id]) : false;
   if (id) {
     localStorage.setItem("oc.active", id);
     if (store.turnOutcome[id] === "unseen") store.turnOutcome[id] = "done";

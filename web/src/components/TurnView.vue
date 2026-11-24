@@ -81,7 +81,7 @@ const actionItems = computed<ActionItemType[]>(() => {
 
 <template>
   <div
-    class="oc-turn group pt-[6px] pb-1 [&+.oc-turn]:pt-[18px]"
+    class="oc-turn group/turn pt-[6px] pb-1 [&+.oc-turn]:pt-[18px]"
     :class="isLast || live ? '[content-visibility:visible]' : '[content-visibility:auto] [contain-intrinsic-size:auto_220px]'"
   >
     <!-- User Bubble with local custom avatar -->
@@ -221,7 +221,7 @@ const actionItems = computed<ActionItemType[]>(() => {
 
         <template v-if="!streaming && hasAnswer" #footer>
           <div
-            class="flex items-center gap-1 h-[26px] transition-opacity duration-150 ease-oc group-hover:opacity-100"
+            class="flex items-center gap-1 h-[26px] transition-opacity duration-150 ease-oc group-hover/turn:opacity-100"
             :class="isLast ? 'opacity-72' : 'opacity-0'"
           >
             <Actions :items="actionItems" variant="borderless" class="oc-actions" />

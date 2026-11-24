@@ -149,6 +149,11 @@
     padding: 0 6px;
   }
 }
+@container (max-width: 400px) {
+  .oc-chat-topbar .oc-agent-badge {
+    display: none;
+  }
+}
 
 /* TurnView Bubble & Actions overrides */
 .oc-user-bubble .antd-bubble-avatar,
@@ -594,6 +599,52 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.oc-folder .ws-tree-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+.oc-folder .ws-tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oc-folder .ws-tree-git-tag {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  opacity: 0.88;
+}
+.oc-folder .ws-tree-label.is-git-m {
+  color: #d97706;
+}
+:root[data-theme="dark"] .oc-folder .ws-tree-label.is-git-m {
+  color: #f59e0b;
+}
+.oc-folder .ws-tree-label.is-git-a {
+  color: #16a34a;
+}
+:root[data-theme="dark"] .oc-folder .ws-tree-label.is-git-a {
+  color: #4ade80;
+}
+.oc-folder .ws-tree-label.is-git-r {
+  color: #0284c7;
+}
+:root[data-theme="dark"] .oc-folder .ws-tree-label.is-git-r {
+  color: #38bdf8;
+}
+.oc-folder .ws-tree-label.is-git-u {
+  color: #dc2626;
+}
+:root[data-theme="dark"] .oc-folder .ws-tree-label.is-git-u {
+  color: #f87171;
 }
 .oc-folder .antd-folder-directory-tree-item-title {
   overflow: hidden;

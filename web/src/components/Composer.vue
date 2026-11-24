@@ -1086,7 +1086,7 @@ defineExpose({ addFiles });
         >
           <template #suffix><span class="hidden" /></template>
           <template #footer>
-            <div class="flex items-center gap-[6px] min-h-8">
+            <div class="flex items-center gap-[6px] min-h-8 min-w-0">
               <!-- Leftmost: File / Image attachment -->
               <Tooltip title="添加图片或文件（支持拖拽 / 粘贴）" :mouse-enter-delay="0.3">
                 <button
@@ -1104,7 +1104,7 @@ defineExpose({ addFiles });
               <span class="flex-1" />
 
               <!-- Rightmost: Standalone Thinking/Reasoning icon (Codex-style) + Agent/Model Picker + Send -->
-              <div class="inline-flex items-center gap-[5px]">
+              <div class="inline-flex items-center gap-[5px] min-w-0 flex-[0_1_auto]">
                 <Dropdown :menu="effortMenu" :trigger="['click']" placement="topRight">
                   <Tooltip :title="`思考强度：${currentEffortLabel}`" :mouse-enter-delay="0.3">
                     <button
@@ -1129,6 +1129,7 @@ defineExpose({ addFiles });
                 </Dropdown>
 
                 <ProviderPicker
+                  class="min-w-0"
                   :model-value="agentId"
                   :model-option="modelOption"
                   :selected-model-value="selectedModelValue"

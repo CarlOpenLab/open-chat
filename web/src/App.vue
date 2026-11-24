@@ -30,7 +30,7 @@ function onKey(e: KeyboardEvent) {
     store.sidebarCollapsed = !store.sidebarCollapsed;
   } else if (key === "j") {
     e.preventDefault();
-    store.workspaceOpen = !store.workspaceOpen;
+    if (store.activeId) store.workspaceOpen = !store.workspaceOpen;
   } else if (key === ",") {
     e.preventDefault();
     store.settingsOpen = true;

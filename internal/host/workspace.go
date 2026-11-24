@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -46,6 +47,8 @@ var workspaceSkipDirs = map[string]bool{
 }
 
 // listWorkspaceTree scans root into a tree compatible with @antdv-next/x Folder.
+// Uses breadth-first traversal so root-level files and folders are always included
+// before deeper subdirectories consume the entry budget.
 func listWorkspaceTree(root string) ([]WorkspaceNode, error) {
 	dir := expandHome(strings.TrimSpace(root))
 	if dir == "" {
@@ -56,27 +59,46 @@ func listWorkspaceTree(root string) ([]WorkspaceNode, error) {
 	if err != nil || !st.IsDir() {
 		return nil, fmt.Errorf("工作目录不存在：%s", dir)
 	}
-	remaining := workspaceMaxEntries
-	nodes := scanWorkspaceDir(dir, 0, &remaining)
-	if nodes == nil {
-		return []WorkspaceNode{}, nil
+	nodes := scanWorkspaceBFS(dir)
+	if statuses := workspaceGitStatuses(dir); len(statuses) > 0 {
+		applyGitStatuses(nodes, "", statuses)
 	}
 	return nodes, nil
 }
 
-func scanWorkspaceDir(dir string, depth int, remaining *int) []WorkspaceNode {
-	if depth >= workspaceMaxDepth || *remaining <= 0 {
-		return []WorkspaceNode{}
+type bfsTreeNode struct {
+	title    string
+	path     string
+	isDir    bool
+	children []*bfsTreeNode
+}
+
+func (n *bfsTreeNode) toWorkspaceNode() WorkspaceNode {
+	out := WorkspaceNode{
+		Title: n.title,
+		Path:  n.path,
 	}
+	if n.isDir {
+		out.Children = make([]WorkspaceNode, 0, len(n.children))
+		for _, c := range n.children {
+			out.Children = append(out.Children, c.toWorkspaceNode())
+		}
+	}
+	return out
+}
+
+func readSortedDirItems(dir string) []struct {
+	name  string
+	isDir bool
+} {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return []WorkspaceNode{}
+		return nil
 	}
-	type item struct {
+	items := make([]struct {
 		name  string
 		isDir bool
-	}
-	items := make([]item, 0, len(entries))
+	}, 0, len(entries))
 	for _, e := range entries {
 		name := e.Name()
 		if name == ".DS_Store" || name == "Thumbs.db" {
@@ -86,7 +108,10 @@ func scanWorkspaceDir(dir string, depth int, remaining *int) []WorkspaceNode {
 		if isDir && workspaceSkipDirs[name] {
 			continue
 		}
-		items = append(items, item{name: name, isDir: isDir})
+		items = append(items, struct {
+			name  string
+			isDir bool
+		}{name: name, isDir: isDir})
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].isDir != items[j].isDir {
@@ -94,23 +119,173 @@ func scanWorkspaceDir(dir string, depth int, remaining *int) []WorkspaceNode {
 		}
 		return strings.ToLower(items[i].name) < strings.ToLower(items[j].name)
 	})
+	return items
+}
 
-	out := make([]WorkspaceNode, 0, len(items))
-	for _, it := range items {
-		if *remaining <= 0 {
-			break
+func scanWorkspaceBFS(rootDir string) []WorkspaceNode {
+	rootNode := &bfsTreeNode{isDir: true}
+	type queueItem struct {
+		dir   string
+		depth int
+		node  *bfsTreeNode
+	}
+	queue := []queueItem{{dir: rootDir, depth: 0, node: rootNode}}
+	remaining := workspaceMaxEntries
+
+	for len(queue) > 0 && remaining > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur.depth >= workspaceMaxDepth {
+			continue
 		}
-		*remaining--
-		node := WorkspaceNode{
-			Title: it.name,
-			Path:  it.name,
+		items := readSortedDirItems(cur.dir)
+		for _, it := range items {
+			if remaining <= 0 {
+				break
+			}
+			remaining--
+			child := &bfsTreeNode{
+				title: it.name,
+				path:  it.name,
+				isDir: it.isDir,
+			}
+			cur.node.children = append(cur.node.children, child)
+			if it.isDir && cur.depth+1 < workspaceMaxDepth {
+				queue = append(queue, queueItem{
+					dir:   filepath.Join(cur.dir, it.name),
+					depth: cur.depth + 1,
+					node:  child,
+				})
+			}
 		}
-		if it.isDir {
-			node.Children = scanWorkspaceDir(filepath.Join(dir, it.name), depth+1, remaining)
-		}
-		out = append(out, node)
+	}
+
+	out := make([]WorkspaceNode, 0, len(rootNode.children))
+	for _, c := range rootNode.children {
+		out = append(out, c.toWorkspaceNode())
 	}
 	return out
+}
+
+func gitStatusPriority(s string) int {
+	switch s {
+	case "U":
+		return 4
+	case "M":
+		return 3
+	case "A":
+		return 2
+	case "R":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func mergeGitStatus(a, b string) string {
+	if gitStatusPriority(b) > gitStatusPriority(a) {
+		return b
+	}
+	return a
+}
+
+func classifyGitXY(x, y byte) string {
+	if x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D') {
+		return "U"
+	}
+	if x == '?' && y == '?' {
+		return "A"
+	}
+	if x == 'M' || y == 'M' || x == 'T' || y == 'T' {
+		return "M"
+	}
+	if x == 'A' || y == 'A' {
+		return "A"
+	}
+	if x == 'R' || y == 'R' {
+		return "R"
+	}
+	return ""
+}
+
+func workspaceGitStatuses(dir string) map[string]string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	topCmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel")
+	hideWindow(topCmd)
+	topOut, err := topCmd.Output()
+	if err != nil {
+		return nil
+	}
+	repoRoot := strings.TrimSpace(string(topOut))
+	if repoRoot == "" {
+		return nil
+	}
+	if evalDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = evalDir
+	}
+	if evalRoot, err := filepath.EvalSymlinks(repoRoot); err == nil {
+		repoRoot = evalRoot
+	}
+
+	stCmd := exec.CommandContext(ctx, "git", "-C", dir, "status", "--porcelain=v1", "-z", "-uall")
+	hideWindow(stCmd)
+	out, err := stCmd.Output()
+	if err != nil || len(out) == 0 {
+		return nil
+	}
+
+	statuses := map[string]string{}
+	parts := bytes.Split(out, []byte{0})
+	for i := 0; i < len(parts); i++ {
+		entry := parts[i]
+		if len(entry) < 4 || entry[2] != ' ' {
+			continue
+		}
+		x, y := entry[0], entry[1]
+		gitRel := string(entry[3:])
+		if x == 'R' || x == 'C' {
+			// Porcelain v1 -z emits newpath\0oldpath\0 for renames/copies.
+			i++
+		}
+		st := classifyGitXY(x, y)
+		if st == "" {
+			continue
+		}
+		full := filepath.Join(repoRoot, filepath.FromSlash(gitRel))
+		rel, err := filepath.Rel(dir, full)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		slashRel := filepath.ToSlash(rel)
+		statuses[slashRel] = mergeGitStatus(statuses[slashRel], st)
+	}
+	return statuses
+}
+
+func applyGitStatuses(nodes []WorkspaceNode, prefix string, statuses map[string]string) string {
+	best := ""
+	for i := range nodes {
+		rel := nodes[i].Path
+		if prefix != "" {
+			rel = prefix + "/" + nodes[i].Path
+		}
+		st := statuses[rel]
+		if len(nodes[i].Children) > 0 {
+			st = mergeGitStatus(st, applyGitStatuses(nodes[i].Children, rel, statuses))
+		} else if nodes[i].Children != nil {
+			dirPrefix := rel + "/"
+			for k, v := range statuses {
+				if strings.HasPrefix(k, dirPrefix) {
+					st = mergeGitStatus(st, v)
+				}
+			}
+		}
+		nodes[i].GitStatus = st
+		best = mergeGitStatus(best, st)
+	}
+	return best
 }
 
 // resolveWorkspacePath validates that relPath resolves to a regular file strictly inside root.
