@@ -10,7 +10,7 @@ import CodeBlock from "./CodeBlock.vue";
  * never re-parsed: `content` is a string, so a parent update with the same
  * text leaves this component untouched.
  */
-const props = defineProps<{ content: string; streaming: boolean }>();
+const props = defineProps<{ content: string; streaming: boolean; className?: string }>();
 
 const components: Record<string, Component> = { code: CodeBlock };
 const config = { breaks: true, gfm: true };
@@ -22,12 +22,14 @@ const streaming = computed(() =>
     : { hasNextChunk: false, enableAnimation: false },
 );
 
+const rootClass = computed(() => (props.className ? `oc-md ${props.className}` : "oc-md"));
+
 provide(markdownDarkKey, isDark);
 </script>
 
 <template>
   <XMarkdown
-    class-name="oc-md"
+    :class-name="rootClass"
     :content="props.content"
     :components="components"
     :config="config"

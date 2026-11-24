@@ -11,6 +11,24 @@
   box-shadow: var(--shadow-pop) !important;
 }
 
+.oc-avatar-dropdown .ant-dropdown-menu {
+  --avatar-menu-radius: 16px;
+  --avatar-menu-padding: 4px;
+  border-radius: var(--avatar-menu-radius);
+  padding: var(--avatar-menu-padding);
+}
+
+.oc-avatar-dropdown .ant-dropdown-menu .ant-dropdown-menu-item {
+  border-radius: calc(var(--avatar-menu-radius) - var(--avatar-menu-padding) - 1px);
+}
+
+.oc-avatar-dropdown .ant-dropdown-menu .ant-dropdown-menu-title-content .ant-dropdown-menu-item-extra {
+  display: flex;
+  align-items: center;
+  margin-inline-start: 0;
+  padding-inline-start: 6px;
+}
+
 /* Harmonize @antdv-next/x-pro MessageScroller preview & back-to-bottom button with Beacon Acrylic */
 .ant-message-scroller-preview,
 .ant-message-scroller-back-to-bottom-button {
@@ -259,7 +277,7 @@
   min-width: 0;
   overflow: hidden;
 }
-.oc-convs .antd-conversations-menu-icon {
+.oc-sidebar .oc-convs .antd-conversations-item .antd-conversations-menu-icon {
   position: absolute;
   right: 8px;
   top: 50%;
@@ -276,14 +294,14 @@
   color: var(--text-3);
   transition: opacity 0.14s var(--ease), color 0.14s var(--ease), background 0.14s var(--ease);
 }
-.oc-convs .antd-conversations-item:hover .antd-conversations-menu-icon,
-.oc-convs .antd-conversations-item:has(.ant-dropdown-open) .antd-conversations-menu-icon,
-.oc-convs .antd-conversations-menu-icon.ant-dropdown-open {
+.oc-sidebar .oc-convs .antd-conversations-item:hover .antd-conversations-menu-icon,
+.oc-sidebar .oc-convs .antd-conversations-item:has(.ant-dropdown-open) .antd-conversations-menu-icon,
+.oc-sidebar .oc-convs .antd-conversations-item .antd-conversations-menu-icon.ant-dropdown-open {
   opacity: 1;
   pointer-events: auto;
 }
-.oc-convs .antd-conversations-menu-icon:hover,
-.oc-convs .antd-conversations-menu-icon.ant-dropdown-open {
+.oc-sidebar .oc-convs .antd-conversations-item .antd-conversations-menu-icon:hover,
+.oc-sidebar .oc-convs .antd-conversations-item .antd-conversations-menu-icon.ant-dropdown-open {
   background: var(--active);
   color: var(--text);
 }

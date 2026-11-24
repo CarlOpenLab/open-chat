@@ -16,7 +16,6 @@
     "test": "go test ./..."
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.9.0",
     "@antdv-next/icons": "^1.0.6",
     "@antdv-next/x": "1.2.7",
     "@antdv-next/x-markdown": "0.3.0",

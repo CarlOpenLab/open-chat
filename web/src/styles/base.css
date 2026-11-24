@@ -373,3 +373,40 @@ kbd,
   font-size: 12.5px;
   line-height: 1.62;
 }
+.oc-md.oc-md-reasoning {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+.oc-md.oc-md-reasoning p {
+  margin: 0 0 0.5em;
+}
+.oc-md.oc-md-reasoning strong {
+  font-weight: 560;
+  color: var(--text);
+}
+.oc-md.oc-md-reasoning h1,
+.oc-md.oc-md-reasoning h2,
+.oc-md.oc-md-reasoning h3,
+.oc-md.oc-md-reasoning h4 {
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0.75em 0 0.35em;
+}
+.oc-md.oc-md-reasoning ul,
+.oc-md.oc-md-reasoning ol {
+  margin: 0 0 0.5em;
+  padding-left: 1.35em;
+}
+.oc-md.oc-md-reasoning li {
+  margin: 0.14em 0;
+}
+.oc-md.oc-md-reasoning blockquote {
+  margin: 0 0 0.5em;
+  padding: 2px 0 2px 10px;
+}
+.oc-md.oc-md-reasoning pre.oc-plain-code,
+.oc-md.oc-md-reasoning pre:has(> .antd-code-highlighter) {
+  margin: 0.35em 0 0.6em;
+}

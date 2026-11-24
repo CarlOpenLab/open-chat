@@ -47,8 +47,6 @@ open-chat serve -no-auth            # localhost / trusted LAN only
 
 In serve mode every Host API method maps to `POST /api/call/<Method>`, and pushes ride a `GET /api/push` SSE stream — no IPC, so the page code never forks (`web/src/api.ts` branches once, via `isMyGo()`).
 
-Haven't installed any agents yet? Development builds ship with a built-in **Demo Agent** (thinking, plans, tool calls, diffs, permission requests, streaming markdown — the whole show), and production builds can enable it with `OPEN_CHAT_DEMO=1`.
-
 ## How it works
 
 Go owns the desktop; Node owns the protocol — the ACP ecosystem already lives in Node, so the sidecar is compiled to a single `.mjs` and embedded with `go:embed`. At runtime it lands one file in a cache directory; users never run `pnpm install`. Between the two layers there is exactly one protocol: NDJSON.
@@ -95,7 +93,7 @@ pnpm dev:web           # then in another terminal: open-chat serve -no-auth
 
 ```bash
 pnpm build             # mygo build: installers under build/<os>-<arch>/
-go test ./...          # host flow — really spawns node + sidecar + demo agent
+go test ./...          # host flow — really spawns node + sidecar
 ```
 
 | Path | What's inside |
@@ -103,7 +101,6 @@ go test ./...          # host flow — really spawns node + sidecar + demo agent
 | `main.go` | entry: `open-chat` (desktop) / `open-chat serve` (web) |
 | `internal/host/` | sessions, persistence, sidecar process management, Host API, HTTP service |
 | `sidecar/src/main.ts` | acp-hub host: open / prompt / cancel / permission / setMode / setConfig |
-| `sidecar/src/demo-agent.ts` | the built-in demo agent — a complete ACP agent implementation |
 | `web/src/` | Vue frontend (antdv-next + @antdv-next/x) |
 | `site/` | landing page, deployed to GitHub Pages |
 | `internal/webdist/` | embedded frontend build |

@@ -17,7 +17,6 @@
 import { existsSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
 import {
   AcpAgentAdapter,
   AcpSession,
@@ -29,7 +28,6 @@ import {
 import { CLAUDE_CODE_ACP_DEFAULT } from "@cc-heart/acp-hub-adapter-claude";
 import { CODEX_ACP_DEFAULT } from "@cc-heart/acp-hub-adapter-codex";
 import { OH_MY_PI_ACP_DEFAULT } from "@cc-heart/acp-hub-adapter-pi";
-import { runDemoAgent } from "./demo-agent.js";
 
 // ---------------------------------------------------------------- protocol
 
@@ -56,8 +54,6 @@ export interface AgentPreset {
   /** Executable whose presence on PATH means the agent can run. */
   probe: string;
   homepage: string;
-  /** Hidden unless the host runs with demo agents enabled. */
-  demo?: boolean;
 }
 
 function send(frame: unknown): void {
@@ -73,8 +69,6 @@ function log(level: string, message: string): void {
 }
 
 // ----------------------------------------------------------------- catalog
-
-const selfPath = fileURLToPath(import.meta.url);
 
 export function catalog(): AgentPreset[] {
   return [
@@ -122,16 +116,6 @@ export function catalog(): AgentPreset[] {
       args: ["--profile", "acp"],
       probe: "dsh",
       homepage: "https://github.com/deepseek-ai/deepseek-harness",
-    },
-    {
-      id: "demo",
-      name: "Demo Agent",
-      description: "内置演示 agent：思考、计划、工具调用、权限请求全流程",
-      command: process.execPath,
-      args: [selfPath, "--demo-agent"],
-      probe: process.execPath,
-      homepage: "",
-      demo: true,
     },
   ];
 }
@@ -675,8 +659,4 @@ function serve(): void {
   notify("ready", { version: "0.1.0", node: process.version });
 }
 
-if (process.argv.includes("--demo-agent")) {
-  runDemoAgent();
-} else {
-  serve();
-}
+serve();
