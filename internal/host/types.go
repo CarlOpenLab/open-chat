@@ -53,7 +53,6 @@ type AgentInfo struct {
 	// Resolved is where it was found.
 	Resolved string `json:"resolved,omitempty"`
 	Custom   bool   `json:"custom,omitempty"`
-	Demo     bool   `json:"demo,omitempty"`
 	Disabled bool   `json:"disabled,omitempty"`
 }
 
@@ -65,7 +64,6 @@ type preset struct {
 	Args        []string `json:"args"`
 	Probe       string   `json:"probe"`
 	Homepage    string   `json:"homepage"`
-	Demo        bool     `json:"demo"`
 }
 
 // Meta describes a conversation in the sidebar.

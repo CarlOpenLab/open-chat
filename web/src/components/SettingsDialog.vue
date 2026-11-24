@@ -398,14 +398,13 @@ function toggleCmdEditor(id: string) {
                   <ProviderIcon :id="a.id" :name="a.name" :size="15" />
                 </span>
                 <span class="text-[13px] fw-550 text-ink">{{ a.name }}</span>
-                <Tag v-if="a.demo" color="blue" :bordered="false" class="m-0 text-[10.5px] leading-[18px]">演示</Tag>
-                <Tag v-else-if="a.custom" :bordered="false" class="m-0 text-[10.5px] leading-[18px]">自定义</Tag>
+                <Tag v-if="a.custom" :bordered="false" class="m-0 text-[10.5px] leading-[18px]">自定义</Tag>
                 <span class="inline-flex items-center gap-[5px] text-[11.5px]" :class="a.available ? 'text-ok' : 'text-ink-3'">
                   <i class="w-[5px] h-[5px] rounded-full" :class="a.available ? 'bg-ok opacity-100' : 'bg-ink-3 opacity-55'" />
                   {{ a.available ? "已就绪" : "未安装" }}
                 </span>
                 <span class="flex-1" />
-                <Tooltip v-if="!a.custom && !a.demo" title="自定义启动命令">
+                <Tooltip v-if="!a.custom" title="自定义启动命令">
                   <button
                     class="inline-grid place-items-center w-6 h-6 border-0 rounded-[6px] cursor-pointer text-[12px] transition-colors duration-120"
                     :class="
@@ -426,7 +425,7 @@ function toggleCmdEditor(id: string) {
                 />
               </div>
 
-              <div v-if="!a.custom && !a.demo && (editingCmd[a.id] || overrideOf(a.id).command)" class="mt-2">
+              <div v-if="!a.custom && (editingCmd[a.id] || overrideOf(a.id).command)" class="mt-2">
                 <Input
                   size="small"
                   class="font-mono"

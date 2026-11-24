@@ -55,10 +55,6 @@ func dataDirs() (data, cache string) {
 	return filepath.Join(cfg, "open-chat"), filepath.Join(c, "open-chat")
 }
 
-func demoEnabled() bool {
-	return os.Getenv("OPEN_CHAT_DEMO") == "1" || mygo.IsDev()
-}
-
 func main() {
 	// `mygo generate` runs the app to write the bindings; it needs no sidecar.
 	if len(sidecar.Script()) == 0 && os.Getenv("MYGO_GENERATE") == "" {
@@ -87,7 +83,6 @@ func desktop() {
 		CacheDir:     cache,
 		Version:      appVersion(),
 		Mode:         "desktop",
-		Demo:         demoEnabled(),
 		Push:         func(p host.Push) { PushEvent.Broadcast(p) },
 		CheckUpdates: func() { updater.CheckForUpdates() },
 		PickFolder: func(ctx context.Context) (string, error) {
@@ -200,7 +195,6 @@ func serve(args []string) {
 	addr := fl.String("addr", "127.0.0.1:4310", "listen address")
 	token := fl.String("token", os.Getenv("OPEN_CHAT_TOKEN"), "access token (default: random; empty with -no-auth)")
 	noAuth := fl.Bool("no-auth", false, "serve without an access token (only on trusted networks)")
-	demo := fl.Bool("demo", os.Getenv("OPEN_CHAT_DEMO") == "1", "list the scripted demo agent")
 	dist := fl.String("dist", "", "serve the frontend from this directory instead of the embedded one")
 	_ = fl.Parse(args)
 
@@ -215,7 +209,7 @@ func serve(args []string) {
 	}
 	defer release()
 	hub := host.NewHub()
-	h, err := host.New(host.Options{DataDir: data, CacheDir: cache, Version: appVersion(), Mode: "web", Demo: *demo, Push: hub.Push})
+	h, err := host.New(host.Options{DataDir: data, CacheDir: cache, Version: appVersion(), Mode: "web", Push: hub.Push})
 	if err != nil {
 		log.Fatal(err)
 	}

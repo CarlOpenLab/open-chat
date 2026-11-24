@@ -30,8 +30,6 @@ type Options struct {
 	CacheDir string
 	Version  string
 	Mode     string // desktop | web
-	// Demo lists the scripted demo agent among the agents.
-	Demo bool
 	// Push delivers updates to every page.
 	Push func(Push)
 	// Desktop integrations; nil in web mode.
@@ -251,12 +249,9 @@ func (h *Host) agents() []AgentInfo {
 	env := h.environ()
 	out := []AgentInfo{}
 	for _, p := range presets {
-		if p.Demo && !h.opts.Demo {
-			continue
-		}
 		a := AgentInfo{
 			ID: p.ID, Name: p.Name, Description: p.Description, Command: p.Command, Args: p.Args,
-			Homepage: p.Homepage, Probe: p.Probe, Demo: p.Demo,
+			Homepage: p.Homepage, Probe: p.Probe,
 		}
 		if o, ok := s.Agents[p.ID]; ok {
 			a.Disabled = o.Disabled

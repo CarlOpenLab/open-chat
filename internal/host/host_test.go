@@ -1,11 +1,9 @@
 package host
 
 import (
-	"context"
 	"os/exec"
-	"sync"
+	"slices"
 	"testing"
-	"time"
 
 	"github.com/CarlOpenLab/open-chat/internal/sidecar"
 )
@@ -56,9 +54,7 @@ func TestCompactFoldsStreaming(t *testing.T) {
 	}
 }
 
-// TestDemoConversation runs a whole turn against the scripted demo agent:
-// connect, send, answer the permission request, and the stored transcript.
-func TestDemoConversation(t *testing.T) {
+func TestSidecarAgentCatalog(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}
@@ -66,104 +62,21 @@ func TestDemoConversation(t *testing.T) {
 		t.Skip("sidecar not built (pnpm build:sidecar)")
 	}
 	dir := t.TempDir()
-	var mu sync.Mutex
-	var pushes []Push
-	turnEnd := make(chan Event, 1)
-	var api *API
-	h, err := New(Options{DataDir: dir, CacheDir: dir, Mode: "web", Demo: true, Push: func(p Push) {
-		mu.Lock()
-		pushes = append(pushes, p)
-		mu.Unlock()
-		for _, e := range p.Events {
-			switch e["type"] {
-			case "permission_request":
-				opts := e["options"].([]any)
-				first := opts[0].(map[string]any)["optionId"].(string)
-				go func(rid string) { _ = api.Respond(context.Background(), p.ConversationID, rid, first) }(e["requestId"].(string))
-			case "turn_end":
-				turnEnd <- e
-			}
-		}
-	}})
+	h, err := New(Options{DataDir: dir, CacheDir: dir, Mode: "web"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer h.Close()
-	api = NewAPI(h)
-
-	m, err := h.create("demo", dir)
-	if err != nil {
+	if _, err := h.sidecar(); err != nil {
 		t.Fatal(err)
 	}
-	st, err := api.Connect(context.Background(), m.ID)
-	if err != nil {
-		t.Fatal(err)
+	var agentIDs []string
+	for _, agent := range NewAPI(h).Agents() {
+		agentIDs = append(agentIDs, agent.ID)
 	}
-	if st.Status != "ready" || st.Modes == nil || len(st.ConfigOptions) != 2 {
-		t.Fatalf("live state = %+v", st)
-	}
-	if err := api.SetConfig(context.Background(), m.ID, "model", "demo-opus"); err != nil {
-		t.Fatal(err)
-	}
-	if err := api.Send(context.Background(), m.ID, []Block{{"type": "text", "text": "把 greet 改一下"}}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case e := <-turnEnd:
-		if e["stopReason"] != "end_turn" {
-			t.Fatalf("turn ended with %v", e)
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("turn never ended")
-	}
-	h.store.flush()
-	// The model picked mid-conversation must survive a store reload, so a
-	// fresh session can re-apply it instead of falling back to the default.
-	reloaded, err := openStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	saved, ok := reloaded.meta(m.ID)
-	if !ok || saved.ModelConfigID != "model" || saved.ModelValue != "demo-opus" {
-		t.Fatalf("saved model = %+v (ok=%v)", saved, ok)
-	}
-	conv, _ := api.Open(m.ID)
-	seen := map[string]int{}
-	for _, e := range conv.Events {
-		seen[e["type"].(string)]++
-	}
-	if seen["user_message"] != 1 || seen["turn_end"] != 1 || seen["tool_call"] != 4 || seen["plan"] != 1 || seen["permission_request"] != 1 {
-		t.Fatalf("transcript = %v", seen)
-	}
-	if conv.Meta.Title == "新对话" {
-		t.Fatalf("title not set")
-	}
-	if conv.Live.Status != "ready" {
-		t.Fatalf("status after turn = %s", conv.Live.Status)
-	}
-
-	// A fresh host resumes the stored session.
-	h.Close()
-	h2, err := New(Options{DataDir: dir, CacheDir: dir, Mode: "web", Demo: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer h2.Close()
-	st2, err := NewAPI(h2).Connect(context.Background(), m.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !st2.Resumed {
-		t.Fatalf("expected the demo session to resume")
-	}
-	// The model chosen before the restart must be the one shown on re-entry.
-	for _, raw := range st2.ConfigOptions {
-		if opt, ok := raw.(map[string]any); ok && opt["id"] == "model" {
-			if got := opt["currentValue"]; got != "demo-opus" {
-				t.Fatalf("model after reconnect = %v, want demo-opus", got)
-			}
-			break
-		}
+	want := []string{"claude-code", "codex", "codebuddy", "qoder", "oh-my-pi", "pi", "dsh"}
+	if !slices.Equal(agentIDs, want) {
+		t.Fatalf("agent IDs = %v, want %v", agentIDs, want)
 	}
 }
 
@@ -173,7 +86,7 @@ func TestArchivePersistsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.create(Meta{ID: "c1", Title: "hello", AgentID: "demo", AgentName: "Demo", Cwd: dir, CreatedAt: 1, UpdatedAt: 1})
+	st.create(Meta{ID: "c1", Title: "hello", AgentID: "codex", AgentName: "Codex", Cwd: dir, CreatedAt: 1, UpdatedAt: 1})
 	h := &Host{store: st, opts: Options{Push: func(Push) {}}, lives: map[string]*live{}}
 	api := NewAPI(h)
 

@@ -7,7 +7,7 @@ const props = defineProps<{
   size?: number;
 }>();
 
-const kind = computed<"claude" | "codex" | "codebuddy" | "qoder" | "pi" | "omp" | "deepseek" | "demo" | "acp">(() => {
+const kind = computed<"claude" | "codex" | "codebuddy" | "qoder" | "pi" | "omp" | "deepseek" | "acp">(() => {
   const s = `${props.id} ${props.name ?? ""}`.toLowerCase();
   if (s.includes("claude")) return "claude";
   if (s.includes("codebuddy")) return "codebuddy";
@@ -16,7 +16,6 @@ const kind = computed<"claude" | "codex" | "codebuddy" | "qoder" | "pi" | "omp" 
   if (s.includes("omp") || s.includes("oh my pi") || s.includes("oh-my-pi")) return "omp";
   if (s === "pi" || /\bpi\b/.test(s)) return "pi";
   if (s.includes("deepseek") || s === "dsh" || /\bdsh\b/.test(s)) return "deepseek";
-  if (s.includes("demo")) return "demo";
   return "acp";
 });
 
@@ -94,7 +93,7 @@ const colorClass = computed(() => {
       />
     </svg>
 
-    <!-- Demo / Custom ACP terminal mark (Lucide Terminal) -->
+    <!-- Custom ACP terminal mark (Lucide Terminal) -->
     <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
       <polyline points="4 17 10 11 4 5" />
       <line x1="12" y1="19" x2="20" y2="19" />

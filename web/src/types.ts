@@ -43,7 +43,6 @@ export interface AgentInfo {
   available: boolean;
   resolved?: string;
   custom?: boolean;
-  demo?: boolean;
   disabled?: boolean;
 }
 

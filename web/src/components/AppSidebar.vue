@@ -6,6 +6,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   InboxOutlined,
+  InfoCircleOutlined,
   MenuFoldOutlined,
   MessageOutlined,
   PushpinFilled,
@@ -307,7 +308,26 @@ async function onAvatarPick(e: Event) {
 
 const avatarMenu = computed(() => ({
   items: [
-    { key: "upload", label: store.userAvatar ? "更换本地头像" : "上传本地头像" },
+    {
+      key: "upload",
+      label: store.userAvatar ? "更换本地头像" : "上传本地头像",
+      extra: h(Tooltip, {
+        title: "头像仅保存在本机",
+        placement: "top",
+        align: { offset: [0, -22] },
+        motion: { name: "" },
+        trigger: ["hover", "focus"],
+        mouseEnterDelay: 0.35,
+      }, {
+        default: () => h("span", {
+          class: "inline-grid place-items-center text-ink-2 cursor-help",
+          tabindex: 0,
+          role: "img",
+          "aria-label": "头像仅保存在本机",
+          onClick: (event: MouseEvent) => event.stopPropagation(),
+        }, [h(InfoCircleOutlined, { "aria-hidden": "true" })]),
+      }),
+    },
     ...(store.userAvatar ? [{ key: "reset", label: "恢复默认头像", danger: true }] : []),
   ],
   onClick: ({ key }: { key: string }) => {
@@ -444,39 +464,37 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         <span>未检测到 Node.js</span>
       </button>
       <div class="flex items-center gap-[5px]">
-        <Dropdown :menu="avatarMenu" :trigger="['click']" placement="topLeft">
-          <Tooltip :title="store.userAvatar ? '点击更换或重置本地头像' : '上传本地头像（仅保存在本机）'" :mouse-enter-delay="0.35">
-            <button
-              class="group/avatar relative w-7 h-7 p-0 rounded-full border border-solid border-line-strong bg-surface text-ink-2 grid place-items-center overflow-hidden cursor-pointer flex-none shadow-card transition-all duration-140 ease-oc hover:border-ink-solid hover:scale-[1.04]"
-              aria-label="用户头像"
+        <Dropdown :menu="avatarMenu" :trigger="['click']" placement="topLeft" root-class="oc-avatar-dropdown" destroy-on-hidden>
+          <button
+            class="group/avatar relative w-7 h-7 p-0 rounded-full border border-solid border-line-strong bg-surface text-ink-2 grid place-items-center overflow-hidden cursor-pointer flex-none shadow-card transition-colors duration-140 ease-oc hover:border-ink-solid"
+            aria-label="用户头像"
+          >
+            <img v-if="store.userAvatar" :src="store.userAvatar" alt="用户头像" class="w-full h-full object-cover block" />
+            <!-- Lucide User -->
+            <svg
+              v-else
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="w-[14px] h-[14px]"
             >
-              <img v-if="store.userAvatar" :src="store.userAvatar" alt="用户头像" class="w-full h-full object-cover block" />
-              <!-- Lucide User -->
-              <svg
-                v-else
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.8"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                class="w-[14px] h-[14px]"
-              >
-                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-                <circle cx="12" cy="7" r="4" />
+              <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+            <span
+              class="absolute inset-0 grid place-items-center bg-[rgba(15,23,42,0.56)] text-white opacity-0 transition-opacity duration-140 group-hover/avatar:opacity-100"
+              aria-hidden="true"
+            >
+              <!-- Lucide Camera -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3">
+                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+                <circle cx="12" cy="13" r="3" />
               </svg>
-              <span
-                class="absolute inset-0 grid place-items-center bg-[rgba(15,23,42,0.56)] text-white opacity-0 transition-opacity duration-140 group-hover/avatar:opacity-100"
-                aria-hidden="true"
-              >
-                <!-- Lucide Camera -->
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3">
-                  <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-                  <circle cx="12" cy="13" r="3" />
-                </svg>
-              </span>
-            </button>
-          </Tooltip>
+            </span>
+          </button>
         </Dropdown>
         <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatarPick" />
 

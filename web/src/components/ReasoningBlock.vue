@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
+import TextBlock from "./TextBlock.vue";
 
 const props = defineProps<{ text: string; live: boolean; durationSec?: number }>();
 
@@ -8,11 +9,6 @@ const title = computed(() => {
   if (props.durationSec != null && props.durationSec >= 1) return `已思考 ${Math.round(props.durationSec)} 秒`;
   return "思考过程";
 });
-
-interface TextRun {
-  text: string;
-  bold: boolean;
-}
 
 // Collapsed by default; expansion is user-controlled only (no auto open/close while streaming).
 const open = ref(false);
@@ -46,32 +42,13 @@ function toggleOpen() {
 const hasContent = computed(() => Boolean(props.text && props.text.trim().length > 0));
 
 /** Normalize raw thought_delta text lazily only after the user opens the block. */
-const lines = computed<TextRun[][]>(() => {
-  if (!everOpened.value) return [];
-  const raw = (props.text ?? "")
+const normalizedText = computed(() => {
+  if (!everOpened.value) return "";
+  return (props.text ?? "")
     .replace(/\r\n/g, "\n")
     .replace(/\*\*\s*\*\*/g, "**\n**")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  if (!raw) return [];
-
-  return raw.split("\n").map((line) => {
-    const runs: TextRun[] = [];
-    const regex = /\*\*([^*]+)\*\*/g;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(line)) !== null) {
-      if (match.index > lastIndex) {
-        runs.push({ text: line.slice(lastIndex, match.index), bold: false });
-      }
-      runs.push({ text: match[1], bold: true });
-      lastIndex = regex.lastIndex;
-    }
-    if (lastIndex < line.length) {
-      runs.push({ text: line.slice(lastIndex), bold: false });
-    }
-    return runs;
-  });
 });
 </script>
 
@@ -119,18 +96,13 @@ const lines = computed<TextRun[][]>(() => {
 
     <div v-if="everOpened" class="collapse-grid" :class="{ 'collapse-grid-open': open }">
       <div class="overflow-hidden min-h-0">
-        <div class="mt-1 mb-[2px] ml-[6px] py-[2px] pl-3 border-0 border-l-[1.5px] border-solid border-line-strong max-h-[260px] overflow-y-auto text-[12.5px] leading-[1.65] text-ink-2 break-words selectable">
-          <p
-            v-for="(line, i) in lines"
-            :key="i"
-            class="last:mb-0"
-            :class="line.length === 0 ? 'h-[6px] m-0' : 'm-0 mb-1'"
-          >
-            <template v-for="(run, j) in line" :key="j">
-              <strong v-if="run.bold" class="fw-560 text-ink">{{ run.text }}</strong>
-              <span v-else>{{ run.text }}</span>
-            </template>
-          </p>
+        <div class="mt-1 mb-[2px] ml-[6px] py-[2px] pl-3 border-0 border-l-[1.5px] border-solid border-line-strong max-h-[260px] overflow-y-auto break-words selectable">
+          <TextBlock
+            v-if="normalizedText"
+            :content="normalizedText"
+            :streaming="live"
+            class-name="oc-md-reasoning"
+          />
         </div>
       </div>
     </div>
