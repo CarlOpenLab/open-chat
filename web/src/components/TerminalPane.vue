@@ -255,6 +255,80 @@ function terminalLinks(term: Terminal, cwd: string): ILinkProvider {
   };
 }
 
+/**
+ * Works around xterm.js 6.0.0's `_keyDownSeen` gate bug on macOS WKWebView/Safari
+ * (xtermjs/xterm.js#5887 & #5374): during rapid overlapping keystrokes or with
+ * IMEs that report keyCode=229 even in English mode (e.g. Doubao / Baidu / macOS IME),
+ * `input` (insertText) fires while `_keyDownSeen` is still true from the previous
+ * key or a held modifier, causing xterm's `_inputEvent` to drop the character and
+ * `CompositionHelper._handleAnyTextareaChanges` to see an empty diff.
+ */
+function patchXtermFastTyping(term: Terminal) {
+  const core = (term as unknown as {
+    _core?: {
+      _keyDown?: (ev: KeyboardEvent) => boolean;
+      _keyPress?: (ev: KeyboardEvent) => boolean;
+      _inputEvent?: (ev: InputEvent) => boolean;
+      _keyDownSeen?: boolean;
+      _keyDownHandled?: boolean;
+      _keyPressHandled?: boolean;
+      _unprocessedDeadKey?: boolean;
+      _compositionHelper?: { _isComposing?: boolean; _isSendingComposition?: boolean };
+      optionsService?: { rawOptions?: { screenReaderMode?: boolean } };
+      coreService?: { triggerDataEvent: (data: string, wasFromUserInput?: boolean) => void };
+      textarea?: HTMLTextAreaElement;
+      cancel?: (ev: Event, force?: boolean) => boolean;
+    };
+  })._core;
+  if (!core || typeof core._inputEvent !== "function") return;
+
+  const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
+
+  if (typeof core._keyDown === "function") {
+    const origKeyDown = core._keyDown.bind(core);
+    core._keyDown = (ev: KeyboardEvent) => {
+      const res = origKeyDown(ev);
+      if (MODIFIER_KEYS.has(ev.key)) {
+        core._keyDownSeen = false;
+      }
+      return res;
+    };
+  }
+
+  if (typeof core._keyPress === "function") {
+    const origKeyPress = core._keyPress.bind(core);
+    core._keyPress = (ev: KeyboardEvent) => {
+      const res = origKeyPress(ev);
+      if (core._keyPressHandled) {
+        queueMicrotask(() => {
+          core._keyPressHandled = false;
+        });
+      }
+      return res;
+    };
+  }
+
+  const origInputEvent = core._inputEvent.bind(core);
+  core._inputEvent = (ev: InputEvent) => {
+    const comp = core._compositionHelper;
+    const isComposing = Boolean(ev.isComposing || comp?._isComposing || comp?._isSendingComposition);
+    const screenReader = Boolean(core.optionsService?.rawOptions?.screenReaderMode);
+    if (ev.data && ev.inputType === "insertText" && !isComposing && !screenReader) {
+      if (core._keyPressHandled || core._keyDownHandled) {
+        return false;
+      }
+      core._unprocessedDeadKey = false;
+      core.coreService?.triggerDataEvent(ev.data, true);
+      if (core.textarea) {
+        core.textarea.value = "";
+      }
+      core.cancel?.(ev);
+      return true;
+    }
+    return origInputEvent(ev);
+  };
+}
+
 function setMountRef(id: string, el: unknown) {
   if (el instanceof HTMLElement) {
     mountRefs.set(id, el);
@@ -296,6 +370,8 @@ function ensureMounted(id: string) {
     void api.termResize(id, cols, rows).catch(() => {});
   });
   term.registerLinkProvider(terminalLinks(term, tabs.value.find((t) => t.id === id)?.cwd ?? props.cwd));
+
+  patchXtermFastTyping(term);
 
   instances.set(id, { term, fit });
 
