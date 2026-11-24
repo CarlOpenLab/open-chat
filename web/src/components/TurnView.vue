@@ -80,19 +80,22 @@ const actionItems = computed<ActionItemType[]>(() => {
 </script>
 
 <template>
-  <div class="turn" :class="{ last: isLast || live }">
+  <div
+    class="oc-turn group pt-[6px] pb-1 [&+.oc-turn]:pt-[18px]"
+    :class="isLast || live ? '[content-visibility:visible]' : '[content-visibility:auto] [contain-intrinsic-size:auto_220px]'"
+  >
     <!-- User Bubble with local custom avatar -->
-    <div v-if="turn.user" class="mine bubble-fade-in">
+    <div v-if="turn.user" class="mine mb-3 animate-oc-bubble-in">
       <Bubble
         placement="end"
         variant="filled"
         shape="corner"
-        class="user-bubble"
+        class="oc-user-bubble w-full"
         :content="userPrompt || ' '"
       >
         <template #avatar>
-          <div class="msg-avatar user-avatar">
-            <img v-if="store.userAvatar" :src="store.userAvatar" alt="用户头像" />
+          <div class="mt-[5px] w-8 h-8 rounded-full inline-flex items-center justify-center overflow-hidden flex-none bg-surface glass-sm border border-solid border-line-strong shadow-card text-ink-2">
+            <img v-if="store.userAvatar" :src="store.userAvatar" alt="用户头像" class="w-full h-full object-cover block" />
             <!-- Lucide User -->
             <svg
               v-else
@@ -102,7 +105,7 @@ const actionItems = computed<ActionItemType[]>(() => {
               stroke-width="1.8"
               stroke-linecap="round"
               stroke-linejoin="round"
-              class="default-user-ic"
+              class="w-[15px] h-[15px]"
             >
               <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
               <circle cx="12" cy="7" r="4" />
@@ -111,58 +114,60 @@ const actionItems = computed<ActionItemType[]>(() => {
         </template>
 
         <template #content>
-          <div class="user-content">
-            <div v-if="userImages.length" class="imgs">
+          <div class="flex flex-col gap-2">
+            <div v-if="userImages.length" class="oc-turn-imgs flex gap-[6px] flex-wrap justify-start">
               <Image
                 v-for="(img, i) in userImages"
                 :key="i"
                 :src="`data:${img.mimeType};base64,${img.data}`"
-                class="user-img"
                 alt="附件图片"
               />
             </div>
-            <div v-if="links.length" class="file-cards">
+            <div v-if="links.length" class="flex gap-[6px] flex-wrap justify-start">
               <FileCard
                 v-for="(l, i) in links"
                 :key="i"
                 :name="l.name"
                 :byte="l.size"
                 size="small"
-                class="oc-file-card"
+                class="max-w-[240px]"
               />
             </div>
-            <div v-if="userPrompt" class="user-text">{{ userPrompt }}</div>
+            <div v-if="userPrompt" class="user-text whitespace-pre-wrap break-words">{{ userPrompt }}</div>
           </div>
         </template>
       </Bubble>
     </div>
 
     <!-- Agent Bubble with provider logo avatar, XMarkdown rendering, and @antdv-next/x Actions -->
-    <div v-if="hasAgentContent" class="theirs bubble-fade-in">
+    <div v-if="hasAgentContent" class="min-w-0 animate-oc-bubble-in">
       <Bubble
         placement="start"
         variant="borderless"
-        class="agent-bubble"
+        class="oc-agent-bubble w-full"
         :content="text || ' '"
       >
         <template #avatar>
-          <div class="msg-avatar agent-avatar" :title="agentName || 'Agent'">
+          <div
+            class="w-8 h-8 rounded-full inline-flex items-center justify-center overflow-hidden flex-none bg-surface glass-sm border border-solid border-line-strong shadow-card text-ink-2"
+            :title="agentName || 'Agent'"
+          >
             <ProviderIcon :id="agentId || ''" :name="agentName" :size="17" />
           </div>
         </template>
 
         <template #header>
-          <div class="agent-row">
-            <span class="agent-label">{{ agentName || "Agent" }}</span>
-            <span v-if="streaming" class="agent-live">
-              <span class="live-dot" />
+          <div class="flex items-center gap-[7px] h-8 leading-none">
+            <span class="text-[12.5px] fw-580 text-ink-2">{{ agentName || "Agent" }}</span>
+            <span v-if="streaming" class="inline-flex items-center gap-[5px] text-[11px] text-ink-3">
+              <span class="w-[5px] h-[5px] rounded-full bg-ok animate-[oc-pulse_1.2s_ease-in-out_infinite]" />
               <span>处理中</span>
             </span>
           </div>
         </template>
 
         <template #content>
-          <div class="agent-body">
+          <div class="min-w-0">
             <template v-for="(seg, si) in turn.segments" :key="seg.id">
               <ReasoningBlock
                 v-if="seg.kind === 'thought'"
@@ -172,18 +177,34 @@ const actionItems = computed<ActionItemType[]>(() => {
               />
               <PlanCard v-else-if="seg.kind === 'plan'" :entries="seg.entries" />
               <ToolChain v-else-if="seg.kind === 'tools'" :calls="seg.calls" :live="streaming" />
-              <div v-else-if="seg.kind === 'notice'" class="notice" :class="seg.level">{{ seg.text }}</div>
-              <div v-else-if="seg.kind === 'text'" class="answer">
+              <div
+                v-else-if="seg.kind === 'notice'"
+                class="notice flex items-center gap-[7px] text-[12.5px] mt-[6px] mb-[10px]"
+                :class="
+                  seg.level === 'error'
+                    ? 'text-err bg-err-soft rounded-[8px] px-[10px] py-[7px]'
+                    : seg.level === 'warn'
+                      ? 'text-warn'
+                      : 'text-ink-2'
+                "
+              >
+                {{ seg.text }}
+              </div>
+              <div v-else-if="seg.kind === 'text'" class="mb-[6px]">
                 <TextBlock :content="seg.text" :streaming="streaming && si === turn.segments.length - 1" />
               </div>
             </template>
 
-            <div v-if="streaming && !hasAnswer && turn.segments.length === 0" class="working">
-              <span class="dots"><i /><i /><i /></span>
+            <div v-if="streaming && !hasAnswer && turn.segments.length === 0" class="flex items-center gap-2 text-[13px] text-ink-3 pt-[2px] pb-[6px]">
+              <span class="inline-flex gap-[3px]">
+                <i class="w-[4.5px] h-[4.5px] rounded-full bg-ink-3 animate-[oc-pulse_1.2s_ease-in-out_infinite]" />
+                <i class="w-[4.5px] h-[4.5px] rounded-full bg-ink-3 animate-[oc-pulse_1.2s_ease-in-out_infinite] [animation-delay:0.15s]" />
+                <i class="w-[4.5px] h-[4.5px] rounded-full bg-ink-3 animate-[oc-pulse_1.2s_ease-in-out_infinite] [animation-delay:0.3s]" />
+              </span>
               <span class="shimmer-text">正在思考并准备执行…</span>
             </div>
 
-            <div v-if="failed" class="notice error">
+            <div v-if="failed" class="notice flex items-center gap-[7px] text-[12.5px] mt-[6px] mb-[10px] text-err bg-err-soft rounded-[8px] px-[10px] py-[7px]">
               <WarningOutlined />
               <span>
                 {{
@@ -192,271 +213,22 @@ const actionItems = computed<ActionItemType[]>(() => {
                 }}
               </span>
             </div>
-            <div v-else-if="turn.end?.stopReason === 'cancelled' && !streaming" class="notice info">已停止生成</div>
+            <div v-else-if="turn.end?.stopReason === 'cancelled' && !streaming" class="notice flex items-center gap-[7px] text-[12.5px] text-ink-2 mt-[6px] mb-[10px]">
+              已停止生成
+            </div>
           </div>
         </template>
 
         <template v-if="!streaming && hasAnswer" #footer>
-          <div class="foot" :class="{ visible: isLast }">
+          <div
+            class="flex items-center gap-1 h-[26px] transition-opacity duration-150 ease-oc group-hover:opacity-100"
+            :class="isLast ? 'opacity-72' : 'opacity-0'"
+          >
             <Actions :items="actionItems" variant="borderless" class="oc-actions" />
-            <span v-if="durationText" class="took mono">{{ durationText }}</span>
+            <span v-if="durationText" class="text-[11px] text-ink-3 ml-1 font-mono">{{ durationText }}</span>
           </div>
         </template>
       </Bubble>
     </div>
   </div>
 </template>
-
-<style scoped>
-.turn {
-  padding: 6px 0 4px;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 220px;
-}
-.turn.last {
-  content-visibility: visible;
-}
-.turn + .turn {
-  padding-top: 18px;
-}
-@keyframes oc-bubble-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.992);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-.bubble-fade-in {
-  animation: oc-bubble-fade-in 0.26s var(--ease) both;
-}
-
-.msg-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  flex: none;
-  background: var(--surface);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-card);
-  color: var(--text-2);
-}
-.user-avatar {
-  margin-top: 5px;
-}
-.user-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.default-user-ic {
-  width: 15px;
-  height: 15px;
-}
-.agent-avatar {
-  border-radius: 50%;
-}
-
-/* Shared Bubble avatar column alignment */
-.user-bubble :deep(.antd-bubble-avatar),
-.agent-bubble :deep(.antd-bubble-avatar) {
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  min-width: 32px;
-  flex: none;
-}
-
-/* User Bubble */
-.mine {
-  margin-bottom: 12px;
-}
-.user-bubble {
-  width: 100%;
-}
-.user-bubble :deep(.antd-bubble-body) {
-  max-width: 74%;
-}
-.user-bubble :deep(.antd-bubble-content) {
-  background: var(--user-bubble) !important;
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-card);
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.66;
-  padding: 10px 15px !important;
-  border-radius: 16px 16px 5px 16px !important;
-}
-.user-content {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.user-text {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.imgs {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-}
-.imgs :deep(.ant-image-img) {
-  max-height: 180px;
-  max-width: 240px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  object-fit: cover;
-  display: block;
-}
-.file-cards {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-}
-.oc-file-card {
-  max-width: 240px;
-}
-
-/* Agent Bubble */
-.theirs {
-  min-width: 0;
-}
-.agent-bubble {
-  width: 100%;
-}
-.agent-bubble :deep(.antd-bubble-body) {
-  flex: 1;
-  min-width: 0;
-  max-width: 100%;
-}
-.agent-bubble :deep(.antd-bubble-content) {
-  padding: 0 !important;
-  background: transparent !important;
-  width: 100%;
-}
-.agent-bubble :deep(.antd-bubble-header) {
-  margin-bottom: 2px;
-}
-.agent-bubble :deep(.antd-bubble-footer) {
-  margin-top: 2px;
-}
-
-.agent-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 32px;
-  line-height: 1;
-}
-.agent-label {
-  font-size: 12.5px;
-  font-weight: 580;
-  color: var(--text-2);
-}
-.agent-live {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: var(--text-3);
-}
-.live-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--ok);
-  animation: oc-pulse 1.2s ease-in-out infinite;
-}
-
-.agent-body {
-  min-width: 0;
-}
-
-.answer {
-  margin: 0 0 6px;
-}
-
-.working {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-3);
-  padding: 2px 0 6px;
-}
-.dots {
-  display: inline-flex;
-  gap: 3px;
-}
-.dots i {
-  width: 4.5px;
-  height: 4.5px;
-  border-radius: 50%;
-  background: var(--text-3);
-  animation: oc-pulse 1.2s ease-in-out infinite;
-}
-.dots i:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.dots i:nth-child(3) {
-  animation-delay: 0.3s;
-}
-
-.notice {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
-  color: var(--text-2);
-  margin: 6px 0 10px;
-}
-.notice.error {
-  color: var(--err);
-  background: var(--err-soft);
-  border-radius: 8px;
-  padding: 7px 10px;
-}
-.notice.warn {
-  color: var(--warn);
-}
-
-.foot {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 26px;
-  opacity: 0;
-  transition: opacity 0.15s var(--ease);
-}
-.foot.visible {
-  opacity: 0.72;
-}
-.turn:hover .foot {
-  opacity: 1;
-}
-.oc-actions :deep(.antd-actions-item) {
-  color: var(--text-3);
-}
-.oc-actions :deep(.antd-actions-item:hover) {
-  color: var(--text);
-}
-.took {
-  font-size: 11px;
-  color: var(--text-3);
-  margin-left: 4px;
-}
-</style>

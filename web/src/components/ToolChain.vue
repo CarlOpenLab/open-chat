@@ -162,58 +162,71 @@ function toggle(id: string) {
 </script>
 
 <template>
-  <div v-if="calls.length" class="chain">
+  <div v-if="calls.length" class="flex flex-col mt-1 mb-3">
     <div
       v-for="(call, idx) in calls"
       :key="call.toolCallId"
-      class="tool-row"
-      :class="{
-        expanded: expandedKeys.has(call.toolCallId),
-        running: call.status === 'pending' || call.status === 'in_progress',
-        failed: call.status === 'failed',
-        last: idx === calls.length - 1,
-      }"
+      class="flex items-stretch gap-2 min-w-0"
     >
       <!-- Left rail: status dot/icon + dashed connector -->
-      <div class="tool-rail">
+      <div class="w-[18px] flex-none flex flex-col items-center pt-1">
         <span
-          class="tool-status-ic"
+          class="inline-flex items-center justify-center w-4 h-4 text-[13.5px] leading-none flex-none"
           :class="
             call.status === 'completed'
-              ? 'completed'
+              ? 'text-ok'
               : call.status === 'failed' || !live
-                ? 'failed'
-                : call.status
+                ? 'text-err'
+                : call.status === 'pending' || call.status === 'in_progress'
+                  ? 'text-ink-2'
+                  : 'text-ink-3'
           "
         >
           <CheckCircleOutlined v-if="call.status === 'completed'" />
           <CloseCircleOutlined v-else-if="call.status === 'failed' || !live" />
           <LoadingOutlined v-else spin />
         </span>
-        <span v-if="idx < calls.length - 1" class="tool-line" />
+        <span
+          v-if="idx < calls.length - 1"
+          class="flex-1 w-0 min-h-1 mt-[2px] -mb-[2px] border-0 border-l border-dashed border-line-strong"
+        />
       </div>
 
       <!-- Right content: left-aligned header + smooth CSS Grid collapse drawer -->
-      <div class="tool-main">
+      <div class="flex-1 min-w-0" :class="idx === calls.length - 1 ? 'pb-0' : 'pb-[2px]'">
         <button
           type="button"
-          class="tool-head"
-          :class="{ clickable: hasDetail(call) }"
+          class="group flex items-center justify-start gap-2 w-full min-h-6 px-1 py-[2px] -ml-1 border-0 rounded-[6px] bg-transparent text-ink-2 text-left transition-colors duration-140 ease-oc"
+          :class="hasDetail(call) ? 'cursor-pointer' : 'cursor-default'"
           :disabled="!hasDetail(call)"
           :aria-expanded="expandedKeys.has(call.toolCallId)"
           @click="hasDetail(call) && toggle(call.toolCallId)"
         >
-          <span class="tool-kind">
+          <span
+            class="inline-flex items-center gap-1 h-5 px-[7px] rounded-[6px] bg-hover border border-solid text-[11px] leading-none flex-none transition-colors duration-140 ease-oc"
+            :class="
+              expandedKeys.has(call.toolCallId) && hasDetail(call)
+                ? 'text-ink border-line-strong'
+                : hasDetail(call)
+                  ? 'text-ink-2 border-line group-hover:text-ink group-hover:border-line-strong'
+                  : 'text-ink-2 border-line'
+            "
+          >
             <component :is="call.kind && KIND_META[call.kind] ? KIND_META[call.kind].icon : () => h(ToolOutlined)" />
             <span>{{ (call.kind && KIND_META[call.kind]?.label) || "工具" }}</span>
           </span>
 
           <span
-            class="tool-title"
-            :class="{
-              mono: call.kind === 'execute',
-              'shimmer-text': live && (call.status === 'pending' || call.status === 'in_progress'),
-            }"
+            class="flex-1 min-w-0 fw-480 text-left truncate transition-colors duration-140 ease-oc"
+            :class="[
+              call.kind === 'execute' ? 'font-mono text-[12px]' : 'text-[12.5px]',
+              live && (call.status === 'pending' || call.status === 'in_progress') ? 'shimmer-text' : '',
+              expandedKeys.has(call.toolCallId) && hasDetail(call)
+                ? 'text-ink'
+                : hasDetail(call)
+                  ? 'text-ink-2 group-hover:text-ink'
+                  : 'text-ink-2',
+            ]"
             :title="titleOf(call)"
           >
             {{ titleOf(call) }}
@@ -223,7 +236,7 @@ function toggle(id: string) {
             v-if="fileBadgeOf(call)"
             role="button"
             tabindex="0"
-            class="tool-file mono"
+            class="flex-none max-w-[150px] text-[11px] text-ink-3 truncate px-[5px] py-[1px] rounded-[5px] cursor-pointer font-mono transition-colors duration-140 ease-oc hover:text-ink hover:bg-hover hover:underline hover:underline-offset-2"
             :title="`在文件树中打开：${call.locations?.[0]?.path}`"
             @click.stop="openLocation(call.locations?.[0]?.path)"
             @keydown.enter.stop.prevent="openLocation(call.locations?.[0]?.path)"
@@ -239,18 +252,30 @@ function toggle(id: string) {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
-            class="tool-chev"
+            class="w-[13px] h-[13px] flex-none ml-auto transition-[transform,color] duration-220 ease-oc"
+            :class="
+              expandedKeys.has(call.toolCallId)
+                ? 'rotate-90 text-ink'
+                : 'text-ink-3 group-hover:text-ink'
+            "
           >
             <polyline points="9 18 15 12 9 6" />
           </svg>
         </button>
 
-        <div v-if="mountedKeys.has(call.toolCallId)" class="tool-collapse" :class="{ open: expandedKeys.has(call.toolCallId) }">
-          <div class="tool-collapse-inner">
-            <div class="tool-detail">
-              <div v-if="call.kind === 'execute' && (commandOf(call) || titleOf(call))" class="cmd-box mono selectable">
-                <span class="cmd-prompt">$</span>
-                <span class="cmd-text">{{ commandOf(call) || titleOf(call) }}</span>
+        <div
+          v-if="mountedKeys.has(call.toolCallId)"
+          class="collapse-grid"
+          :class="{ 'collapse-grid-open': expandedKeys.has(call.toolCallId) }"
+        >
+          <div class="overflow-hidden min-h-0">
+            <div class="flex flex-col gap-[6px] pt-[6px] pb-1 pl-[2px]">
+              <div
+                v-if="call.kind === 'execute' && (commandOf(call) || titleOf(call))"
+                class="flex items-start gap-[7px] px-[10px] py-[7px] rounded-[8px] bg-surface-2 border border-solid border-line text-[11.5px] leading-[1.55] text-ink break-all font-mono selectable"
+              >
+                <span class="text-ink-3 select-none flex-none">$</span>
+                <span class="flex-1 min-w-0 whitespace-pre-wrap">{{ commandOf(call) || titleOf(call) }}</span>
               </div>
 
               <DiffView
@@ -261,8 +286,14 @@ function toggle(id: string) {
                 :path="d.path"
               />
 
-              <pre v-if="textOutputOf(call)" class="out mono selectable">{{ textOutputOf(call) }}</pre>
-              <pre v-else-if="rawInputJsonOf(call)" class="out mono selectable">{{ rawInputJsonOf(call) }}</pre>
+              <pre
+                v-if="textOutputOf(call)"
+                class="m-0 max-h-[260px] overflow-auto text-[11.5px] leading-[1.55] bg-code-bg border border-solid border-line rounded-[8px] px-[10px] py-2 text-ink-2 whitespace-pre-wrap break-words font-mono selectable"
+              >{{ textOutputOf(call) }}</pre>
+              <pre
+                v-else-if="rawInputJsonOf(call)"
+                class="m-0 max-h-[260px] overflow-auto text-[11.5px] leading-[1.55] bg-code-bg border border-solid border-line rounded-[8px] px-[10px] py-2 text-ink-2 whitespace-pre-wrap break-words font-mono selectable"
+              >{{ rawInputJsonOf(call) }}</pre>
             </div>
           </div>
         </div>
@@ -270,228 +301,3 @@ function toggle(id: string) {
     </div>
   </div>
 </template>
-
-<style scoped>
-.chain {
-  display: flex;
-  flex-direction: column;
-  margin: 4px 0 12px;
-}
-
-.tool-row {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
-  min-width: 0;
-}
-
-.tool-rail {
-  width: 18px;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 4px;
-}
-
-.tool-status-ic {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  font-size: 13.5px;
-  line-height: 1;
-  color: var(--text-3);
-  flex: none;
-}
-.tool-status-ic.completed {
-  color: var(--ok);
-}
-.tool-status-ic.failed {
-  color: var(--err);
-}
-.tool-status-ic.pending,
-.tool-status-ic.in_progress {
-  color: var(--text-2);
-}
-
-.tool-line {
-  flex: 1;
-  width: 0;
-  min-height: 4px;
-  margin: 2px 0 -2px;
-  border-left: 1px dashed var(--border-strong);
-}
-
-.tool-main {
-  flex: 1;
-  min-width: 0;
-  padding-bottom: 2px;
-}
-.tool-row.last .tool-main {
-  padding-bottom: 0;
-}
-
-.tool-head {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  width: 100%;
-  min-height: 24px;
-  padding: 2px 4px;
-  margin-left: -4px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-2);
-  text-align: left;
-  cursor: default;
-  transition: color 0.14s var(--ease);
-}
-.tool-head.clickable {
-  cursor: pointer;
-}
-.tool-head.clickable:hover .tool-title,
-.tool-row.expanded .tool-head.clickable .tool-title {
-  color: var(--text);
-}
-.tool-head.clickable:hover .tool-kind,
-.tool-row.expanded .tool-head.clickable .tool-kind {
-  color: var(--text);
-  border-color: var(--border-strong);
-}
-.tool-head.clickable:hover .tool-chev,
-.tool-row.expanded .tool-head.clickable .tool-chev {
-  color: var(--text);
-}
-
-.tool-kind {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 7px;
-  border-radius: 6px;
-  background: var(--hover);
-  border: 1px solid var(--border);
-  color: var(--text-2);
-  font-size: 11px;
-  line-height: 1;
-  flex: none;
-  transition: color 0.14s var(--ease), border-color 0.14s var(--ease);
-}
-
-.tool-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 12.5px;
-  font-weight: 480;
-  color: var(--text-2);
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition: color 0.14s var(--ease);
-}
-.tool-title.mono {
-  font-size: 12px;
-  color: var(--text-2);
-}
-
-.tool-file {
-  flex: none;
-  max-width: 150px;
-  font-size: 11px;
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 1px 5px;
-  border-radius: 5px;
-  cursor: pointer;
-  transition: color 0.14s var(--ease), background 0.14s var(--ease);
-}
-.tool-file:hover {
-  color: var(--text);
-  background: var(--hover);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.tool-chev {
-  width: 13px;
-  height: 13px;
-  color: var(--text-3);
-  flex: none;
-  margin-left: auto;
-  transition: transform 0.22s var(--ease), color 0.14s;
-}
-.tool-row.expanded .tool-chev {
-  transform: rotate(90deg);
-  color: var(--text-2);
-}
-
-/* Smooth CSS Grid collapse transition */
-.tool-collapse {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition: grid-template-rows 0.24s var(--ease), opacity 0.2s ease;
-}
-.tool-collapse.open {
-  grid-template-rows: 1fr;
-  opacity: 1;
-}
-.tool-collapse-inner {
-  overflow: hidden;
-  min-height: 0;
-}
-
-.tool-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px 0 4px 2px;
-}
-
-.cmd-box {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  padding: 7px 10px;
-  border-radius: 8px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  font-size: 11.5px;
-  line-height: 1.55;
-  color: var(--text);
-  word-break: break-all;
-}
-.cmd-prompt {
-  color: var(--text-3);
-  user-select: none;
-  flex: none;
-}
-.cmd-text {
-  flex: 1;
-  min-width: 0;
-  white-space: pre-wrap;
-}
-
-.out {
-  margin: 0;
-  max-height: 260px;
-  overflow: auto;
-  font-size: 11.5px;
-  line-height: 1.55;
-  background: var(--code-bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  color: var(--text-2);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-</style>

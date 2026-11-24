@@ -247,17 +247,5 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="hostRef" class="cm-host" />
+  <div ref="hostRef" class="flex-1 w-full h-full min-h-0 overflow-hidden select-text" />
 </template>
-
-<style scoped>
-.cm-host {
-  flex: 1;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  user-select: text;
-  -webkit-user-select: text;
-}
-</style>

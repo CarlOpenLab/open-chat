@@ -384,82 +384,119 @@ async function refreshFiles() {
 <template>
   <aside
     v-show="props.open"
-    class="ws-panel"
-    :class="{ resizing }"
+    class="flex-none h-full min-h-0 relative flex flex-col bg-sidebar glass border-0 border-l border-solid border-line z-8"
+    :class="{ 'select-none': resizing }"
     :style="{ width: `${store.workspaceWidth}px` }"
   >
-    <div class="ws-resizer" title="拖动调整宽度" @pointerdown="onResizeStart" />
+    <div
+      class="group/resizer absolute top-0 bottom-0 -left-[3px] w-[6px] cursor-col-resize z-20"
+      title="拖动调整宽度"
+      @pointerdown="onResizeStart"
+    >
+      <span
+        class="absolute top-0 bottom-0 left-[2px] w-[2px] transition-colors duration-140"
+        :class="resizing ? 'bg-line-strong' : 'bg-transparent group-hover/resizer:bg-line-strong'"
+      />
+    </div>
 
-    <header class="ws-head">
-      <div class="ws-seg" role="tablist" aria-label="工作区视图">
+    <header class="flex-none h-titlebar flex items-center gap-2 pl-[14px] pr-[10px] border-0 border-b border-solid border-line">
+      <div class="inline-flex items-stretch gap-4 h-full flex-none" role="tablist" aria-label="工作区视图">
         <button
           type="button"
           role="tab"
-          class="ws-seg-btn"
-          :class="{ active: store.workspaceTab === 'files' }"
+          class="relative inline-flex items-center gap-[6px] h-full px-[2px] border-0 bg-transparent text-[12.5px] cursor-pointer transition-colors duration-160 ease-oc"
+          :class="store.workspaceTab === 'files' ? 'text-ink fw-580' : 'text-ink-3 font-medium hover:text-ink-2'"
           :aria-selected="store.workspaceTab === 'files'"
           @click="store.workspaceTab = 'files'"
         >
           <FolderOutlined />
           <span>文件</span>
+          <span
+            class="absolute left-0 right-0 -bottom-[1px] h-[2px] rounded-t-[2px] bg-ink transition-all duration-160 ease-oc"
+            :class="store.workspaceTab === 'files' ? 'opacity-100 scale-x-100' : 'opacity-0 scale-x-50'"
+          />
         </button>
         <button
           type="button"
           role="tab"
-          class="ws-seg-btn"
-          :class="{ active: store.workspaceTab === 'terminal' }"
+          class="relative inline-flex items-center gap-[6px] h-full px-[2px] border-0 bg-transparent text-[12.5px] cursor-pointer transition-colors duration-160 ease-oc"
+          :class="store.workspaceTab === 'terminal' ? 'text-ink fw-580' : 'text-ink-3 font-medium hover:text-ink-2'"
           :aria-selected="store.workspaceTab === 'terminal'"
           @click="store.workspaceTab = 'terminal'"
         >
           <CodeOutlined />
           <span>终端</span>
+          <span
+            class="absolute left-0 right-0 -bottom-[1px] h-[2px] rounded-t-[2px] bg-ink transition-all duration-160 ease-oc"
+            :class="store.workspaceTab === 'terminal' ? 'opacity-100 scale-x-100' : 'opacity-0 scale-x-50'"
+          />
         </button>
       </div>
 
-      <span class="ws-cwd mono" :title="props.cwd">{{ shortFolder }}</span>
+      <span class="flex-1 min-w-0 text-[11px] text-ink-3 truncate text-right font-mono" :title="props.cwd">{{ shortFolder }}</span>
 
-      <div class="ws-acts">
+      <div class="inline-flex items-center gap-[2px] flex-none">
         <Tooltip v-if="store.workspaceTab === 'files'" title="刷新目录" :mouse-enter-delay="0.35">
-          <button type="button" class="ws-ic" :disabled="loadingTree" @click="refreshFiles">
+          <button
+            type="button"
+            class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] bg-transparent text-ink-3 cursor-pointer text-[13px] transition-colors duration-120 hover:not-disabled:bg-hover hover:not-disabled:text-ink disabled:opacity-45 disabled:cursor-not-allowed"
+            :disabled="loadingTree"
+            @click="refreshFiles"
+          >
             <ReloadOutlined :spin="loadingTree" />
           </button>
         </Tooltip>
         <Tooltip v-else title="新建终端" :mouse-enter-delay="0.35">
-          <button type="button" class="ws-ic" @click="onNewTerminal">
+          <button
+            type="button"
+            class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] bg-transparent text-ink-3 cursor-pointer text-[13px] transition-colors duration-120 hover:bg-hover hover:text-ink"
+            @click="onNewTerminal"
+          >
             <PlusOutlined />
           </button>
         </Tooltip>
         <Tooltip title="收起面板" :mouse-enter-delay="0.35">
-          <button type="button" class="ws-ic" @click="emit('close')">
+          <button
+            type="button"
+            class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] bg-transparent text-ink-3 cursor-pointer text-[13px] transition-colors duration-120 hover:bg-hover hover:text-ink"
+            @click="emit('close')"
+          >
             <CloseOutlined />
           </button>
         </Tooltip>
       </div>
     </header>
 
-    <div class="ws-body">
+    <div class="flex-1 min-h-0 flex flex-col">
       <!-- Files Tab -->
-      <div v-show="store.workspaceTab === 'files'" class="ws-files">
-        <div class="ws-filter-bar">
-          <SearchOutlined class="ws-filter-ic" />
+      <div v-show="store.workspaceTab === 'files'" class="flex-1 min-h-0 flex flex-col">
+        <div class="flex-none flex items-center gap-[6px] py-[6px] pr-2 pl-[10px] border-0 border-b border-solid border-line bg-surface-2">
+          <SearchOutlined class="text-[12px] text-ink-3 flex-none" />
           <input
             v-model="filterText"
             type="text"
-            class="ws-filter-input"
+            class="flex-1 min-w-0 border-0 outline-none bg-transparent text-ink text-[12px] leading-[18px] placeholder:text-ink-3 focus-visible:shadow-none"
             placeholder="过滤文件名…"
             @keydown.esc="filterText = ''"
           />
-          <button v-if="filterText" type="button" class="ws-filter-clear" @click="filterText = ''">
+          <button
+            v-if="filterText"
+            type="button"
+            class="inline-grid place-items-center w-4 h-4 border-0 rounded-full bg-hover text-ink-3 text-[9px] cursor-pointer hover:bg-active hover:text-ink"
+            @click="filterText = ''"
+          >
             <CloseOutlined />
           </button>
         </div>
 
-        <div v-if="treeError" class="ws-state err">{{ treeError }}</div>
-        <div v-else-if="loadingTree && tree.length === 0" class="ws-state">
+        <div v-if="treeError" class="flex-1 flex flex-col items-center justify-center gap-2 text-[12.5px] text-err p-6 text-center">
+          {{ treeError }}
+        </div>
+        <div v-else-if="loadingTree && tree.length === 0" class="flex-1 flex flex-col items-center justify-center gap-2 text-[12.5px] text-ink-3 p-6 text-center">
           <Spin size="small" />
           <span>正在读取项目文件…</span>
         </div>
-        <div v-else class="ws-folder-wrap">
+        <div v-else class="flex-1 min-h-0 flex flex-col overflow-hidden">
           <Folder
             :selected-file="selectedFile"
             v-model:expanded-paths="expandedPaths"
@@ -478,7 +515,7 @@ async function refreshFiles() {
       </div>
 
       <!-- Terminal Tab (kept mounted with v-show so running processes stay alive) -->
-      <div v-show="store.workspaceTab === 'terminal'" class="ws-term">
+      <div v-show="store.workspaceTab === 'terminal'" class="flex-1 min-h-0 flex flex-col">
         <TerminalPane
           ref="termPaneRef"
           :cwd="props.cwd"
@@ -488,644 +525,3 @@ async function refreshFiles() {
     </div>
   </aside>
 </template>
-
-<style scoped>
-.ws-panel {
-  flex: none;
-  height: 100%;
-  min-height: 0;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-sidebar);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border-left: 1px solid var(--border);
-  z-index: 8;
-}
-.ws-panel.resizing {
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.ws-resizer {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -3px;
-  width: 6px;
-  cursor: col-resize;
-  z-index: 20;
-}
-.ws-resizer::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 2px;
-  width: 2px;
-  background: transparent;
-  transition: background 0.14s;
-}
-.ws-resizer:hover::after,
-.ws-panel.resizing .ws-resizer::after {
-  background: var(--border-strong);
-}
-
-.ws-head {
-  flex: none;
-  height: var(--titlebar);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px 0 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-.ws-seg {
-  display: inline-flex;
-  align-items: stretch;
-  gap: 16px;
-  height: 100%;
-  flex: none;
-}
-.ws-seg-btn {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 100%;
-  padding: 0 2px;
-  border: none;
-  background: transparent;
-  color: var(--text-3);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: color 0.16s var(--ease);
-}
-.ws-seg-btn::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--text);
-  opacity: 0;
-  transform: scaleX(0.5);
-  transition: opacity 0.16s var(--ease), transform 0.16s var(--ease);
-}
-.ws-seg-btn:hover:not(.active) {
-  color: var(--text-2);
-}
-.ws-seg-btn.active {
-  color: var(--text);
-  font-weight: 580;
-}
-.ws-seg-btn.active::after {
-  opacity: 1;
-  transform: scaleX(1);
-}
-
-.ws-cwd {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: right;
-}
-
-.ws-acts {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex: none;
-}
-.ws-ic {
-  display: inline-grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: 13px;
-  transition: background 0.12s, color 0.12s;
-}
-.ws-ic:hover:not(:disabled) {
-  background: var(--hover);
-  color: var(--text);
-}
-.ws-ic:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.ws-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.ws-files,
-.ws-term {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.ws-filter-bar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px 6px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
-}
-.ws-filter-ic {
-  font-size: 12px;
-  color: var(--text-3);
-  flex: none;
-}
-.ws-filter-input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  line-height: 18px;
-}
-.ws-filter-input:focus-visible {
-  box-shadow: none;
-}
-.ws-filter-input::placeholder {
-  color: var(--text-3);
-}
-.ws-filter-clear {
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border: none;
-  border-radius: 50%;
-  background: var(--hover);
-  color: var(--text-3);
-  font-size: 9px;
-  cursor: pointer;
-}
-.ws-filter-clear:hover {
-  background: var(--active);
-  color: var(--text);
-}
-.ws-filter-act {
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-3);
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.ws-filter-act:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
-.ws-state {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-size: 12.5px;
-  color: var(--text-3);
-  padding: 24px;
-  text-align: center;
-}
-.ws-state.err {
-  color: var(--err);
-}
-
-.ws-folder-wrap {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.oc-folder {
-  height: 100%;
-  width: 100%;
-  border: none !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-}
-.oc-folder :deep(.antd-folder-container) {
-  height: 100%;
-  background: transparent !important;
-}
-.oc-folder :deep(.ant-splitter-bar-dragger::before) {
-  background: var(--border) !important;
-}
-.oc-folder :deep(.ant-splitter-bar-dragger:hover::before),
-.oc-folder :deep(.ant-splitter-bar-dragger-active::before) {
-  background: var(--border-strong) !important;
-}
-.oc-folder :deep(.antd-folder-directory-tree) {
-  height: 100%;
-  background: transparent !important;
-  font-size: 12.5px;
-}
-.oc-folder :deep(.ant-tree) {
-  width: 100%;
-  background: transparent !important;
-  color: var(--text-2);
-  font-size: 12px;
-}
-.oc-folder :deep(.ant-tree-list) {
-  width: 100%;
-  padding: 6px !important;
-}
-.oc-folder :deep(.ant-tree-list-holder),
-.oc-folder :deep(.ant-tree-list-holder-inner) {
-  width: 100%;
-}
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode) {
-  width: 100%;
-  padding: 0 !important;
-  margin-bottom: 1px;
-  align-items: center;
-  border-radius: 5px !important;
-  background: transparent !important;
-}
-.oc-folder :deep(.ant-tree-indent) {
-  align-self: stretch;
-  display: inline-flex;
-}
-.oc-folder :deep(.ant-tree-indent-unit) {
-  width: 13px !important;
-  position: relative;
-}
-.oc-folder :deep(.ant-tree-indent-unit::before) {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 6px;
-  border-left: 1px solid var(--border);
-  opacity: 0.75;
-}
-.oc-folder :deep(.ant-tree-switcher) {
-  width: 16px !important;
-  min-width: 16px;
-  height: 24px;
-  line-height: 24px;
-  margin-inline-end: 1px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-3);
-  font-size: 9px;
-}
-.oc-folder :deep(.ant-tree-switcher-noop) {
-  width: 6px !important;
-  min-width: 6px;
-}
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode .ant-tree-node-content-wrapper) {
-  flex: 1;
-  min-width: 0;
-  display: flex !important;
-  align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  height: 24px;
-  line-height: 24px;
-  padding: 0 6px 0 2px !important;
-  color: var(--text-2);
-  background: transparent !important;
-  overflow: hidden;
-  border-radius: 5px !important;
-}
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode .ant-tree-node-content-wrapper::before) {
-  border-radius: 5px !important;
-  background: transparent !important;
-  transition: background-color 0.12s var(--ease), box-shadow 0.12s var(--ease) !important;
-}
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode:hover .ant-tree-node-content-wrapper) {
-  color: var(--text);
-  background: transparent !important;
-}
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode:hover .ant-tree-node-content-wrapper::before) {
-  background: var(--hover) !important;
-}
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode-selected),
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode-selected:hover) {
-  background: transparent !important;
-}
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper::before),
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode-selected:hover .ant-tree-node-content-wrapper::before) {
-  background: color-mix(in srgb, var(--ink) 10%, transparent) !important;
-  box-shadow: inset 0 0 0 1px var(--border);
-}
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode-selected),
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper),
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-node-content-wrapper:hover),
-.oc-folder :deep(.ant-tree.ant-tree-directory .ant-tree-treenode-selected .ant-tree-switcher) {
-  color: var(--text) !important;
-}
-.oc-folder :deep(.ant-tree-node-selected) {
-  font-weight: 500;
-  background: transparent !important;
-}
-.oc-folder :deep(.ant-tree-iconEle) {
-  flex: none;
-  width: 15px !important;
-  height: 24px;
-  line-height: 24px;
-  display: inline-flex !important;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-3);
-  font-size: 13px;
-}
-.oc-folder :deep(.ws-file-icon) {
-  display: block;
-  flex: none;
-}
-.oc-folder :deep(.ws-file-icon-muted) {
-  filter: saturate(0.42) brightness(0.96);
-  opacity: 0.88;
-}
-.oc-folder :deep(.ws-minimal-ic) {
-  color: var(--text-3);
-  font-size: 13px;
-}
-.oc-folder :deep(.ant-tree-treenode-selected .ws-minimal-ic) {
-  color: var(--text);
-}
-.oc-folder :deep(.ant-tree-title) {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.oc-folder :deep(.antd-folder-directory-tree-item-title) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding-inline-end: 8px !important;
-}
-.oc-folder :deep(.antd-folder-preview) {
-  height: 100%;
-  background: transparent !important;
-}
-.oc-folder :deep(.antd-folder-preview-title-wrapper) {
-  border-bottom: 1px solid var(--border) !important;
-  background: var(--surface-2) !important;
-  padding: 7px 12px !important;
-}
-.oc-folder :deep(.antd-folder-preview-filename) {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--text-2);
-}
-.oc-folder :deep(.antd-folder-preview-content) {
-  font-size: 12px;
-  background: transparent !important;
-  padding: 0 !important;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.oc-folder :deep(.antd-folder-preview-empty-container) {
-  margin-block-start: 0 !important;
-  flex: 1;
-  display: grid;
-  place-content: center;
-}
-.oc-folder :deep(.ws-pv-head) {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  min-height: 24px;
-}
-.oc-folder :deep(.ws-pv-name) {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-.oc-folder :deep(.ws-pv-name .antd-folder-preview-filename) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.oc-folder :deep(.ws-pv-dirty) {
-  flex: none;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--warn);
-}
-.oc-folder :deep(.ws-pv-acts) {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-}
-.oc-folder :deep(.ws-pv-btn) {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 11.5px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-.oc-folder :deep(.ws-pv-btn:hover:not(:disabled)) {
-  background: var(--hover);
-  color: var(--text);
-  border-color: var(--border-strong);
-}
-.oc-folder :deep(.ws-pv-btn.primary) {
-  background: var(--ink);
-  color: var(--ink-inv);
-  border-color: transparent;
-}
-.oc-folder :deep(.ws-pv-btn.primary:hover:not(:disabled)) {
-  opacity: 0.9;
-}
-.oc-folder :deep(.ws-pv-btn:disabled) {
-  opacity: 0.42;
-  cursor: not-allowed;
-}
-.oc-folder :deep(.ws-pv-icon-btn) {
-  display: inline-grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-3);
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.oc-folder :deep(.ws-pv-icon-btn:hover:not(:disabled)) {
-  background: var(--hover);
-  color: var(--text);
-}
-.oc-folder :deep(.ws-pv-icon-btn:disabled) {
-  opacity: 0.42;
-  cursor: not-allowed;
-}
-.oc-folder :deep(.ws-pv-state) {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 24px;
-  font-size: 12.5px;
-  color: var(--text-3);
-  text-align: center;
-}
-.oc-folder :deep(.ws-pv-state.err) {
-  color: var(--err);
-}
-.oc-folder :deep(.ws-pv-state-text) {
-  color: var(--text-3);
-}
-.oc-folder :deep(.ws-editor) {
-  flex: 1;
-  display: flex;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  background: transparent;
-}
-.oc-folder :deep(.ws-editor-gutter) {
-  flex: none;
-  min-width: 40px;
-  padding: 12px 10px 12px 12px;
-  border-right: 1px solid var(--border);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  line-height: 1.64;
-  text-align: right;
-  color: var(--text-3);
-  white-space: pre;
-  overflow: hidden;
-  user-select: none;
-}
-.oc-folder :deep(.ws-editor-input) {
-  flex: 1;
-  min-width: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  padding: 12px 14px;
-  border: none;
-  outline: none;
-  resize: none;
-  background: transparent;
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 12.5px;
-  line-height: 1.64;
-  tab-size: 2;
-  white-space: pre;
-  overflow: auto;
-}
-.oc-folder :deep(.ws-editor-input:focus-visible) {
-  box-shadow: none;
-}
-
-.ws-icon-menu {
-  width: 212px;
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.ws-icon-menu-title {
-  padding: 4px 8px 6px;
-  font-size: 11px;
-  font-weight: 560;
-  color: var(--text-3);
-}
-.ws-icon-opt {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-2);
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.ws-icon-opt:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-.ws-icon-opt.active {
-  background: var(--active);
-  color: var(--text);
-}
-.ws-icon-opt-main {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.ws-icon-opt-label {
-  font-size: 12px;
-  font-weight: 520;
-  line-height: 1.3;
-}
-.ws-icon-opt-desc {
-  font-size: 11px;
-  color: var(--text-3);
-  line-height: 1.3;
-}
-.ws-icon-opt-check {
-  flex: none;
-  font-size: 11.5px;
-  color: var(--text);
-}
-</style>

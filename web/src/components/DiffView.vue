@@ -54,122 +54,49 @@ function openFile() {
 </script>
 
 <template>
-  <div class="diff">
-    <div class="diff-head">
+  <div class="border border-solid border-line rounded-[9px] overflow-hidden bg-code-bg text-[12px]">
+    <div class="flex items-center gap-2 px-[10px] py-[6px] border-0 border-b border-solid border-line bg-surface-2 text-[11.5px]">
       <button
         v-if="props.path"
         type="button"
-        class="file file-link mono"
+        class="text-ink-2 truncate border-0 bg-transparent px-1 py-[1px] -ml-1 rounded-[5px] text-inherit cursor-pointer text-left font-mono transition-colors duration-140 ease-oc hover:text-ink hover:bg-hover hover:underline hover:underline-offset-2"
         :title="`在文件树中打开：${props.path}`"
         @click="openFile"
       >
         {{ name }}
       </button>
-      <span v-else class="file mono">{{ name }}</span>
-      <span class="stat"><span class="add">+{{ stats.add }}</span> <span class="del">−{{ stats.del }}</span></span>
+      <span v-else class="text-ink-2 truncate font-mono">{{ name }}</span>
+      <span class="ml-auto font-mono text-[11px]">
+        <span class="text-diff-add-text">+{{ stats.add }}</span>
+        {{ " " }}
+        <span class="text-diff-del-text">−{{ stats.del }}</span>
+      </span>
     </div>
-    <div class="diff-body mono selectable">
-      <div v-for="(row, i) in shown" :key="i" class="line" :class="row.kind">
-        <span class="sign">{{ row.kind === "add" ? "+" : row.kind === "del" ? "−" : " " }}</span>
-        <span class="text">{{ row.text || " " }}</span>
+    <div class="max-h-[320px] overflow-auto py-1 leading-[1.55] font-mono selectable">
+      <div
+        v-for="(row, i) in shown"
+        :key="i"
+        class="flex gap-[6px] pl-[6px] pr-[10px] whitespace-pre-wrap break-words"
+        :class="
+          row.kind === 'add'
+            ? 'bg-diff-add text-diff-add-text'
+            : row.kind === 'del'
+              ? 'bg-diff-del text-diff-del-text'
+              : 'text-ink-2'
+        "
+      >
+        <span class="flex-none w-[10px] text-center opacity-65 select-none">
+          {{ row.kind === "add" ? "+" : row.kind === "del" ? "−" : " " }}
+        </span>
+        <span class="flex-1">{{ row.text || " " }}</span>
       </div>
-      <button v-if="hidden > 0" class="more" @click="open = true">展开其余 {{ hidden }} 行</button>
+      <button
+        v-if="hidden > 0"
+        class="mx-[10px] mt-1 mb-[6px] border-0 bg-transparent text-accent-text text-[11.5px] cursor-pointer py-[2px] px-0"
+        @click="open = true"
+      >
+        展开其余 {{ hidden }} 行
+      </button>
     </div>
   </div>
 </template>
-
-<style scoped>
-.diff {
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  overflow: hidden;
-  background: var(--code-bg);
-  font-size: 12px;
-}
-.diff-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
-  font-size: 11.5px;
-}
-.file {
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.file-link {
-  border: none;
-  background: transparent;
-  padding: 1px 4px;
-  margin-left: -4px;
-  border-radius: 5px;
-  font-size: inherit;
-  cursor: pointer;
-  text-align: left;
-  transition: color 0.14s var(--ease), background 0.14s var(--ease);
-}
-.file-link:hover {
-  color: var(--text);
-  background: var(--hover);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.stat {
-  margin-left: auto;
-  font-family: var(--mono);
-  font-size: 11px;
-}
-.stat .add {
-  color: var(--diff-add-text);
-}
-.stat .del {
-  color: var(--diff-del-text);
-}
-.diff-body {
-  max-height: 320px;
-  overflow: auto;
-  padding: 4px 0;
-  line-height: 1.55;
-}
-.line {
-  display: flex;
-  gap: 6px;
-  padding: 0 10px 0 6px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.line.add {
-  background: var(--diff-add);
-  color: var(--diff-add-text);
-}
-.line.del {
-  background: var(--diff-del);
-  color: var(--diff-del-text);
-}
-.line.ctx {
-  color: var(--text-2);
-}
-.sign {
-  flex: none;
-  width: 10px;
-  text-align: center;
-  opacity: 0.65;
-  user-select: none;
-}
-.text {
-  flex: 1;
-}
-.more {
-  margin: 4px 10px 6px;
-  border: none;
-  background: transparent;
-  color: var(--accent-text);
-  font-size: 11.5px;
-  cursor: pointer;
-  padding: 2px 0;
-}
-</style>

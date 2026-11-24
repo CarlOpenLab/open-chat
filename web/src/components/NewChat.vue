@@ -75,20 +75,24 @@ const noAgent = computed(() => agents.value.length === 0);
 </script>
 
 <template>
-  <div class="new">
-    <header class="bar">
+  <div class="flex flex-col h-full min-h-0">
+    <header class="h-titlebar flex-none flex items-center gap-1 px-3">
       <Tooltip v-if="store.sidebarCollapsed" :title="`展开侧栏 (${isMac ? '⌘' : 'Ctrl'} B)`" :mouse-enter-delay="0.4">
-        <button class="icon-btn no-drag" :class="{ mac: isMac && store.sidebarCollapsed }" @click="store.sidebarCollapsed = false">
+        <button
+          class="icon-btn no-drag"
+          :class="{ 'ml-[72px]': isMac && store.sidebarCollapsed }"
+          @click="store.sidebarCollapsed = false"
+        >
           <MenuUnfoldOutlined />
         </button>
       </Tooltip>
-      <div class="drag" style="flex: 1; height: 100%" />
+      <div class="drag flex-1 h-full" />
       <WindowControls />
     </header>
 
-    <div class="body rise">
-      <div class="hero">
-        <h1 class="heading">{{ projectTitle }}</h1>
+    <div class="flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center px-7 pb-24 gap-[18px] animate-oc-rise [&>*]:w-full [&>*]:max-w-[680px]">
+      <div class="flex justify-center text-center mb-1">
+        <h1 class="m-0 text-[24px] font-semibold tracking-[-0.025em] text-ink leading-[1.3]">{{ projectTitle }}</h1>
       </div>
 
       <Composer
@@ -110,18 +114,29 @@ const noAgent = computed(() => agents.value.length === 0);
         @stop=""
       />
 
-      <div v-if="noAgent || (current && !current.available)" class="setup">
+      <div
+        v-if="noAgent || (current && !current.available)"
+        class="text-[12px] text-ink-2 bg-surface-2 glass-sm border border-solid border-line rounded-[10px] px-3 py-[9px] leading-[1.65]"
+      >
         <template v-if="noAgent">
           <b>还没有可用的 ACP 供应商。</b>在设置里添加自定义 ACP agent，或安装 Claude Code / Codex 后重试。
         </template>
         <template v-else>
-          <b>{{ current?.name }} 未找到命令 <code class="mono">{{ current?.probe }}</code>。</b>
+          <b>{{ current?.name }} 未找到命令 <code class="font-mono bg-hover px-[5px] py-[1px] rounded-[4px]">{{ current?.probe }}</code>。</b>
           装好后点此重新检测，或在右下角切换其他供应商。
-          <button class="link" @click="refreshAgents">重新检测</button>
+          <button
+            class="border-0 bg-transparent text-ink cursor-pointer text-inherit px-[2px] underline underline-offset-2"
+            @click="refreshAgents"
+          >
+            重新检测
+          </button>
         </template>
       </div>
 
-      <p v-if="store.boot?.nodeError" class="setup err">
+      <p
+        v-if="store.boot?.nodeError"
+        class="m-0 text-[12px] text-err bg-err-soft glass-sm border border-solid border-[color-mix(in_srgb,var(--err)_25%,transparent)] rounded-[10px] px-3 py-[9px] leading-[1.65]"
+      >
         <b>Node.js 不可用：</b>{{ store.boot.nodeError }}
       </p>
     </div>
@@ -129,101 +144,3 @@ const noAgent = computed(() => agents.value.length === 0);
     <FolderPicker v-model:open="folderOpen" :path="cwd" @pick="pickDir" />
   </div>
 </template>
-
-<style scoped>
-.new {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-.bar {
-  height: var(--titlebar);
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 12px;
-}
-.icon-btn {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-}
-.icon-btn:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-.mac {
-  margin-left: 72px;
-}
-
-.body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 0 28px 96px;
-  gap: 18px;
-}
-.body > * {
-  width: 100%;
-  max-width: 680px;
-}
-
-.hero {
-  display: flex;
-  justify-content: center;
-  text-align: center;
-  margin-bottom: 4px;
-}
-.heading {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-  color: var(--text);
-  line-height: 1.3;
-}
-
-.setup {
-  font-size: 12px;
-  color: var(--text-2);
-  background: var(--surface-2);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 9px 12px;
-  line-height: 1.65;
-}
-.setup.err {
-  color: var(--err);
-  background: var(--err-soft);
-  border-color: color-mix(in srgb, var(--err) 25%, transparent);
-}
-.setup code {
-  background: var(--hover);
-  padding: 1px 5px;
-  border-radius: 4px;
-}
-.link {
-  border: none;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  font-size: inherit;
-  padding: 0 2px;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-</style>

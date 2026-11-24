@@ -370,37 +370,47 @@ function toggleCmdEditor(id: string) {
     :footer="null"
     centered
     title="设置"
-    class="settings-modal"
     @cancel="emit('update:open', false)"
   >
-    <Tabs v-model:activeKey="tab" size="small" class="tabs">
+    <Tabs v-model:activeKey="tab" size="small">
       <Tabs.TabPane key="agents" tab="ACP 供应商">
-        <div class="pane">
-          <div class="pane-bar">
-            <span class="hint">已安装且在 PATH 中的 Agent 可直接使用</span>
-            <button class="link" @click="refreshAgents">
+        <div class="flex flex-col gap-2 max-h-[min(54dvh,420px)] overflow-y-auto py-[2px] pr-[2px]">
+          <div class="flex items-center justify-between gap-2 mb-[2px]">
+            <span class="text-[12px] text-ink-3">已安装且在 PATH 中的 Agent 可直接使用</span>
+            <button
+              class="inline-flex items-center gap-1 border-0 bg-transparent text-ink-2 cursor-pointer text-[12px] px-1 py-[2px] rounded-[6px] transition-colors duration-120 hover:bg-hover hover:text-ink"
+              @click="refreshAgents"
+            >
               <ReloadOutlined /> 重新检测
             </button>
           </div>
 
-          <div class="agent-list">
-            <div v-for="a in agents" :key="a.id" class="agent">
-              <div class="agent-head">
-                <span class="agent-ic-box">
+          <div class="flex flex-col gap-[6px]">
+            <div
+              v-for="a in agents"
+              :key="a.id"
+              class="border border-solid border-line rounded-[10px] px-[10px] py-2 bg-hover transition-colors duration-140 hover:border-line-strong"
+            >
+              <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-[7px] bg-modal border border-solid border-line inline-flex items-center justify-center flex-none">
                   <ProviderIcon :id="a.id" :name="a.name" :size="15" />
                 </span>
-                <span class="aname">{{ a.name }}</span>
-                <Tag v-if="a.demo" color="blue" :bordered="false" class="mini-tag">演示</Tag>
-                <Tag v-else-if="a.custom" :bordered="false" class="mini-tag">自定义</Tag>
-                <span class="status-pill" :class="{ ok: a.available }">
-                  <i class="status-dot" />
+                <span class="text-[13px] fw-550 text-ink">{{ a.name }}</span>
+                <Tag v-if="a.demo" color="blue" :bordered="false" class="m-0 text-[10.5px] leading-[18px]">演示</Tag>
+                <Tag v-else-if="a.custom" :bordered="false" class="m-0 text-[10.5px] leading-[18px]">自定义</Tag>
+                <span class="inline-flex items-center gap-[5px] text-[11.5px]" :class="a.available ? 'text-ok' : 'text-ink-3'">
+                  <i class="w-[5px] h-[5px] rounded-full" :class="a.available ? 'bg-ok opacity-100' : 'bg-ink-3 opacity-55'" />
                   {{ a.available ? "已就绪" : "未安装" }}
                 </span>
-                <span class="spacer" />
+                <span class="flex-1" />
                 <Tooltip v-if="!a.custom && !a.demo" title="自定义启动命令">
                   <button
-                    class="cmd-btn"
-                    :class="{ active: editingCmd[a.id] || Boolean(overrideOf(a.id).command) }"
+                    class="inline-grid place-items-center w-6 h-6 border-0 rounded-[6px] cursor-pointer text-[12px] transition-colors duration-120"
+                    :class="
+                      editingCmd[a.id] || Boolean(overrideOf(a.id).command)
+                        ? 'bg-active text-ink'
+                        : 'bg-transparent text-ink-3 hover:bg-active hover:text-ink'
+                    "
                     @click="toggleCmdEditor(a.id)"
                   >
                     <EditOutlined />
@@ -414,10 +424,10 @@ function toggleCmdEditor(id: string) {
                 />
               </div>
 
-              <div v-if="!a.custom && !a.demo && (editingCmd[a.id] || overrideOf(a.id).command)" class="override">
+              <div v-if="!a.custom && !a.demo && (editingCmd[a.id] || overrideOf(a.id).command)" class="mt-2">
                 <Input
                   size="small"
-                  class="mono"
+                  class="font-mono"
                   placeholder="覆盖启动命令（留空使用默认）"
                   :value="overrideOf(a.id).command ?? ''"
                   @change="(e: Event) => setOverride(a.id, { command: (e.target as HTMLInputElement).value, args: [] })"
@@ -426,23 +436,22 @@ function toggleCmdEditor(id: string) {
             </div>
           </div>
 
-          <div class="custom-section">
-            <div class="custom-head">
-              <span class="sub-title">自定义 Agent</span>
+          <div class="mt-1 pt-2 border-0 border-t border-solid border-line">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[12px] fw-550 text-ink-2">自定义 Agent</span>
               <Button size="small" type="text" @click="addCustom">
                 <template #icon><PlusOutlined /></template>
                 添加
               </Button>
             </div>
-            <div v-for="(c, i) in local?.customAgents ?? []" :key="i" class="custom">
-              <Input v-model:value="c.name" placeholder="名称" size="small" style="width: 110px" />
-              <Input v-model:value="c.command" placeholder="命令" size="small" class="mono" style="flex: 1" />
+            <div v-for="(c, i) in local?.customAgents ?? []" :key="i" class="flex gap-[6px] mt-[6px]">
+              <Input v-model:value="c.name" placeholder="名称" size="small" class="w-[110px]" />
+              <Input v-model:value="c.command" placeholder="命令" size="small" class="font-mono flex-1" />
               <Input
                 :value="(c.args ?? []).join(' ')"
                 placeholder="参数"
                 size="small"
-                class="mono"
-                style="flex: 1"
+                class="font-mono flex-1"
                 @change="(e: Event) => (c.args = (e.target as HTMLInputElement).value.split(/\s+/).filter(Boolean))"
               />
               <Button size="small" type="text" danger @click="removeCustom(i)">
@@ -454,19 +463,21 @@ function toggleCmdEditor(id: string) {
       </Tabs.TabPane>
 
       <Tabs.TabPane key="updates" tab="Agent 管理">
-        <div class="pane">
-          <div class="pane-bar">
-            <span class="hint">
-              按本机环境安装、原渠道升级或卸载 Agent
-            </span>
-            <div class="update-actions">
+        <div class="flex flex-col gap-2 max-h-[min(54dvh,420px)] overflow-y-auto py-[2px] pr-[2px]">
+          <div class="flex items-center justify-between gap-2 mb-[2px]">
+            <span class="text-[12px] text-ink-3">按本机环境安装、原渠道升级或卸载 Agent</span>
+            <div class="inline-flex items-center gap-2 flex-none">
               <Tooltip title="开启后允许 mise upgrade --bump 改写全局 config.toml 中钉死的版本号">
-                <label class="bump-toggle">
+                <label class="inline-flex items-center gap-[5px] text-[11.5px] text-ink-3 cursor-pointer">
                   <span>mise bump</span>
                   <Switch v-model:checked="miseBump" size="small" :disabled="inspectingUpdates || anyUpgrading" />
                 </label>
               </Tooltip>
-              <button class="link" :disabled="inspectingUpdates || anyUpgrading" @click="inspectUpdates">
+              <button
+                class="inline-flex items-center gap-1 border-0 bg-transparent text-ink-2 cursor-pointer text-[12px] px-1 py-[2px] rounded-[6px] transition-colors duration-120 hover:not-disabled:bg-hover hover:not-disabled:text-ink disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="inspectingUpdates || anyUpgrading"
+                @click="inspectUpdates"
+              >
                 <ReloadOutlined :spin="inspectingUpdates" /> 检查
               </button>
               <Button
@@ -482,68 +493,105 @@ function toggleCmdEditor(id: string) {
             </div>
           </div>
 
-          <div v-if="upgradingAll && batchProgress" class="update-progress">
-            <div class="update-progress-head">
-              <span class="update-progress-msg">{{ batchProgress.message || "正在批量更新 Agent…" }}</span>
-              <span class="update-progress-pct mono">
+          <div
+            v-if="upgradingAll && batchProgress"
+            class="px-[11px] py-[9px] rounded-[10px] border border-solid border-line-strong bg-surface-2 flex flex-col gap-[6px]"
+          >
+            <div class="flex items-center justify-between gap-2 text-[12px]">
+              <span class="text-ink font-medium truncate">{{ batchProgress.message || "正在批量更新 Agent…" }}</span>
+              <span class="text-[11px] text-ink-3 flex-none font-mono">
                 <template v-if="batchProgress.total > 0">{{ batchProgress.completed }}/{{ batchProgress.total }} · </template>
                 {{ batchProgress.percent }}%
               </span>
             </div>
-            <div class="update-progress-track">
-              <div class="update-progress-fill" :style="{ width: `${Math.max(4, Math.min(100, batchProgress.percent))}%` }" />
+            <div class="h-[5px] rounded-full bg-hover overflow-hidden">
+              <div
+                class="h-full rounded-full bg-ink-solid transition-[width] duration-350 ease-oc"
+                :style="{ width: `${Math.max(4, Math.min(100, batchProgress.percent))}%` }"
+              />
             </div>
           </div>
 
-          <div v-if="!updateReport" class="agent-list">
-            <div v-for="item in initialManagedAgents" :key="item.id" class="agent initializing" aria-disabled="true">
-              <div class="agent-head">
-                <span class="agent-ic-box">
+          <div v-if="!updateReport" class="flex flex-col gap-[6px]">
+            <div
+              v-for="item in initialManagedAgents"
+              :key="item.id"
+              class="border border-dashed border-line rounded-[10px] px-[10px] py-2 bg-hover opacity-62 pointer-events-none"
+              aria-disabled="true"
+            >
+              <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-[7px] bg-modal border border-solid border-line inline-flex items-center justify-center flex-none grayscale-[0.45] opacity-85">
                   <ProviderIcon :id="item.id" :name="item.agent" :size="15" />
                 </span>
-                <span class="aname">{{ item.agent }}</span>
-                <span class="skel-pill skel-ch" aria-hidden="true" />
-                <span class="status-pill init">
-                  <i class="status-dot" />
+                <span class="text-[13px] fw-550 text-ink">{{ item.agent }}</span>
+                <span
+                  class="inline-block w-[34px] h-4 rounded-full bg-[linear-gradient(90deg,var(--hover)_0%,var(--active)_50%,var(--hover)_100%)] bg-[length:200%_100%] animate-[oc-shimmer_1.8s_linear_infinite]"
+                  aria-hidden="true"
+                />
+                <span class="inline-flex items-center gap-[5px] text-[11.5px] text-ink-3">
+                  <i class="w-[5px] h-[5px] rounded-full bg-ink-3 opacity-65 animate-oc-pulse-fast" />
                   <span>{{ inspectingUpdates ? "初始化检测中…" : "等待检测" }}</span>
                 </span>
-                <span class="spacer" />
-                <span class="skel-pill skel-ver" aria-hidden="true" />
-                <Button size="small" disabled class="init-btn">
+                <span class="flex-1" />
+                <span
+                  class="inline-block w-[52px] h-[14px] rounded-full bg-[linear-gradient(90deg,var(--hover)_0%,var(--active)_50%,var(--hover)_100%)] bg-[length:200%_100%] animate-[oc-shimmer_1.8s_linear_infinite]"
+                  aria-hidden="true"
+                />
+                <Button size="small" disabled class="min-w-[58px]">
                   {{ inspectingUpdates ? "检测中" : "未检测" }}
                 </Button>
               </div>
             </div>
           </div>
 
-          <div v-else class="agent-list">
-            <div v-for="r in updateReport.results" :key="r.id" class="agent" :class="{ updating: isAgentUpdating(r.id) }">
-              <div class="agent-head">
-                <span class="agent-ic-box">
+          <div v-else class="flex flex-col gap-[6px]">
+            <div
+              v-for="r in updateReport.results"
+              :key="r.id"
+              class="border border-solid rounded-[10px] px-[10px] py-2 bg-hover transition-colors duration-140 hover:border-line-strong"
+              :class="isAgentUpdating(r.id) ? 'border-line-strong' : 'border-line'"
+            >
+              <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-[7px] bg-modal border border-solid border-line inline-flex items-center justify-center flex-none">
                   <ProviderIcon :id="r.id" :name="r.agent" :size="15" />
                 </span>
-                <span class="aname">{{ r.agent }}</span>
-                <Tag v-if="r.channel" :bordered="false" class="mini-tag mono">
+                <span class="text-[13px] fw-550 text-ink">{{ r.agent }}</span>
+                <Tag v-if="r.channel" :bordered="false" class="m-0 text-[10.5px] leading-[18px] font-mono">
                   {{ channelText(r.channel) }}
                 </Tag>
-                <span v-if="isAgentUpdating(r.id)" class="status-pill busy">
-                  <i class="status-dot" />
+                <span v-if="isAgentUpdating(r.id)" class="inline-flex items-center gap-[5px] text-[11.5px] text-ink-2">
+                  <i class="w-[5px] h-[5px] rounded-full bg-ink-solid opacity-100 animate-[oc-pulse_1.2s_ease-in-out_infinite]" />
                   {{ busyLabelOf(r.id) }}
                 </span>
                 <span
                   v-else
-                  class="status-pill"
-                  :class="{
-                    ok: r.status === 'up-to-date' || r.status === 'ahead' || r.status === 'updated',
-                    warn: r.status === 'outdated' || r.status === 'skipped',
-                    err: r.status === 'failed',
-                  }"
+                  class="inline-flex items-center gap-[5px] text-[11.5px]"
+                  :class="
+                    r.status === 'up-to-date' || r.status === 'ahead' || r.status === 'updated'
+                      ? 'text-ok'
+                      : r.status === 'outdated' || r.status === 'skipped'
+                        ? 'text-warn'
+                        : r.status === 'failed'
+                          ? 'text-err'
+                          : 'text-ink-3'
+                  "
                 >
-                  <i class="status-dot" />
+                  <i
+                    class="w-[5px] h-[5px] rounded-full"
+                    :class="
+                      r.status === 'up-to-date' || r.status === 'ahead' || r.status === 'updated'
+                        ? 'bg-ok opacity-100'
+                        : r.status === 'outdated' || r.status === 'skipped'
+                          ? 'bg-warn opacity-100'
+                          : r.status === 'failed'
+                            ? 'bg-err opacity-100'
+                            : 'bg-ink-3 opacity-55'
+                    "
+                  />
                   {{ statusText(r.status) }}
                 </span>
-                <span class="spacer" />
-                <span v-if="r.current" class="ver-text mono">
+                <span class="flex-1" />
+                <span v-if="r.current" class="text-[11.5px] text-ink-2 whitespace-nowrap font-mono">
                   {{ r.current }}
                   <template v-if="r.target && r.target !== r.current"> → {{ r.target }}</template>
                 </span>
@@ -588,7 +636,7 @@ function toggleCmdEditor(id: string) {
                 </template>
                 <Tooltip v-if="r.canUninstall" :title="`通过 ${channelText(r.channel)} 卸载`">
                   <button
-                    class="cmd-btn danger"
+                    class="inline-grid place-items-center w-6 h-6 border-0 rounded-[6px] bg-transparent text-ink-3 cursor-pointer text-[12px] transition-colors duration-120 hover:not-disabled:bg-err-soft hover:not-disabled:text-err disabled:opacity-40 disabled:cursor-not-allowed"
                     :disabled="upgradingAll || inspectingUpdates || isAgentUpdating(r.id)"
                     @click="uninstallTarget = r"
                   >
@@ -597,28 +645,31 @@ function toggleCmdEditor(id: string) {
                 </Tooltip>
               </div>
 
-              <div v-if="isAgentUpdating(r.id)" class="item-progress">
-                <div class="item-progress-row">
-                  <span class="item-progress-msg">{{ progressOf(r.id)?.message || "正在更新…" }}</span>
-                  <span class="item-progress-pct mono">{{ progressOf(r.id)?.percent ?? 12 }}%</span>
+              <div v-if="isAgentUpdating(r.id)" class="mt-[7px] pt-[6px] border-0 border-t border-dashed border-line flex flex-col gap-[5px]">
+                <div class="flex items-center justify-between gap-2 text-[11px]">
+                  <span class="text-ink-2 truncate">{{ progressOf(r.id)?.message || "正在更新…" }}</span>
+                  <span class="text-ink-3 flex-none font-mono">{{ progressOf(r.id)?.percent ?? 12 }}%</span>
                 </div>
-                <div class="update-progress-track slim">
+                <div class="h-[3.5px] rounded-full bg-hover overflow-hidden">
                   <div
-                    class="update-progress-fill"
+                    class="h-full rounded-full bg-ink-solid transition-[width] duration-350 ease-oc"
                     :style="{ width: `${Math.max(8, Math.min(100, progressOf(r.id)?.percent ?? 12))}%` }"
                   />
                 </div>
               </div>
 
-              <div v-if="r.note || (r.shadowed && r.shadowed.length > 0)" class="update-meta">
-                <div v-if="r.note" class="update-note">{{ r.note }}</div>
-                <div v-if="r.shadowed && r.shadowed.length > 0" class="update-shadow">
+              <div v-if="r.note || (r.shadowed && r.shadowed.length > 0)" class="mt-[6px] pt-[6px] border-0 border-t border-dashed border-line flex flex-col gap-[3px] text-[11.5px] text-ink-3 leading-[1.45]">
+                <div v-if="r.note" class="text-ink-2">{{ r.note }}</div>
+                <div v-if="r.shadowed && r.shadowed.length > 0" class="text-ink-3 break-all">
                   另检测到未生效安装：{{ r.shadowed.map((s) => `${s.channel} (${s.path})`).join("；") }}
                 </div>
               </div>
             </div>
 
-            <div v-if="updateReport.warnings && updateReport.warnings.length > 0" class="update-warnings">
+            <div
+              v-if="updateReport.warnings && updateReport.warnings.length > 0"
+              class="mt-1 px-[10px] py-2 rounded-[8px] bg-hover border border-solid border-line text-[11.5px] text-ink-3 flex flex-col gap-[2px]"
+            >
               <div v-for="(w, idx) in updateReport.warnings" :key="idx">{{ w }}</div>
             </div>
           </div>
@@ -626,25 +677,33 @@ function toggleCmdEditor(id: string) {
       </Tabs.TabPane>
 
       <Tabs.TabPane key="general" tab="偏好">
-        <div v-if="local" class="pane">
-          <section class="row">
-            <div class="label">
-              <div class="title">发送快捷键</div>
-              <div class="desc">输入框内按 Enter 或 Shift + Enter 发送</div>
+        <div v-if="local" class="flex flex-col gap-2 max-h-[min(54dvh,420px)] overflow-y-auto py-[2px] pr-[2px]">
+          <section class="flex items-center gap-[14px] py-[10px] border-0 border-b border-solid border-line last-of-type:border-b-0">
+            <div class="flex-1 min-w-0">
+              <div class="text-[13px] fw-530">发送快捷键</div>
+              <div class="text-[11.5px] text-ink-3 mt-[1px]">输入框内按 Enter 或 Shift + Enter 发送</div>
             </div>
-            <div class="seg-group" role="radiogroup" aria-label="发送快捷键">
+            <div class="inline-flex items-center gap-[2px] p-[3px] rounded-[9px] bg-hover border border-solid border-line-strong flex-none" role="radiogroup" aria-label="发送快捷键">
               <button
                 type="button"
-                class="seg-btn"
-                :class="{ active: local.sendKey === 'enter' }"
+                class="h-[26px] px-[11px] border-0 rounded-[6px] text-[12px] cursor-pointer whitespace-nowrap transition-all duration-160 ease-oc"
+                :class="
+                  local.sendKey === 'enter'
+                    ? 'bg-ink-solid text-ink-inv fw-580 shadow-[0_1px_4px_rgba(0,0,0,0.24)]'
+                    : 'bg-transparent text-ink-2 font-medium hover:text-ink hover:bg-surface-2'
+                "
                 @click="local.sendKey = 'enter'"
               >
                 Enter
               </button>
               <button
                 type="button"
-                class="seg-btn"
-                :class="{ active: local.sendKey !== 'enter' }"
+                class="h-[26px] px-[11px] border-0 rounded-[6px] text-[12px] cursor-pointer whitespace-nowrap transition-all duration-160 ease-oc"
+                :class="
+                  local.sendKey !== 'enter'
+                    ? 'bg-ink-solid text-ink-inv fw-580 shadow-[0_1px_4px_rgba(0,0,0,0.24)]'
+                    : 'bg-transparent text-ink-2 font-medium hover:text-ink hover:bg-surface-2'
+                "
                 @click="local.sendKey = 'modEnter'"
               >
                 ⇧ Shift + Enter
@@ -653,28 +712,28 @@ function toggleCmdEditor(id: string) {
           </section>
 
           <template v-if="store.boot?.mode === 'desktop'">
-            <section class="row">
-              <div class="label">
-                <div class="title">待确认通知（Need You）</div>
-                <div class="desc">窗口在后台或切到其他对话时，Agent 等待确认立即发出系统通知</div>
+            <section class="flex items-center gap-[14px] py-[10px] border-0 border-b border-solid border-line last-of-type:border-b-0">
+              <div class="flex-1 min-w-0">
+                <div class="text-[13px] fw-530">待确认通知（Need You）</div>
+                <div class="text-[11.5px] text-ink-3 mt-[1px]">窗口在后台或切到其他对话时，Agent 等待确认立即发出系统通知</div>
               </div>
               <Switch v-model:checked="local.notifyNeedYou" size="small" />
             </section>
 
-            <section class="row">
-              <div class="label">
-                <div class="title">会话完成通知</div>
-                <div class="desc">窗口在后台或非当前对话完成回复、执行出错时发出系统通知</div>
+            <section class="flex items-center gap-[14px] py-[10px] border-0 border-b border-solid border-line last-of-type:border-b-0">
+              <div class="flex-1 min-w-0">
+                <div class="text-[13px] fw-530">会话完成通知</div>
+                <div class="text-[11.5px] text-ink-3 mt-[1px]">窗口在后台或非当前对话完成回复、执行出错时发出系统通知</div>
               </div>
               <Switch v-model:checked="local.notifyTurnDone" size="small" />
             </section>
 
-            <section class="row">
-              <div class="label">
-                <div class="title">通知提示音</div>
-                <div class="desc">系统桌面通知附带提示音</div>
+            <section class="flex items-center gap-[14px] py-[10px] border-0 border-b border-solid border-line last-of-type:border-b-0">
+              <div class="flex-1 min-w-0">
+                <div class="text-[13px] fw-530">通知提示音</div>
+                <div class="text-[11.5px] text-ink-3 mt-[1px]">系统桌面通知附带提示音</div>
               </div>
-              <div class="row-acts">
+              <div class="inline-flex items-center gap-[10px] flex-none">
                 <Button
                   size="small"
                   :disabled="!local.notifyNeedYou && !local.notifyTurnDone"
@@ -691,29 +750,29 @@ function toggleCmdEditor(id: string) {
             </section>
           </template>
 
-          <section class="row">
-            <div class="label">
-              <div class="title">Node.js 路径</div>
-              <div class="desc">
+          <section class="flex items-center gap-[14px] py-[10px] border-0 border-b border-solid border-line last-of-type:border-b-0">
+            <div class="flex-1 min-w-0">
+              <div class="text-[13px] fw-530">Node.js 路径</div>
+              <div class="text-[11.5px] text-ink-3 mt-[1px]">
                 {{ store.boot?.nodeError || `当前 ${store.boot?.nodeVersion || "未检测到"}，留空默认读 PATH` }}
               </div>
             </div>
-            <Input v-model:value="local.nodePath" size="small" placeholder="默认 PATH" class="mono widen" />
+            <Input v-model:value="local.nodePath" size="small" placeholder="默认 PATH" class="font-mono w-[210px]" />
           </section>
 
-          <section v-if="store.boot?.mode === 'desktop'" class="row">
-            <div class="label">
-              <div class="title">软件更新</div>
-              <div class="desc">每日自动检查一次，发现新版本会弹窗提示</div>
+          <section v-if="store.boot?.mode === 'desktop'" class="flex items-center gap-[14px] py-[10px] border-0 border-b border-solid border-line last-of-type:border-b-0">
+            <div class="flex-1 min-w-0">
+              <div class="text-[13px] fw-530">软件更新</div>
+              <div class="text-[11.5px] text-ink-3 mt-[1px]">每日自动检查一次，发现新版本会弹窗提示</div>
             </div>
             <Button size="small" @click="checkUpdates">检查更新</Button>
           </section>
 
-          <div class="meta-box">
-            <div class="version mono">
+          <div class="mt-2 pt-[10px] border-0 border-t border-solid border-line flex flex-col gap-1">
+            <div class="text-[11.5px] font-medium text-ink-2 font-mono">
               open-chat {{ store.boot?.version || "" }}
             </div>
-            <div class="stack">
+            <div class="text-[11.5px] text-ink-3">
               基于 antdv-next、@antdv-next/x 与 @antdv-next/x-pro 构建
             </div>
           </div>
@@ -721,8 +780,8 @@ function toggleCmdEditor(id: string) {
       </Tabs.TabPane>
     </Tabs>
 
-    <div class="footer">
-      <span class="spacer" />
+    <div class="flex items-center gap-2 pt-3 mt-2 border-0 border-t border-solid border-line">
+      <span class="flex-1" />
       <Button size="small" @click="emit('update:open', false)">取消</Button>
       <Button size="small" type="primary" :loading="saving" @click="save">保存</Button>
     </div>
@@ -739,449 +798,8 @@ function toggleCmdEditor(id: string) {
     @ok="confirmUninstall"
     @cancel="uninstallTarget = null"
   >
-    <p class="muted" style="margin: 0">
+    <p class="text-ink-2 m-0">
       将通过原安装渠道 <b>{{ channelText(uninstallTarget?.channel) }}</b> 卸载 {{ uninstallTarget?.agent }}，不会删除你的历史对话记录。
     </p>
   </Modal>
 </template>
-
-<style scoped>
-.pane {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: min(54dvh, 420px);
-  overflow-y: auto;
-  padding: 2px 2px 2px 0;
-}
-
-.pane-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 2px;
-}
-.hint {
-  font-size: 12px;
-  color: var(--text-3);
-}
-.link {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: none;
-  background: transparent;
-  color: var(--text-2);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 2px 4px;
-  border-radius: 6px;
-  transition: background 0.12s, color 0.12s;
-}
-.link:hover:not(:disabled) {
-  background: var(--hover);
-  color: var(--text);
-}
-.link:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.update-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-}
-.bump-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11.5px;
-  color: var(--text-3);
-  cursor: pointer;
-}
-.update-progress {
-  padding: 9px 11px;
-  border-radius: 10px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-2);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.update-progress-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
-}
-.update-progress-msg {
-  color: var(--text);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.update-progress-pct {
-  font-size: 11px;
-  color: var(--text-3);
-  flex: none;
-}
-.update-progress-track {
-  height: 5px;
-  border-radius: 999px;
-  background: var(--hover);
-  overflow: hidden;
-}
-.update-progress-track.slim {
-  height: 3.5px;
-}
-.update-progress-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--ink);
-  transition: width 0.35s var(--ease);
-}
-.item-progress {
-  margin-top: 7px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.item-progress-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-}
-.item-progress-msg {
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.item-progress-pct {
-  color: var(--text-3);
-  flex: none;
-}
-.agent.updating {
-  border-color: var(--border-strong);
-}
-.status-pill.busy {
-  color: var(--text-2);
-}
-.status-pill.busy .status-dot {
-  background: var(--ink);
-  opacity: 1;
-  animation: oc-pulse 1.2s ease-in-out infinite;
-}
-.agent.initializing {
-  opacity: 0.62;
-  pointer-events: none;
-  border-style: dashed;
-  border-color: var(--border);
-}
-.agent.initializing .agent-ic-box {
-  filter: grayscale(0.45);
-  opacity: 0.85;
-}
-.status-pill.init {
-  color: var(--text-3);
-}
-.status-pill.init .status-dot {
-  background: var(--text-3);
-  opacity: 0.65;
-  animation: oc-pulse 1.4s ease-in-out infinite;
-}
-.skel-pill {
-  display: inline-block;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    var(--hover) 0%,
-    var(--active) 50%,
-    var(--hover) 100%
-  );
-  background-size: 200% 100%;
-  animation: oc-shimmer 1.8s linear infinite;
-}
-.skel-ch {
-  width: 34px;
-  height: 16px;
-}
-.skel-ver {
-  width: 52px;
-  height: 14px;
-}
-.init-btn {
-  min-width: 58px;
-}
-.ver-text {
-  font-size: 11.5px;
-  color: var(--text-2);
-  white-space: nowrap;
-}
-.update-meta {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 11.5px;
-  color: var(--text-3);
-  line-height: 1.45;
-}
-.update-note {
-  color: var(--text-2);
-}
-.update-shadow {
-  color: var(--text-3);
-  word-break: break-all;
-}
-.update-warnings {
-  margin-top: 4px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--hover);
-  border: 1px solid var(--border);
-  font-size: 11.5px;
-  color: var(--text-3);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.agent-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.agent {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px 10px;
-  background: var(--hover);
-  transition: border-color 0.14s;
-}
-.agent:hover {
-  border-color: var(--border-strong);
-}
-.agent-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.agent-ic-box {
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
-  background: var(--modal-bg);
-  border: 1px solid var(--border);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-}
-.aname {
-  font-size: 13px;
-  font-weight: 550;
-  color: var(--text);
-}
-.mini-tag {
-  margin: 0;
-  font-size: 10.5px;
-  line-height: 18px;
-}
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-.status-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--text-3);
-  opacity: 0.55;
-}
-.status-pill.ok {
-  color: var(--ok);
-}
-.status-pill.ok .status-dot {
-  background: var(--ok);
-  opacity: 1;
-}
-.status-pill.warn {
-  color: #d97706;
-}
-.status-pill.warn .status-dot {
-  background: #d97706;
-  opacity: 1;
-}
-.status-pill.err {
-  color: #dc2626;
-}
-.status-pill.err .status-dot {
-  background: #dc2626;
-  opacity: 1;
-}
-
-.cmd-btn {
-  display: inline-grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: 12px;
-  transition: background 0.12s, color 0.12s;
-}
-.cmd-btn:hover:not(:disabled),
-.cmd-btn.active {
-  background: var(--active);
-  color: var(--text);
-}
-.cmd-btn.danger:hover:not(:disabled) {
-  background: var(--err-soft);
-  color: var(--err);
-}
-.cmd-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.override {
-  margin-top: 8px;
-}
-
-.custom-section {
-  margin-top: 4px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-.custom-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
-}
-.sub-title {
-  font-size: 12px;
-  font-weight: 550;
-  color: var(--text-2);
-}
-.custom {
-  display: flex;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-}
-.row:last-of-type {
-  border-bottom: none;
-}
-.label {
-  flex: 1;
-  min-width: 0;
-}
-.title {
-  font-size: 13px;
-  font-weight: 530;
-}
-.desc {
-  font-size: 11.5px;
-  color: var(--text-3);
-  margin-top: 1px;
-}
-.widen {
-  width: 210px;
-}
-.row-acts {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  flex: none;
-}
-
-.seg-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 9px;
-  background: var(--hover);
-  border: 1px solid var(--border-strong);
-  flex: none;
-}
-.seg-btn {
-  height: 26px;
-  padding: 0 11px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.16s var(--ease), color 0.16s var(--ease), box-shadow 0.16s var(--ease);
-}
-.seg-btn:hover:not(.active) {
-  color: var(--text);
-  background: var(--surface-2);
-}
-.seg-btn.active {
-  background: var(--ink);
-  color: var(--ink-inv);
-  font-weight: 580;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.24);
-}
-
-.meta-box {
-  margin-top: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.version {
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--text-2);
-}
-.stack {
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-
-.spacer {
-  flex: 1;
-}
-.footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 12px;
-  margin-top: 8px;
-  border-top: 1px solid var(--border);
-}
-</style>

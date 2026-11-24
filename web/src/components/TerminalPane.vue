@@ -465,224 +465,77 @@ defineExpose({ createTerminal });
 </script>
 
 <template>
-  <div class="term-pane">
-    <div class="term-bar">
-      <div class="term-tabs">
+  <div class="flex flex-col h-full min-h-0">
+    <div class="flex-none flex items-center gap-[6px] px-2 py-[6px] border-0 border-b border-solid border-line bg-surface-2">
+      <div class="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto">
         <button
           v-for="tab in cwdTabs"
           :key="tab.id"
           type="button"
-          class="term-tab"
-          :class="{ active: tab.id === activeId, exited: tab.exited }"
+          class="inline-flex items-center gap-[6px] h-6 pl-2 pr-[7px] rounded-[6px] border border-solid text-[11.5px] cursor-pointer flex-none transition-colors duration-120"
+          :class="
+            tab.id === activeId
+              ? 'bg-surface-strong border-line text-ink'
+              : 'border-transparent bg-transparent text-ink-3 hover:bg-hover hover:text-ink-2'
+          "
           @click="selectTab(tab.id)"
         >
-          <span class="term-dot" :class="{ exited: tab.exited }" />
-          <span class="term-title mono">{{ tab.title }}</span>
-          <span class="term-close" title="关闭终端" @click.stop="closeTerminal(tab.id)">
+          <span
+            class="w-[5px] h-[5px] rounded-full flex-none"
+            :class="tab.exited ? 'bg-ink-3 opacity-60' : 'bg-ok'"
+          />
+          <span class="leading-none font-mono">{{ tab.title }}</span>
+          <span
+            class="inline-grid place-items-center w-[15px] h-[15px] rounded-[4px] text-[9.5px] text-ink-3 opacity-65 transition-all duration-120 hover:opacity-100 hover:bg-active hover:text-ink"
+            title="关闭终端"
+            @click.stop="closeTerminal(tab.id)"
+          >
             <CloseOutlined />
           </span>
         </button>
       </div>
-      <div class="term-acts">
+      <div class="inline-flex items-center gap-[2px] flex-none">
         <Tooltip title="清屏" :mouse-enter-delay="0.35">
-          <button type="button" class="term-ic" :disabled="!activeId" @click="clearActive">
+          <button
+            type="button"
+            class="inline-grid place-items-center w-6 h-6 border-0 rounded-[6px] bg-transparent text-ink-3 cursor-pointer text-[12.5px] transition-colors duration-120 hover:not-disabled:bg-hover hover:not-disabled:text-ink disabled:opacity-40 disabled:cursor-not-allowed"
+            :disabled="!activeId"
+            @click="clearActive"
+          >
             <ClearOutlined />
           </button>
         </Tooltip>
         <Tooltip title="新建终端" :mouse-enter-delay="0.35">
-          <button type="button" class="term-ic" :disabled="creating" @click="createTerminal">
+          <button
+            type="button"
+            class="inline-grid place-items-center w-6 h-6 border-0 rounded-[6px] bg-transparent text-ink-3 cursor-pointer text-[12.5px] transition-colors duration-120 hover:not-disabled:bg-hover hover:not-disabled:text-ink disabled:opacity-40 disabled:cursor-not-allowed"
+            :disabled="creating"
+            @click="createTerminal"
+          >
             <PlusOutlined />
           </button>
         </Tooltip>
       </div>
     </div>
 
-    <div ref="stageRef" class="term-stage">
+    <div ref="stageRef" class="flex-1 min-h-0 relative bg-term px-2 py-[6px] overflow-hidden">
       <div
         v-for="tab in tabs"
         :key="tab.id"
         v-show="tab.cwd === props.cwd && tab.id === activeId"
         :ref="(el) => setMountRef(tab.id, el)"
-        class="term-mount"
+        class="oc-term-mount w-full h-full"
       />
-      <div v-if="cwdTabs.length === 0 && !creating" class="term-empty">
-        <span class="faint">当前项目还没有打开终端</span>
-        <button type="button" class="term-new-btn" @click="createTerminal">
+      <div v-if="cwdTabs.length === 0 && !creating" class="absolute inset-0 flex flex-col items-center justify-center gap-[10px] text-[12.5px]">
+        <span class="text-ink-3">当前项目还没有打开终端</span>
+        <button
+          type="button"
+          class="inline-flex items-center gap-[5px] h-7 px-3 rounded-[8px] border border-solid border-line-strong bg-surface text-ink text-[12px] cursor-pointer transition-colors duration-120 hover:bg-surface-strong"
+          @click="createTerminal"
+        >
           <PlusOutlined /> 新建终端
         </button>
       </div>
     </div>
   </div>
 </template>
-
-<style scoped>
-.term-pane {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-
-.term-bar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
-}
-
-.term-tabs {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow-x: auto;
-}
-
-.term-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 7px 0 8px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-3);
-  font-size: 11.5px;
-  cursor: pointer;
-  flex: none;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-.term-tab:hover {
-  background: var(--hover);
-  color: var(--text-2);
-}
-.term-tab.active {
-  background: var(--surface-strong);
-  border-color: var(--border);
-  color: var(--text);
-}
-
-.term-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--ok);
-  flex: none;
-}
-.term-dot.exited {
-  background: var(--text-3);
-  opacity: 0.6;
-}
-
-.term-title {
-  line-height: 1;
-}
-
-.term-close {
-  display: inline-grid;
-  place-items: center;
-  width: 15px;
-  height: 15px;
-  border-radius: 4px;
-  font-size: 9.5px;
-  color: var(--text-3);
-  opacity: 0.65;
-  transition: background 0.12s, color 0.12s, opacity 0.12s;
-}
-.term-close:hover {
-  opacity: 1;
-  background: var(--active);
-  color: var(--text);
-}
-
-.term-acts {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex: none;
-}
-
-.term-ic {
-  display: inline-grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: 12.5px;
-  transition: background 0.12s, color 0.12s;
-}
-.term-ic:hover:not(:disabled) {
-  background: var(--hover);
-  color: var(--text);
-}
-.term-ic:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.term-stage {
-  --term-bg: #f8fafc;
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  background: var(--term-bg);
-  padding: 6px 8px;
-  overflow: hidden;
-}
-:root[data-theme="dark"] .term-stage {
-  --term-bg: #0d1017;
-}
-
-.term-mount {
-  width: 100%;
-  height: 100%;
-}
-.term-mount :deep(.xterm) {
-  height: 100%;
-  background: var(--term-bg);
-}
-.term-mount :deep(.xterm-viewport) {
-  overflow-y: auto !important;
-  /* xterm.css paints the viewport black; the strip below the last row (or
-     beside the canvas) would show it through instead of the theme. */
-  background-color: var(--term-bg) !important;
-}
-
-.term-empty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  font-size: 12.5px;
-}
-
-.term-new-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
-}
-.term-new-btn:hover {
-  background: var(--surface-strong);
-}
-</style>

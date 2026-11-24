@@ -399,200 +399,240 @@ async function changeDir(path: string) {
 </script>
 
 <template>
-  <div class="chat-layout">
-    <div class="chat">
-    <header class="topbar">
-      <div class="left drag" :class="{ mac: isMac && store.sidebarCollapsed }">
-        <Tooltip v-if="store.sidebarCollapsed" :title="`展开侧栏 (${isMac ? '⌘' : 'Ctrl'} B)`" :mouse-enter-delay="0.4">
-          <button class="icon-btn no-drag" @click="store.sidebarCollapsed = false">
-            <MenuUnfoldOutlined />
-          </button>
-        </Tooltip>
-
-        <div class="title-line">
-          <Input
-            v-if="editing"
-            id="title-edit"
-            v-model:value="titleDraft"
-            size="small"
-            class="title-input no-drag"
-            :maxlength="60"
-            @blur="commitTitle"
-            @press-enter="commitTitle"
-          />
-          <button v-else class="title no-drag" :title="`${meta.title}（双击重命名）`" @dblclick="startEdit">
-            <span class="title-text">{{ meta.title || "新对话" }}</span>
-          </button>
-
-          <span class="agent-badge no-drag">
-            <span class="status-dot" :class="live.status" />
-            <span>{{ meta.agentName }}</span>
-          </span>
-
-          <Tooltip :title="`在文件夹中显示：${meta.cwd}`" :mouse-enter-delay="0.4">
-            <button class="cwd-chip mono no-drag" @click="reveal">
-              <FolderOpenOutlined />
-              <span class="cwd-text">{{ shortCwd }}</span>
+  <div class="flex h-full min-h-0 min-w-0 w-full">
+    <div class="flex-1 min-w-0 flex flex-col h-full min-h-0 relative">
+      <header class="oc-chat-topbar flex-none h-titlebar flex items-center gap-[10px] pl-[18px] pr-3 bg-sidebar glass border-0 border-b border-solid border-line relative z-12">
+        <div class="flex items-center gap-2 min-w-0 flex-1 drag" :class="{ 'pl-[66px]': isMac && store.sidebarCollapsed }">
+          <Tooltip v-if="store.sidebarCollapsed" :title="`展开侧栏 (${isMac ? '⌘' : 'Ctrl'} B)`" :mouse-enter-delay="0.4">
+            <button class="icon-btn text-[14px] no-drag" @click="store.sidebarCollapsed = false">
+              <MenuUnfoldOutlined />
             </button>
           </Tooltip>
-        </div>
-      </div>
 
-      <div class="right no-drag">
-        <Tooltip v-if="contextPct !== null" :title="usageLabel" :mouse-enter-delay="0.3">
-          <div class="ctx" :class="{ high: contextPct > 80 }">
-            <svg viewBox="0 0 20 20" class="ring">
-              <circle cx="10" cy="10" r="8" class="track" />
-              <circle
-                cx="10"
-                cy="10"
-                r="8"
-                class="fill"
-                :style="{ strokeDashoffset: 50.27 - (50.27 * contextPct) / 100 }"
-              />
-            </svg>
-            <span class="ctx-label">{{ contextPct }}%</span>
-          </div>
-        </Tooltip>
-        <Tooltip title="在同目录新建对话" :mouse-enter-delay="0.4">
-          <button class="icon-btn" @click="newSameDir">
-            <PlusOutlined />
-          </button>
-        </Tooltip>
-        <Tooltip :title="meta.pinned ? '取消置顶' : '置顶'" :mouse-enter-delay="0.4">
-          <button class="icon-btn" :class="{ on: meta.pinned }" @click="pin(meta.id, !meta.pinned)">
-            <PushpinFilled v-if="meta.pinned" />
-            <PushpinOutlined v-else />
-          </button>
-        </Tooltip>
-        <Tooltip :title="`工作区面板 (${isMac ? '⌘' : 'Ctrl'} J)`" :mouse-enter-delay="0.4">
-          <button
-            class="icon-btn"
-            :class="{ on: store.workspaceOpen }"
-            aria-label="切换工作区面板"
-            @click="store.workspaceOpen = !store.workspaceOpen"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.85"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              class="panel-ic"
+          <div class="oc-title-line flex items-center gap-2 min-w-0 flex-1">
+            <Input
+              v-if="editing"
+              id="title-edit"
+              v-model:value="titleDraft"
+              size="small"
+              class="w-[280px] font-semibold no-drag"
+              :maxlength="60"
+              @blur="commitTitle"
+              @press-enter="commitTitle"
+            />
+            <button
+              v-else
+              class="border-0 bg-transparent p-0 text-[13.5px] font-semibold tracking-[-0.015em] text-ink text-left max-w-[340px] cursor-default leading-5 flex items-center flex-[0_1_auto] min-w-[60px] no-drag"
+              :title="`${meta.title}（双击重命名）`"
+              @dblclick="startEdit"
             >
-              <rect width="18" height="18" x="3" y="3" rx="2" />
-              <path d="M15 3v18" />
-            </svg>
-          </button>
-        </Tooltip>
-        <Dropdown :menu="menu" :trigger="['click']" placement="bottomRight">
-          <button class="icon-btn"><MoreOutlined /></button>
-        </Dropdown>
-        <WindowControls />
-      </div>
-    </header>
+              <span class="truncate">{{ meta.title || "新对话" }}</span>
+            </button>
 
-    <div v-if="live.status === 'error'" class="banner">
-      <WarningOutlined />
-      <span class="msg">{{ live.error }}</span>
-      <button class="retry" @click="connect(meta.id)"><ReloadOutlined /> 重试</button>
-    </div>
+            <span class="oc-agent-badge inline-flex items-center gap-[5px] h-[22px] px-2 rounded-full bg-hover border border-solid border-line text-[11px] fw-520 text-ink-2 flex-none no-drag">
+              <span
+                class="w-[5px] h-[5px] rounded-full"
+                :class="
+                  live.status === 'ready'
+                    ? 'bg-ok'
+                    : live.status === 'running'
+                      ? 'bg-ok animate-[oc-pulse_1.2s_ease-in-out_infinite]'
+                      : live.status === 'connecting'
+                        ? 'bg-warn animate-[oc-pulse_1.2s_ease-in-out_infinite]'
+                        : live.status === 'error'
+                          ? 'bg-err'
+                          : 'bg-ink-3'
+                "
+              />
+              <span>{{ meta.agentName }}</span>
+            </span>
 
-    <MessageScroller
-      ref="scroller"
-      :key="meta.id"
-      :follow="following"
-      class="scroll"
-      :busy="running"
-      :navigation="turns.length > 1 ? 'rail' : undefined"
-      :items="scrollerItems"
-      item-selector="[data-message-id]"
-      :back-to-bottom="canScroll"
-      @update:follow="onFollowUpdate"
-      @rail-item-select="onRailItemSelect"
-      @scroll="updateScrollable"
-    >
-      <div class="inner">
-        <div v-if="loadingHistory" class="hint">
-          <span class="spinner" />
-          <span>正在加载对话记录…</span>
+            <Tooltip :title="`在文件夹中显示：${meta.cwd}`" :mouse-enter-delay="0.4">
+              <button
+                class="oc-cwd-chip inline-flex items-center gap-[5px] h-[22px] px-[7px] rounded-[6px] border-0 bg-transparent text-[11px] text-ink-3 max-w-[240px] min-w-0 flex-[0_1_auto] cursor-pointer font-mono transition-colors duration-140 hover:bg-hover hover:text-ink-2 no-drag"
+                @click="reveal"
+              >
+                <FolderOpenOutlined />
+                <span class="oc-cwd-text truncate">{{ shortCwd }}</span>
+              </button>
+            </Tooltip>
+          </div>
         </div>
-        <div v-else-if="live.status === 'connecting' && !turns.length" class="hint">
-          <span class="spinner" />
-          <span>正在和 {{ meta.agentName }} 建立连接…</span>
+
+        <div class="flex items-center gap-[2px] flex-none no-drag">
+          <Tooltip v-if="contextPct !== null" :title="usageLabel" :mouse-enter-delay="0.3">
+            <div class="inline-flex items-center gap-[5px] h-7 pl-1 pr-2 rounded-[7px] cursor-default hover:bg-hover">
+              <svg viewBox="0 0 20 20" class="w-[17px] h-[17px] -rotate-90">
+                <circle cx="10" cy="10" r="8" class="fill-none stroke-line-strong" stroke-width="2.3" stroke-linecap="round" />
+                <circle
+                  cx="10"
+                  cy="10"
+                  r="8"
+                  class="fill-none [stroke-dasharray:50.27] transition-[stroke-dashoffset] duration-400 ease-oc"
+                  :class="contextPct > 80 ? 'stroke-warn' : 'stroke-ink-solid'"
+                  stroke-width="2.3"
+                  stroke-linecap="round"
+                  :style="{ strokeDashoffset: 50.27 - (50.27 * contextPct) / 100 }"
+                />
+              </svg>
+              <span class="text-[11px] font-mono" :class="contextPct > 80 ? 'text-warn' : 'text-ink-3'">{{ contextPct }}%</span>
+            </div>
+          </Tooltip>
+          <Tooltip title="在同目录新建对话" :mouse-enter-delay="0.4">
+            <button class="icon-btn text-[14px]" @click="newSameDir">
+              <PlusOutlined />
+            </button>
+          </Tooltip>
+          <Tooltip :title="meta.pinned ? '取消置顶' : '置顶'" :mouse-enter-delay="0.4">
+            <button class="icon-btn text-[14px]" :class="{ 'text-ink': meta.pinned }" @click="pin(meta.id, !meta.pinned)">
+              <PushpinFilled v-if="meta.pinned" />
+              <PushpinOutlined v-else />
+            </button>
+          </Tooltip>
+          <Tooltip :title="`工作区面板 (${isMac ? '⌘' : 'Ctrl'} J)`" :mouse-enter-delay="0.4">
+            <button
+              class="icon-btn text-[14px]"
+              :class="{ 'text-ink': store.workspaceOpen }"
+              aria-label="切换工作区面板"
+              @click="store.workspaceOpen = !store.workspaceOpen"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.85"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="w-[15px] h-[15px] block"
+              >
+                <rect width="18" height="18" x="3" y="3" rx="2" />
+                <path d="M15 3v18" />
+              </svg>
+            </button>
+          </Tooltip>
+          <Dropdown :menu="menu" :trigger="['click']" placement="bottomRight">
+            <button class="icon-btn text-[14px]"><MoreOutlined /></button>
+          </Dropdown>
+          <WindowControls />
         </div>
-        <div v-if="hiddenTurnCount > 0" class="older-bar">
-          <button type="button" class="older-btn" @click="loadOlderTurns()">
-            展开更早的 {{ Math.min(hiddenTurnCount, LOAD_MORE_STEP) }} 轮（共剩余 {{ hiddenTurnCount }} 轮）
-          </button>
-          <button v-if="hiddenTurnCount > LOAD_MORE_STEP" type="button" class="older-btn ghost" @click="loadOlderTurns(hiddenTurnCount)">
-            全部展开
-          </button>
+      </header>
+
+      <div
+        v-if="live.status === 'error'"
+        class="flex-none flex items-center gap-2 mt-2 mx-auto max-w-content w-[calc(100%-40px)] px-3 py-2 rounded-[9px] bg-err-soft text-err text-[12.5px]"
+      >
+        <WarningOutlined />
+        <span class="flex-1 truncate">{{ live.error }}</span>
+        <button
+          class="border border-solid border-[color-mix(in_srgb,var(--err)_30%,transparent)] bg-transparent text-inherit rounded-[6px] px-2 py-[2px] text-[11.5px] cursor-pointer inline-flex items-center gap-1"
+          @click="connect(meta.id)"
+        >
+          <ReloadOutlined /> 重试
+        </button>
+      </div>
+
+      <MessageScroller
+        ref="scroller"
+        :key="meta.id"
+        :follow="following"
+        class="flex-1 min-h-0"
+        :busy="running"
+        :navigation="turns.length > 1 ? 'rail' : undefined"
+        :items="scrollerItems"
+        item-selector="[data-message-id]"
+        :back-to-bottom="canScroll"
+        @update:follow="onFollowUpdate"
+        @rail-item-select="onRailItemSelect"
+        @scroll="updateScrollable"
+      >
+        <div class="max-w-content mx-auto px-5 pt-4 pb-[6px] min-h-full flex flex-col">
+          <div v-if="loadingHistory" class="flex items-center gap-2 justify-center text-[12.5px] text-ink-3 py-9">
+            <span class="w-3 h-3 rounded-full border-[1.5px] border-solid border-line-strong border-t-ink-solid animate-oc-spin" />
+            <span>正在加载对话记录…</span>
+          </div>
+          <div v-else-if="live.status === 'connecting' && !turns.length" class="flex items-center gap-2 justify-center text-[12.5px] text-ink-3 py-9">
+            <span class="w-3 h-3 rounded-full border-[1.5px] border-solid border-line-strong border-t-ink-solid animate-oc-spin" />
+            <span>正在和 {{ meta.agentName }} 建立连接…</span>
+          </div>
+          <div v-if="hiddenTurnCount > 0" class="flex items-center justify-center gap-2 pt-1 pb-[14px]">
+            <button
+              type="button"
+              class="h-7 px-3 rounded-full border border-solid border-line-strong bg-surface text-ink-2 text-[12px] cursor-pointer transition-colors duration-140 hover:bg-surface-strong hover:text-ink"
+              @click="loadOlderTurns()"
+            >
+              展开更早的 {{ Math.min(hiddenTurnCount, LOAD_MORE_STEP) }} 轮（共剩余 {{ hiddenTurnCount }} 轮）
+            </button>
+            <button
+              v-if="hiddenTurnCount > LOAD_MORE_STEP"
+              type="button"
+              class="h-7 px-3 rounded-full border border-solid border-transparent bg-transparent text-ink-3 text-[12px] cursor-pointer transition-colors duration-140 hover:bg-hover hover:text-ink-2"
+              @click="loadOlderTurns(hiddenTurnCount)"
+            >
+              全部展开
+            </button>
+          </div>
+          <TurnView
+            v-for="(turn, i) in visibleTurns"
+            :key="turn.id"
+            :data-message-id="turn.id"
+            :turn="turn"
+            :conversation-id="meta.id"
+            :agent-id="meta.agentId"
+            :agent-name="meta.agentName"
+            :live="i === visibleTurns.length - 1 && (running || live.status === 'connecting')"
+            :is-last="i === visibleTurns.length - 1"
+            :can-retry="!running"
+            @retry="retry"
+          />
+          <div class="h-4 flex-none" />
         </div>
-        <TurnView
-          v-for="(turn, i) in visibleTurns"
-          :key="turn.id"
-          :data-message-id="turn.id"
-          :turn="turn"
-          :conversation-id="meta.id"
-          :agent-id="meta.agentId"
-          :agent-name="meta.agentName"
-          :live="i === visibleTurns.length - 1 && (running || live.status === 'connecting')"
-          :is-last="i === visibleTurns.length - 1"
-          :can-retry="!running"
-          @retry="retry"
-        />
-        <div class="tail" />
+      </MessageScroller>
+
+      <div class="flex-none relative px-5 pb-[14px] bg-transparent z-10">
+        <div class="max-w-content mx-auto">
+          <Composer
+            v-model:value="draft"
+            :conversation-id="meta.id"
+            :live="live"
+            :agent-id="meta.agentId"
+            :agent-name="meta.agentName"
+            :cwd="meta.cwd"
+            :sending="running"
+            :disabled="live.status === 'connecting'"
+            :pending-perms="pendingPerms"
+            :queued-messages="queuedMessages"
+            lock-provider
+            :placeholder="running ? '正在生成，输入内容可加入待发队列…' : `让 ${meta.agentName} 做点什么…`"
+            @send="onSend"
+            @enqueue="onEnqueue"
+            @stop="cancel(meta.id)"
+            @pick-model="onPickModel"
+            @pick-mode="onPickMode"
+            @respond-permission="onRespondPermission"
+            @steer-queued="onSteer"
+            @edit-queued="(qid) => popQueuedToDraft(meta.id, qid)"
+            @remove-queued="(qid) => removeQueued(meta.id, qid)"
+            @jump-turn="jumpToTurn"
+            @cwd="folderOpen = true"
+            @manage="store.settingsOpen = true"
+          />
+        </div>
       </div>
-    </MessageScroller>
 
-    <div class="dock">
-      <div class="dock-inner">
+      <FolderPicker v-model:open="folderOpen" :path="meta.cwd" @pick="changeDir" />
 
-        <Composer
-          v-model:value="draft"
-          :conversation-id="meta.id"
-          :live="live"
-          :agent-id="meta.agentId"
-          :agent-name="meta.agentName"
-          :cwd="meta.cwd"
-          :sending="running"
-          :disabled="live.status === 'connecting'"
-          :pending-perms="pendingPerms"
-          :queued-messages="queuedMessages"
-          lock-provider
-          :placeholder="running ? '正在生成，输入内容可加入待发队列…' : `让 ${meta.agentName} 做点什么…`"
-          @send="onSend"
-          @enqueue="onEnqueue"
-          @stop="cancel(meta.id)"
-          @pick-model="onPickModel"
-          @pick-mode="onPickMode"
-          @respond-permission="onRespondPermission"
-          @steer-queued="onSteer"
-          @edit-queued="(qid) => popQueuedToDraft(meta.id, qid)"
-          @remove-queued="(qid) => removeQueued(meta.id, qid)"
-          @jump-turn="jumpToTurn"
-          @cwd="folderOpen = true"
-          @manage="store.settingsOpen = true"
-        />
-      </div>
-    </div>
-
-    <FolderPicker v-model:open="folderOpen" :path="meta.cwd" @pick="changeDir" />
-
-    <Modal
-      :open="deleting"
-      title="删除这个对话？"
-      :width="380"
-      ok-text="删除"
-      ok-type="danger"
-      cancel-text="取消"
-      @ok="doDelete"
-      @cancel="deleting = false"
-    >
-      <p class="muted" style="margin: 0">「{{ meta.title }}」的记录会从本机删除，无法恢复。</p>
-    </Modal>
+      <Modal
+        :open="deleting"
+        title="删除这个对话？"
+        :width="380"
+        ok-text="删除"
+        ok-type="danger"
+        cancel-text="取消"
+        @ok="doDelete"
+        @cancel="deleting = false"
+      >
+        <p class="text-ink-2 m-0">「{{ meta.title }}」的记录会从本机删除，无法恢复。</p>
+      </Modal>
     </div>
     <WorkspacePanel
       :open="store.workspaceOpen"
@@ -601,392 +641,3 @@ async function changeDir(path: string) {
     />
   </div>
 </template>
-
-<style scoped>
-.chat-layout {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-  min-width: 0;
-  width: 100%;
-}
-.chat {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  position: relative;
-}
-.panel-ic {
-  width: 15px;
-  height: 15px;
-  display: block;
-}
-
-.topbar {
-  flex: none;
-  height: var(--titlebar);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 12px 0 18px;
-  background: var(--bg-sidebar);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border-bottom: 1px solid var(--border);
-  position: relative;
-  z-index: 12;
-  container-type: inline-size;
-}
-
-.left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-.title-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-.left.mac {
-  padding-left: 66px;
-}
-
-.title {
-  border: none;
-  background: transparent;
-  padding: 0;
-  font-size: 13.5px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  color: var(--text);
-  text-align: left;
-  max-width: 340px;
-  cursor: default;
-  line-height: 20px;
-  display: flex;
-  align-items: center;
-  flex: 0 1 auto;
-  min-width: 60px;
-}
-.title-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.title-input {
-  width: 280px;
-  font-weight: 600;
-}
-
-.agent-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: var(--hover);
-  border: 1px solid var(--border);
-  font-size: 11px;
-  font-weight: 520;
-  color: var(--text-2);
-  flex: none;
-}
-.status-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--text-3);
-}
-.status-dot.ready {
-  background: var(--ok);
-}
-.status-dot.running {
-  background: var(--ok);
-  animation: oc-pulse 1.2s ease-in-out infinite;
-}
-.status-dot.connecting {
-  background: var(--warn);
-  animation: oc-pulse 1.2s ease-in-out infinite;
-}
-.status-dot.error {
-  background: var(--err);
-}
-
-.cwd-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 7px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  font-size: 11px;
-  color: var(--text-3);
-  max-width: 240px;
-  min-width: 0;
-  flex: 0 1 auto;
-  cursor: pointer;
-  transition: background 0.14s, color 0.14s;
-}
-.cwd-chip:hover {
-  background: var(--hover);
-  color: var(--text-2);
-}
-.cwd-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@container (max-width: 660px) {
-  .cwd-text {
-    display: none;
-  }
-  .cwd-chip {
-    padding: 0 5px;
-  }
-  .title-line {
-    gap: 6px;
-  }
-}
-
-@container (max-width: 520px) {
-  .cwd-chip {
-    display: none;
-  }
-  .agent-badge {
-    padding: 0 6px;
-  }
-}
-
-.right {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: none;
-}
-
-.icon-btn {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  font-size: 14px;
-  transition: background 0.14s, color 0.14s;
-}
-.icon-btn:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-.icon-btn.on {
-  color: var(--text);
-}
-
-.ctx {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 8px 0 4px;
-  border-radius: 7px;
-  cursor: default;
-}
-.ctx:hover {
-  background: var(--hover);
-}
-.ring {
-  width: 17px;
-  height: 17px;
-  transform: rotate(-90deg);
-}
-.ring circle {
-  fill: none;
-  stroke-width: 2.3;
-  stroke-linecap: round;
-}
-.ring .track {
-  stroke: var(--border-strong);
-}
-.ring .fill {
-  stroke: var(--ink);
-  stroke-dasharray: 50.27;
-  transition: stroke-dashoffset 0.4s var(--ease);
-}
-.ctx.high .ring .fill {
-  stroke: var(--warn);
-}
-.ctx.high .ctx-label {
-  color: var(--warn);
-}
-.ctx-label {
-  font-size: 11px;
-  font-family: var(--mono);
-  color: var(--text-3);
-}
-
-.banner {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px auto 0;
-  max-width: var(--content-width);
-  width: calc(100% - 40px);
-  padding: 8px 12px;
-  border-radius: 9px;
-  background: var(--err-soft);
-  color: var(--err);
-  font-size: 12.5px;
-}
-.banner .msg {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.banner .retry {
-  border: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
-  background: transparent;
-  color: inherit;
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 11.5px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.scroll {
-  flex: 1;
-  min-height: 0;
-}
-.inner {
-  max-width: var(--content-width);
-  margin: 0 auto;
-  padding: 16px 20px 6px;
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.tail {
-  height: 16px;
-  flex: none;
-}
-
-.older-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 4px 0 14px;
-}
-.older-btn {
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text-2);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.14s, color 0.14s, border-color 0.14s;
-}
-.older-btn:hover {
-  background: var(--surface-strong);
-  color: var(--text);
-}
-.older-btn.ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-3);
-}
-.older-btn.ghost:hover {
-  background: var(--hover);
-  color: var(--text-2);
-}
-
-.hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: center;
-  font-size: 12.5px;
-  color: var(--text-3);
-  padding: 36px 0;
-}
-.spinner {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 1.5px solid var(--border-strong);
-  border-top-color: var(--ink);
-  animation: spin 0.8s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.jump {
-  position: absolute;
-  left: 50%;
-  bottom: 132px;
-  transform: translateX(-50%);
-  height: 28px;
-  padding: 0 11px;
-  border-radius: 999px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text-2);
-  box-shadow: var(--shadow-pop);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  z-index: 14;
-  font-size: 11.5px;
-  transition: color 0.14s, transform 0.14s var(--ease);
-}
-.jump:hover {
-  color: var(--text);
-  transform: translateX(-50%) translateY(-1px);
-}
-
-.dock {
-  flex: none;
-  position: relative;
-  padding: 0 20px 14px;
-  background: transparent;
-  z-index: 10;
-}
-.dock-inner {
-  max-width: var(--content-width);
-  margin: 0 auto;
-}
-
-
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.16s var(--ease);
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-</style>

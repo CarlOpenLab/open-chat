@@ -46,13 +46,20 @@ const kindLabel = (o: PermissionOption) =>
 </script>
 
 <template>
-  <div class="perm" :class="{ resolved }">
-    <div v-if="resolved" class="resolved-row">
-      <CheckOutlined v-if="chosen && isAllow(chosen)" class="ok" />
-      <CloseOutlined v-else class="no" />
-      <span class="resolved-title">{{ title || "权限确认" }}</span>
-      <span v-if="detail" class="resolved-detail mono">{{ detail }}</span>
-      <span class="resolved-tag">
+  <div
+    class="glass-sm mt-2 mb-3 border border-solid"
+    :class="
+      resolved
+        ? 'border-line bg-surface-2 shadow-none px-[10px] py-[6px] rounded-[9px]'
+        : 'border-[color-mix(in_srgb,var(--warn)_34%,transparent)] border-l-[3px] border-l-warn bg-[color-mix(in_srgb,var(--warn-soft)_60%,var(--surface))] shadow-card rounded-[11px] px-[13px] py-[11px]'
+    "
+  >
+    <div v-if="resolved" class="flex items-center gap-[7px] text-[12px] text-ink-2 min-w-0">
+      <CheckOutlined v-if="chosen && isAllow(chosen)" class="text-ok flex-none" />
+      <CloseOutlined v-else class="text-err flex-none" />
+      <span class="font-medium text-ink-2 truncate">{{ title || "权限确认" }}</span>
+      <span v-if="detail" class="text-[11px] text-ink-3 truncate flex-1 font-mono">{{ detail }}</span>
+      <span class="ml-auto text-[11px] text-ink-3 flex-none">
         <template v-if="chosen && isAllow(chosen)">
           已允许{{ resolved.auto ? "（自动）" : "" }}
         </template>
@@ -62,19 +69,21 @@ const kindLabel = (o: PermissionOption) =>
     </div>
 
     <template v-else>
-      <div class="head">
-        <span class="badge"><SafetyOutlined /></span>
-        <div class="what">
-          <div class="title">{{ title || "需要你的确认" }}</div>
-          <div v-if="detail" class="detail mono">{{ detail }}</div>
+      <div class="flex gap-[10px] items-start">
+        <span class="flex-none w-6 h-6 grid place-items-center rounded-[7px] bg-[color-mix(in_srgb,var(--warn)_16%,transparent)] text-warn text-[13px]">
+          <SafetyOutlined />
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="text-[13.5px] fw-560 leading-[1.5] text-ink break-words">{{ title || "需要你的确认" }}</div>
+          <div v-if="detail" class="text-[11.5px] text-ink-3 mt-[2px] break-all font-mono">{{ detail }}</div>
         </div>
       </div>
-      <div class="actions">
+      <div class="flex gap-[7px] items-center mt-[10px] pl-[34px]">
         <Button v-for="o in rejects" :key="o.optionId" size="small" :disabled="submitting" @click="answer(o)">
           <template #icon><CloseOutlined /></template>
           {{ kindLabel(o) }}
         </Button>
-        <span class="spacer" />
+        <span class="flex-1" />
         <Button
           v-for="o in allows"
           :key="o.optionId"
@@ -91,105 +100,3 @@ const kindLabel = (o: PermissionOption) =>
     </template>
   </div>
 </template>
-
-<style scoped>
-.perm {
-  border: 1px solid color-mix(in srgb, var(--warn) 34%, transparent);
-  border-left: 3px solid var(--warn);
-  background: color-mix(in srgb, var(--warn-soft) 60%, var(--surface));
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
-  box-shadow: var(--shadow-card);
-  border-radius: 11px;
-  padding: 11px 13px;
-  margin: 8px 0 12px;
-}
-.perm.resolved {
-  border: 1px solid var(--border);
-  border-left: 1px solid var(--border);
-  background: var(--surface-2);
-  box-shadow: none;
-  padding: 6px 10px;
-  border-radius: 9px;
-}
-.resolved-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  color: var(--text-2);
-  min-width: 0;
-}
-.resolved-title {
-  font-weight: 500;
-  color: var(--text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.resolved-detail {
-  font-size: 11px;
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-.resolved-tag {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--text-3);
-  flex: none;
-}
-.head {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
-.badge {
-  flex: none;
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--warn) 16%, transparent);
-  color: var(--warn);
-  font-size: 13px;
-}
-.what {
-  min-width: 0;
-  flex: 1;
-}
-.title {
-  font-size: 13.5px;
-  font-weight: 560;
-  line-height: 1.5;
-  color: var(--text);
-  word-break: break-word;
-}
-.detail {
-  font-size: 11.5px;
-  color: var(--text-3);
-  margin-top: 2px;
-  word-break: break-all;
-}
-.actions {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  margin-top: 10px;
-  padding-left: 34px;
-}
-.spacer {
-  flex: 1;
-}
-.ok {
-  color: var(--ok);
-  flex: none;
-}
-.no {
-  color: var(--err);
-  flex: none;
-}
-</style>

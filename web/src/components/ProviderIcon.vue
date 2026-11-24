@@ -19,10 +19,31 @@ const kind = computed<"claude" | "codex" | "pi" | "omp" | "deepseek" | "demo" | 
 });
 
 const px = computed(() => `${props.size ?? 16}px`);
+
+const colorClass = computed(() => {
+  switch (kind.value) {
+    case "claude":
+      return "text-brand-claude";
+    case "codex":
+    case "pi":
+      return "text-ink";
+    case "omp":
+      return "text-brand-omp";
+    case "deepseek":
+      return "text-brand-deepseek";
+    default:
+      return "text-ink-2";
+  }
+});
 </script>
 
 <template>
-  <span class="prov-svg" :class="kind" :style="{ width: px, height: px }" aria-hidden="true">
+  <span
+    class="inline-flex items-center justify-center leading-none align-middle flex-none [&>svg]:w-full [&>svg]:h-full [&>svg]:block"
+    :class="colorClass"
+    :style="{ width: px, height: px }"
+    aria-hidden="true"
+  >
     <!-- LobeHub Claude icon (24x24 optical center) -->
     <svg v-if="kind === 'claude'" viewBox="0 0 24 24" fill="currentColor">
       <path
@@ -62,38 +83,3 @@ const px = computed(() => `${props.size ?? 16}px`);
     </svg>
   </span>
 </template>
-
-<style scoped>
-.prov-svg {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 0;
-  vertical-align: middle;
-  flex: none;
-}
-.prov-svg svg {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-.prov-svg.claude {
-  color: #d97757;
-}
-.prov-svg.codex {
-  color: var(--text);
-}
-.prov-svg.pi {
-  color: var(--text);
-}
-.prov-svg.omp {
-  color: #38bdf8;
-}
-.prov-svg.deepseek {
-  color: #4d6bfe;
-}
-.prov-svg.demo,
-.prov-svg.acp {
-  color: var(--text-2);
-}
-</style>

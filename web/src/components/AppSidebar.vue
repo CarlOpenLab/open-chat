@@ -323,32 +323,41 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
 </script>
 
 <template>
-  <aside class="sidebar" :class="{ mac: isMac }">
-    <div class="top drag">
-      <div class="top-spacer" />
-      <div class="top-actions no-drag">
+  <aside class="oc-sidebar group w-[262px] h-full flex-none flex flex-col relative min-h-0">
+    <div
+      class="h-titlebar flex-none flex items-center gap-2 pr-[10px] drag"
+      :class="isMac ? 'pl-[78px]' : 'pl-[14px]'"
+    >
+      <div class="flex-1" />
+      <div class="opacity-55 transition-opacity duration-150 ease-oc group-hover:opacity-100 no-drag">
         <Tooltip :title="`收起侧栏 (${isMac ? '⌘' : 'Ctrl'} B)`" :mouse-enter-delay="0.4">
-          <button class="icon-btn" @click="store.sidebarCollapsed = true">
+          <button class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] bg-transparent text-ink-3 cursor-pointer text-[14px] transition-colors duration-140 hover:bg-hover hover:text-ink" @click="store.sidebarCollapsed = true">
             <MenuFoldOutlined />
           </button>
         </Tooltip>
       </div>
     </div>
 
-    <div class="controls">
-      <button class="new-btn" @click="newConversation()">
+    <div class="px-[10px] pt-[2px] pb-2 flex flex-col gap-[6px]">
+      <button
+        class="group/new w-full h-[34px] flex items-center gap-2 px-[10px] rounded-[9px] border border-solid border-transparent bg-[color-mix(in_srgb,var(--ink)_4.5%,transparent)] text-ink text-[13px] fw-530 whitespace-nowrap cursor-pointer transition-all duration-140 ease-oc hover:bg-surface hover:border-line active:scale-[0.99]"
+        @click="newConversation()"
+      >
         <!-- Lucide SquarePen -->
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="new-ic">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[14px] h-[14px] text-ink-2 flex-none">
           <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
           <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
         </svg>
         <span>新对话</span>
-        <span class="hint kbd">{{ isMac ? "⌘" : "Ctrl" }} N</span>
+        <span class="kbd ml-auto !bg-transparent !border-transparent opacity-65 group-hover/new:!bg-hover group-hover/new:!border-line group-hover/new:opacity-100">{{ isMac ? "⌘" : "Ctrl" }} N</span>
       </button>
 
-      <label class="search-box" for="conv-search">
+      <label
+        class="group/search h-8 flex items-center gap-[7px] px-[9px] rounded-[9px] border border-solid border-transparent bg-[color-mix(in_srgb,var(--ink)_3.8%,transparent)] cursor-text transition-all duration-160 ease-oc hover:bg-surface-2 hover:border-line focus-within:bg-surface focus-within:border-line-strong focus-within:shadow-card"
+        for="conv-search"
+      >
         <!-- Lucide Search -->
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="search-ic">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[13.5px] h-[13.5px] text-ink-3 flex-none transition-colors duration-140 group-focus-within/search:text-ink-2">
           <circle cx="11" cy="11" r="8" />
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
         </svg>
@@ -356,29 +365,38 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
           id="conv-search"
           v-model="store.search"
           type="text"
-          class="search-input"
+          class="flex-1 min-w-0 border-0 outline-none bg-transparent text-ink text-[12.5px] leading-[18px] p-0 placeholder:text-ink-3 focus-visible:shadow-none"
           placeholder="搜索对话…"
           @keydown.esc="store.search = ''"
         />
-        <button v-if="store.search" type="button" class="search-clear" aria-label="清空搜索" @click.prevent="store.search = ''">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <button
+          v-if="store.search"
+          type="button"
+          class="inline-grid place-items-center w-4 h-4 border-0 rounded-full bg-hover text-ink-3 cursor-pointer flex-none p-0 transition-colors duration-120 hover:bg-active hover:text-ink"
+          aria-label="清空搜索"
+          @click.prevent="store.search = ''"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[10px] h-[10px]">
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         </button>
-        <span v-else class="search-kbd kbd">{{ isMac ? "⌘" : "Ctrl" }} K</span>
+        <span v-else class="kbd !bg-transparent !border-transparent opacity-55 flex-none">{{ isMac ? "⌘" : "Ctrl" }} K</span>
       </label>
     </div>
 
-    <div v-if="showArchived" class="archive-bar">
-      <button class="archive-back" @click="showArchived = false">
+    <div v-if="showArchived" class="flex-none flex items-center justify-between px-[10px] pt-1 pb-[6px]">
+      <button
+        class="inline-flex items-center gap-[6px] border-0 bg-transparent text-ink-2 text-[12px] fw-520 px-[6px] py-[3px] rounded-[7px] cursor-pointer transition-colors duration-130 hover:bg-hover hover:text-ink"
+        @click="showArchived = false"
+      >
         <ArrowLeftOutlined />
         <span>返回对话</span>
       </button>
-      <span class="archive-count mono">{{ archivedCount }}</span>
+      <span class="ml-auto text-[11px] text-ink-3 px-[6px] leading-[17px] rounded-full bg-hover font-mono">{{ archivedCount }}</span>
     </div>
 
-    <div class="list" @contextmenu="onListContextMenu" @scroll="closeConvCtx">
+    <div class="flex-1 min-h-0 overflow-y-auto px-2 pb-[10px]" @contextmenu="onListContextMenu" @scroll="closeConvCtx">
       <Conversations
         v-if="items.length"
         :items="items"
@@ -386,37 +404,53 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         :label-render="labelRender"
         :menu="menuFor"
         :groupable="{ label: (g: string) => g, collapsible: false }"
-        class="convs"
+        class="oc-convs"
         @active-change="(key: string) => select(key)"
       />
-      <div v-else class="list-empty">
-        <InboxOutlined v-if="showArchived" class="empty-icon" />
-        <MessageOutlined v-else class="empty-icon" />
-        <div class="empty-text">
+      <div v-else class="flex flex-col items-center justify-center gap-2 py-10 px-[14px] text-center">
+        <InboxOutlined v-if="showArchived" class="text-[18px] text-ink-3 opacity-50" />
+        <MessageOutlined v-else class="text-[18px] text-ink-3 opacity-50" />
+        <div class="text-[12.5px] text-ink-3">
           {{ store.search ? "没有匹配的对话" : showArchived ? "还没有归档的对话" : "还没有对话记录" }}
         </div>
-        <button v-if="store.search" class="empty-btn" @click="store.search = ''">清空搜索</button>
+        <button
+          v-if="store.search"
+          class="border border-solid border-line bg-surface text-ink-2 text-[11.5px] rounded-[7px] px-[10px] py-[3px] cursor-pointer hover:text-ink hover:border-line-strong"
+          @click="store.search = ''"
+        >
+          清空搜索
+        </button>
       </div>
     </div>
 
-    <div v-if="!showArchived && archivedCount > 0" class="archive-entry">
-      <button class="archive-entry-btn" @click="showArchived = true">
-        <InboxOutlined class="archive-ic" />
+    <div v-if="!showArchived && archivedCount > 0" class="flex-none px-[10px] pt-1 pb-[6px]">
+      <button
+        class="w-full h-[30px] flex items-center gap-[7px] px-[9px] border border-solid border-transparent rounded-[8px] bg-transparent text-ink-3 text-[12px] cursor-pointer transition-colors duration-140 hover:bg-hover hover:border-line hover:text-ink"
+        @click="showArchived = true"
+      >
+        <InboxOutlined class="text-[13px]" />
         <span>已归档</span>
-        <span class="archive-count mono">{{ archivedCount }}</span>
+        <span class="ml-auto text-[11px] text-ink-3 px-[6px] leading-[17px] rounded-full bg-hover font-mono">{{ archivedCount }}</span>
       </button>
     </div>
 
-    <div class="foot">
-      <button v-if="needsNode" class="warn" @click="store.settingsOpen = true">
-        <span class="dot error" />
+    <div class="flex-none px-[10px] pt-2 pb-[10px] border-0 border-t border-solid border-line flex flex-col gap-[5px]">
+      <button
+        v-if="needsNode"
+        class="flex items-center gap-2 border border-solid border-[color-mix(in_srgb,var(--err)_30%,transparent)] bg-err-soft text-err rounded-[9px] px-[9px] py-[6px] text-[12px] cursor-pointer text-left"
+        @click="store.settingsOpen = true"
+      >
+        <span class="w-[6px] h-[6px] rounded-full flex-none bg-err" />
         <span>未检测到 Node.js</span>
       </button>
-      <div class="foot-row">
+      <div class="flex items-center gap-[5px]">
         <Dropdown :menu="avatarMenu" :trigger="['click']" placement="topLeft">
           <Tooltip :title="store.userAvatar ? '点击更换或重置本地头像' : '上传本地头像（仅保存在本机）'" :mouse-enter-delay="0.35">
-            <button class="avatar-btn" aria-label="用户头像">
-              <img v-if="store.userAvatar" :src="store.userAvatar" alt="用户头像" />
+            <button
+              class="group/avatar relative w-7 h-7 p-0 rounded-full border border-solid border-line-strong bg-surface text-ink-2 grid place-items-center overflow-hidden cursor-pointer flex-none shadow-card transition-all duration-140 ease-oc hover:border-ink-solid hover:scale-[1.04]"
+              aria-label="用户头像"
+            >
+              <img v-if="store.userAvatar" :src="store.userAvatar" alt="用户头像" class="w-full h-full object-cover block" />
               <!-- Lucide User -->
               <svg
                 v-else
@@ -426,14 +460,17 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
                 stroke-width="1.8"
                 stroke-linecap="round"
                 stroke-linejoin="round"
-                class="avatar-ic"
+                class="w-[14px] h-[14px]"
               >
                 <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
                 <circle cx="12" cy="7" r="4" />
               </svg>
-              <span class="avatar-cam" aria-hidden="true">
+              <span
+                class="absolute inset-0 grid place-items-center bg-[rgba(15,23,42,0.56)] text-white opacity-0 transition-opacity duration-140 group-hover/avatar:opacity-100"
+                aria-hidden="true"
+              >
                 <!-- Lucide Camera -->
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3">
                   <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
                   <circle cx="12" cy="13" r="3" />
                 </svg>
@@ -443,10 +480,14 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         </Dropdown>
         <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatarPick" />
 
-        <span class="foot-spacer" />
+        <span class="flex-1" />
 
         <Tooltip :title="`设置 (${isMac ? '⌘' : 'Ctrl'} ,)`" :mouse-enter-delay="0.35">
-          <button class="icon-btn theme-btn" aria-label="设置" @click="store.settingsOpen = true">
+          <button
+            class="inline-grid place-items-center w-7 h-7 rounded-[8px] border border-solid border-transparent bg-transparent text-ink-3 cursor-pointer transition-all duration-140 ease-oc hover:bg-hover hover:border-line hover:text-ink active:scale-[0.94]"
+            aria-label="设置"
+            @click="store.settingsOpen = true"
+          >
             <!-- Lucide Settings -->
             <svg
               viewBox="0 0 24 24"
@@ -455,7 +496,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
               stroke-width="1.85"
               stroke-linecap="round"
               stroke-linejoin="round"
-              class="theme-ic"
+              class="w-[15px] h-[15px] block"
             >
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -464,7 +505,11 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         </Tooltip>
 
         <Tooltip :title="isDark ? '切换到浅色模式' : '切换到深色模式'" :mouse-enter-delay="0.35">
-          <button class="icon-btn theme-btn" :class="{ dark: isDark }" aria-label="切换主题" @click="toggleTheme">
+          <button
+            class="inline-grid place-items-center w-7 h-7 rounded-[8px] border border-solid border-transparent bg-transparent text-ink-3 cursor-pointer transition-all duration-140 ease-oc hover:bg-hover hover:border-line hover:text-ink active:scale-[0.94]"
+            aria-label="切换主题"
+            @click="toggleTheme"
+          >
             <!-- Lucide Sun (shown in dark mode) -->
             <svg
               v-if="isDark"
@@ -474,7 +519,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
               stroke-width="1.85"
               stroke-linecap="round"
               stroke-linejoin="round"
-              class="theme-ic"
+              class="w-[15px] h-[15px] block"
             >
               <circle cx="12" cy="12" r="4" />
               <path d="M12 2v2" />
@@ -495,7 +540,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
               stroke-width="1.85"
               stroke-linecap="round"
               stroke-linejoin="round"
-              class="theme-ic"
+              class="w-[15px] h-[15px] block"
             >
               <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
             </svg>
@@ -527,7 +572,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
       @ok="confirmDelete"
       @cancel="toDelete = null"
     >
-      <p class="muted" style="margin: 0">
+      <p class="text-ink-2 m-0">
         「{{ toDelete?.title }}」的记录会从本机删除，无法恢复。agent 那边的会话不受影响。
       </p>
     </Modal>
@@ -535,722 +580,44 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
     <Teleport to="body">
       <div
         v-if="convCtx.open && convCtx.meta"
-        class="sb-ctx-menu"
+        class="fixed z-[2100] min-w-[146px] p-[5px] rounded-[11px] bg-surface-strong glass border border-solid border-line-strong shadow-pop flex flex-col gap-[2px] select-none"
         :style="{ left: `${convCtx.x}px`, top: `${convCtx.y}px` }"
         @pointerdown.stop
         @contextmenu.prevent
       >
-        <button v-if="!isArchived(convCtx.meta.id)" class="sb-ctx-item" @click="onConvCtxAction('pin')">
-          <PushpinFilled v-if="convCtx.meta.pinned" class="sb-ctx-ic" />
-          <PushpinOutlined v-else class="sb-ctx-ic" />
+        <button
+          v-if="!isArchived(convCtx.meta.id)"
+          class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
+          @click="onConvCtxAction('pin')"
+        >
+          <PushpinFilled v-if="convCtx.meta.pinned" class="text-[13px] text-ink-3" />
+          <PushpinOutlined v-else class="text-[13px] text-ink-3" />
           <span>{{ convCtx.meta.pinned ? '取消置顶' : '置顶' }}</span>
         </button>
-        <button class="sb-ctx-item" @click="onConvCtxAction('rename')">
-          <EditOutlined class="sb-ctx-ic" />
+        <button
+          class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
+          @click="onConvCtxAction('rename')"
+        >
+          <EditOutlined class="text-[13px] text-ink-3" />
           <span>重命名</span>
         </button>
-        <button class="sb-ctx-item" @click="onConvCtxAction('archive')">
-          <RollbackOutlined v-if="isArchived(convCtx.meta.id)" class="sb-ctx-ic" />
-          <InboxOutlined v-else class="sb-ctx-ic" />
+        <button
+          class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
+          @click="onConvCtxAction('archive')"
+        >
+          <RollbackOutlined v-if="isArchived(convCtx.meta.id)" class="text-[13px] text-ink-3" />
+          <InboxOutlined v-else class="text-[13px] text-ink-3" />
           <span>{{ isArchived(convCtx.meta.id) ? '取消归档' : '归档' }}</span>
         </button>
-        <div class="sb-ctx-div" />
-        <button class="sb-ctx-item danger" @click="onConvCtxAction('delete')">
-          <DeleteOutlined class="sb-ctx-ic" />
+        <div class="h-[1px] bg-line my-[3px] mx-[6px]" />
+        <button
+          class="w-full border-0 bg-transparent text-err text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-err-soft"
+          @click="onConvCtxAction('delete')"
+        >
+          <DeleteOutlined class="text-[13px] text-err" />
           <span>删除对话</span>
         </button>
       </div>
     </Teleport>
   </aside>
 </template>
-
-<style scoped>
-.sidebar {
-  width: 262px;
-  height: 100%;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  min-height: 0;
-}
-
-.top {
-  height: var(--titlebar);
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px 0 14px;
-}
-.mac .top {
-  padding-left: 78px;
-}
-
-.top-spacer {
-  flex: 1;
-}
-
-.top-actions {
-  opacity: 0.55;
-  transition: opacity 0.15s var(--ease);
-}
-.sidebar:hover .top-actions {
-  opacity: 1;
-}
-
-.icon-btn {
-  display: inline-grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  transition: background 0.14s, color 0.14s;
-  font-size: 14px;
-}
-.icon-btn:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
-/* Integrated frosted controls: blends into the acrylic sidebar without heavy white boxes */
-.controls {
-  padding: 2px 10px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.new-btn {
-  width: 100%;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border-radius: 9px;
-  border: 1px solid transparent;
-  background: color-mix(in srgb, var(--ink) 4.5%, transparent);
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 530;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 0.14s var(--ease), border-color 0.14s var(--ease), transform 0.14s var(--ease);
-}
-.new-btn:hover {
-  background: var(--surface);
-  border-color: var(--border);
-}
-.new-btn:active {
-  transform: scale(0.99);
-}
-.new-ic {
-  width: 14px;
-  height: 14px;
-  color: var(--text-2);
-  flex: none;
-}
-.new-btn .hint {
-  margin-left: auto;
-  background: transparent;
-  border-color: transparent;
-  opacity: 0.65;
-}
-.new-btn:hover .hint {
-  background: var(--hover);
-  border-color: var(--border);
-  opacity: 1;
-}
-
-.search-box {
-  height: 32px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 9px;
-  border-radius: 9px;
-  border: 1px solid transparent;
-  background: color-mix(in srgb, var(--ink) 3.8%, transparent);
-  cursor: text;
-  transition: background 0.16s var(--ease), border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
-}
-.search-box:hover {
-  background: var(--surface-2);
-  border-color: var(--border);
-}
-.search-box:focus-within {
-  background: var(--surface);
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-card);
-}
-.search-ic {
-  width: 13.5px;
-  height: 13.5px;
-  color: var(--text-3);
-  flex: none;
-  transition: color 0.14s;
-}
-.search-box:focus-within .search-ic {
-  color: var(--text-2);
-}
-.search-input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 12.5px;
-  line-height: 18px;
-  padding: 0;
-}
-.search-input:focus-visible {
-  box-shadow: none;
-}
-.search-input::placeholder {
-  color: var(--text-3);
-}
-.search-clear {
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border: none;
-  border-radius: 50%;
-  background: var(--hover);
-  color: var(--text-3);
-  cursor: pointer;
-  flex: none;
-  padding: 0;
-  transition: background 0.12s, color 0.12s;
-}
-.search-clear:hover {
-  background: var(--active);
-  color: var(--text);
-}
-.search-clear svg {
-  width: 10px;
-  height: 10px;
-}
-.search-kbd {
-  background: transparent;
-  border-color: transparent;
-  opacity: 0.55;
-  flex: none;
-}
-
-.list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0 8px 10px;
-}
-
-.list-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 40px 14px;
-  text-align: center;
-}
-.empty-icon {
-  font-size: 18px;
-  color: var(--text-3);
-  opacity: 0.5;
-}
-.empty-text {
-  font-size: 12.5px;
-  color: var(--text-3);
-}
-.empty-btn {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-2);
-  font-size: 11.5px;
-  border-radius: 7px;
-  padding: 3px 10px;
-  cursor: pointer;
-}
-.empty-btn:hover {
-  color: var(--text);
-  border-color: var(--border-strong);
-}
-
-.convs {
-  background: transparent !important;
-  padding: 0 !important;
-  margin: 0 !important;
-}
-.convs :deep(.antd-conversations-list),
-.convs :deep(.antd-conversations-group) {
-  padding: 0 !important;
-  margin: 0 !important;
-}
-.convs :deep(.antd-conversations-item) {
-  position: relative;
-  border-radius: 10px;
-  margin: 0 0 2px !important;
-  padding: 7px 10px !important;
-  height: auto !important;
-  min-height: 0 !important;
-  align-items: center !important;
-  border: 1px solid transparent;
-  transition: background 0.14s var(--ease), border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
-}
-.convs :deep(.antd-conversations-item:hover) {
-  background: var(--hover) !important;
-}
-.convs :deep(.antd-conversations-item-active) {
-  background: var(--surface) !important;
-  border-color: var(--border);
-  backdrop-filter: var(--glass-blur-sm);
-  -webkit-backdrop-filter: var(--glass-blur-sm);
-  box-shadow: var(--shadow-card);
-}
-.convs :deep(.antd-conversations-group-title) {
-  font-size: 11px;
-  font-weight: 560;
-  line-height: 16px;
-  color: var(--text-3);
-  padding: 10px 10px 5px !important;
-  margin: 0 !important;
-  letter-spacing: 0.02em;
-}
-.convs :deep(.antd-conversations-group:first-child .antd-conversations-group-title) {
-  padding-top: 4px !important;
-}
-.convs :deep(.antd-conversations-label) {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-}
-.convs :deep(.antd-conversations-menu-icon) {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  display: inline-grid;
-  place-items: center;
-  border-radius: 6px;
-  margin-left: 0 !important;
-  opacity: 0;
-  pointer-events: none;
-  z-index: 2;
-  color: var(--text-3);
-  transition: opacity 0.14s var(--ease), color 0.14s var(--ease), background 0.14s var(--ease);
-}
-.convs :deep(.antd-conversations-item:hover .antd-conversations-menu-icon),
-.convs :deep(.antd-conversations-item:has(.ant-dropdown-open) .antd-conversations-menu-icon),
-.convs :deep(.antd-conversations-menu-icon.ant-dropdown-open) {
-  opacity: 1;
-  pointer-events: auto;
-}
-.convs :deep(.antd-conversations-menu-icon:hover),
-.convs :deep(.antd-conversations-menu-icon.ant-dropdown-open) {
-  background: var(--active);
-  color: var(--text);
-}
-
-.convs :deep(.conv) {
-  min-width: 0;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.convs :deep(.conv-row) {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  transition: padding-right 0.14s var(--ease);
-}
-.convs :deep(.antd-conversations-item:hover .conv-row:not(:has(.st-pill))),
-.convs :deep(.antd-conversations-item:has(.ant-dropdown-open) .conv-row:not(:has(.st-pill))) {
-  padding-right: 22px;
-}
-.convs :deep(.conv-logo) {
-  flex: none;
-  opacity: 0.92;
-}
-.convs :deep(.conv-title) {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 18px;
-  flex: 1;
-  min-width: 0;
-}
-.convs :deep(.conv-meta) {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-left: 20px;
-  font-size: 11px;
-  color: var(--text-3);
-  line-height: 15px;
-  min-width: 0;
-}
-.convs :deep(.conv-sub) {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-}
-.convs :deep(.conv-agent) {
-  flex-shrink: 0;
-}
-.convs :deep(.conv-sep) {
-  opacity: 0.5;
-  flex-shrink: 0;
-}
-.convs :deep(.conv-dir) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 10.5px;
-  opacity: 0.85;
-}
-.convs :deep(.conv-time) {
-  flex-shrink: 0;
-  font-size: 10.5px;
-  opacity: 0.7;
-  padding-left: 4px;
-  transition: opacity 0.14s var(--ease);
-}
-
-.convs :deep(.st-pill) {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  line-height: 16px;
-  padding: 0 6px;
-  border-radius: 999px;
-  font-weight: 560;
-  letter-spacing: 0.01em;
-  transition: opacity 0.14s var(--ease);
-}
-.convs :deep(.st-pill.need) {
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-.convs :deep(.st-pill.run) {
-  background: rgba(56, 189, 248, 0.14);
-  color: #0284c7;
-}
-:root[data-theme="dark"] .convs :deep(.st-pill.run) {
-  color: #38bdf8;
-}
-.convs :deep(.st-pill.ok) {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-.convs :deep(.st-pill.err) {
-  background: var(--err-soft);
-  color: var(--err);
-}
-.convs :deep(.st-dot) {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: oc-pulse 1.2s ease-in-out infinite;
-}
-.convs :deep(.st-spin) {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-top-color: currentColor;
-  animation: oc-spin 0.75s linear infinite;
-}
-.convs :deep(.st-check) {
-  width: 10px;
-  height: 10px;
-  flex: none;
-}
-.convs :deep(.st-done-ic) {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--ok);
-  opacity: 0.72;
-  transition: opacity 0.14s var(--ease);
-}
-.convs :deep(.antd-conversations-item:hover .st-pill),
-.convs :deep(.antd-conversations-item:hover .st-done-ic),
-.convs :deep(.antd-conversations-item:hover .conv-time),
-.convs :deep(.antd-conversations-item:has(.ant-dropdown-open) .st-pill),
-.convs :deep(.antd-conversations-item:has(.ant-dropdown-open) .st-done-ic),
-.convs :deep(.antd-conversations-item:has(.ant-dropdown-open) .conv-time) {
-  opacity: 0;
-  pointer-events: none;
-}
-@keyframes oc-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: none;
-  background: var(--text-3);
-}
-.dot.error {
-  background: var(--err);
-}
-
-.archive-bar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 10px 6px;
-}
-.archive-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 12px;
-  font-weight: 520;
-  padding: 3px 6px;
-  border-radius: 7px;
-  cursor: pointer;
-  transition: background 0.13s, color 0.13s;
-}
-.archive-back:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-.archive-entry {
-  flex: none;
-  padding: 4px 10px 6px;
-}
-.archive-entry-btn {
-  width: 100%;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 9px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-3);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.14s, color 0.14s, border-color 0.14s;
-}
-.archive-entry-btn:hover {
-  background: var(--hover);
-  border-color: var(--border);
-  color: var(--text);
-}
-.archive-ic {
-  font-size: 13px;
-}
-.archive-count {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--text-3);
-  padding: 0 6px;
-  line-height: 17px;
-  border-radius: 999px;
-  background: var(--hover);
-}
-
-.foot {
-  flex: none;
-  padding: 8px 10px 10px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.foot-row {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.avatar-btn {
-  position: relative;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border-radius: 50%;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text-2);
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  cursor: pointer;
-  flex: none;
-  box-shadow: var(--shadow-card);
-  transition: border-color 0.14s, transform 0.14s var(--ease);
-}
-.avatar-btn:hover {
-  border-color: var(--ink);
-  transform: scale(1.04);
-}
-.avatar-btn img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.avatar-ic {
-  width: 14px;
-  height: 14px;
-}
-.avatar-cam {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: rgba(15, 23, 42, 0.56);
-  color: #fff;
-  opacity: 0;
-  transition: opacity 0.14s;
-}
-.avatar-cam svg {
-  width: 12px;
-  height: 12px;
-}
-.avatar-btn:hover .avatar-cam {
-  opacity: 1;
-}
-
-.foot-spacer {
-  flex: 1;
-}
-
-.theme-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  color: var(--text-3);
-  transition: background 0.14s, border-color 0.14s, color 0.14s, transform 0.14s var(--ease);
-}
-.theme-btn:hover {
-  background: var(--hover);
-  border-color: var(--border);
-  color: var(--text);
-}
-.theme-btn:active {
-  transform: scale(0.94);
-}
-.theme-ic {
-  width: 15px;
-  height: 15px;
-  display: block;
-}
-
-.warn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
-  background: var(--err-soft);
-  color: var(--err);
-  border-radius: 9px;
-  padding: 6px 9px;
-  font-size: 12px;
-  cursor: pointer;
-  text-align: left;
-}
-
-:deep(.menu-item) {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-:deep(.menu-icon) {
-  display: inline-grid;
-  place-items: center;
-  color: var(--text-3);
-  font-size: 13px;
-}
-</style>
-
-<style>
-.sb-ctx-menu {
-  position: fixed;
-  z-index: 2100;
-  min-width: 146px;
-  padding: 5px;
-  border-radius: 11px;
-  background: var(--surface-strong);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-pop);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  user-select: none;
-  -webkit-user-select: none;
-}
-.sb-ctx-item {
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 12.5px;
-  text-align: left;
-  padding: 6px 10px;
-  border-radius: 7px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  transition: background 0.12s, color 0.12s;
-}
-.sb-ctx-item:hover {
-  background: var(--hover);
-}
-.sb-ctx-ic {
-  font-size: 13px;
-  color: var(--text-3);
-}
-.sb-ctx-item.danger {
-  color: var(--err);
-}
-.sb-ctx-item.danger .sb-ctx-ic {
-  color: var(--err);
-}
-.sb-ctx-item.danger:hover {
-  background: var(--err-soft);
-}
-.sb-ctx-div {
-  height: 1px;
-  background: var(--border);
-  margin: 3px 6px;
-}
-</style>

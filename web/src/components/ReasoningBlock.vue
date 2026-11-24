@@ -76,8 +76,13 @@ const lines = computed<TextRun[][]>(() => {
 </script>
 
 <template>
-  <div v-if="hasContent || live" class="think" :class="{ open, live }">
-    <button type="button" class="think-head" @click="toggleOpen" :aria-expanded="open">
+  <div v-if="hasContent || live" class="mb-[10px]">
+    <button
+      type="button"
+      class="inline-flex items-center gap-[6px] py-[3px] pr-2 pl-1 -ml-1 border-0 rounded-[7px] bg-transparent text-ink-2 text-[12.5px] leading-[18px] cursor-pointer transition-colors duration-140 ease-oc hover:bg-hover hover:text-ink"
+      @click="toggleOpen"
+      :aria-expanded="open"
+    >
       <!-- Lucide Sparkles -->
       <svg
         viewBox="0 0 24 24"
@@ -86,8 +91,8 @@ const lines = computed<TextRun[][]>(() => {
         stroke-width="1.85"
         stroke-linecap="round"
         stroke-linejoin="round"
-        class="think-ic"
-        :class="{ live }"
+        class="w-[14px] h-[14px] text-[#a78bfa] flex-none"
+        :class="{ 'animate-oc-pulse-fast': live }"
       >
         <path
           d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
@@ -97,7 +102,7 @@ const lines = computed<TextRun[][]>(() => {
         <path d="M4 17v2" />
         <path d="M5 18H3" />
       </svg>
-      <span class="think-title" :class="{ 'shimmer-text': live }">{{ title }}</span>
+      <span class="font-medium" :class="{ 'shimmer-text': live }">{{ title }}</span>
       <svg
         viewBox="0 0 24 24"
         fill="none"
@@ -105,18 +110,24 @@ const lines = computed<TextRun[][]>(() => {
         stroke-width="2"
         stroke-linecap="round"
         stroke-linejoin="round"
-        class="think-chev"
+        class="w-3 h-3 flex-none transition-[transform,color] duration-220 ease-oc"
+        :class="open ? 'rotate-90 text-ink-2' : 'text-ink-3'"
       >
         <polyline points="9 18 15 12 9 6" />
       </svg>
     </button>
 
-    <div v-if="everOpened" class="think-collapse" :class="{ open }">
-      <div class="think-collapse-inner">
-        <div class="think-body selectable">
-          <p v-for="(line, i) in lines" :key="i" class="think-line" :class="{ empty: line.length === 0 }">
+    <div v-if="everOpened" class="collapse-grid" :class="{ 'collapse-grid-open': open }">
+      <div class="overflow-hidden min-h-0">
+        <div class="mt-1 mb-[2px] ml-[6px] py-[2px] pl-3 border-0 border-l-[1.5px] border-solid border-line-strong max-h-[260px] overflow-y-auto text-[12.5px] leading-[1.65] text-ink-2 break-words selectable">
+          <p
+            v-for="(line, i) in lines"
+            :key="i"
+            class="last:mb-0"
+            :class="line.length === 0 ? 'h-[6px] m-0' : 'm-0 mb-1'"
+          >
             <template v-for="(run, j) in line" :key="j">
-              <strong v-if="run.bold" class="think-strong">{{ run.text }}</strong>
+              <strong v-if="run.bold" class="fw-560 text-ink">{{ run.text }}</strong>
               <span v-else>{{ run.text }}</span>
             </template>
           </p>
@@ -125,98 +136,3 @@ const lines = computed<TextRun[][]>(() => {
     </div>
   </div>
 </template>
-
-<style scoped>
-.think {
-  margin: 0 0 10px;
-}
-
-.think-head {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px 3px 4px;
-  margin-left: -4px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 12.5px;
-  line-height: 18px;
-  cursor: pointer;
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
-}
-.think-head:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-
-.think-ic {
-  width: 14px;
-  height: 14px;
-  color: #a78bfa;
-  flex: none;
-}
-.think-ic.live {
-  animation: oc-pulse 1.4s ease-in-out infinite;
-}
-
-.think-title {
-  font-weight: 500;
-}
-
-.think-chev {
-  width: 12px;
-  height: 12px;
-  color: var(--text-3);
-  transition: transform 0.22s var(--ease), color 0.14s;
-  flex: none;
-}
-.think.open .think-chev {
-  transform: rotate(90deg);
-  color: var(--text-2);
-}
-
-/* Smooth CSS Grid collapse transition */
-.think-collapse {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition: grid-template-rows 0.24s var(--ease), opacity 0.2s ease;
-}
-.think-collapse.open {
-  grid-template-rows: 1fr;
-  opacity: 1;
-}
-.think-collapse-inner {
-  overflow: hidden;
-  min-height: 0;
-}
-
-.think-body {
-  margin: 4px 0 2px 6px;
-  padding: 2px 0 2px 12px;
-  border-left: 1.5px solid var(--border-strong);
-  max-height: 260px;
-  overflow-y: auto;
-  font-size: 12.5px;
-  line-height: 1.65;
-  color: var(--text-2);
-  word-break: break-word;
-}
-
-.think-line {
-  margin: 0 0 4px;
-}
-.think-line:last-child {
-  margin-bottom: 0;
-}
-.think-line.empty {
-  height: 6px;
-  margin: 0;
-}
-.think-strong {
-  font-weight: 560;
-  color: var(--text);
-}
-</style>

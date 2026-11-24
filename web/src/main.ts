@@ -5,7 +5,10 @@ import "./codeHighlighter";
 import "@antdv-next/x-markdown/themes/index.css";
 import "@antdv-next/x-markdown/themes/light.css";
 import "@antdv-next/x-markdown/themes/dark.css";
-import "./styles.css";
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/overrides.css";
+import "virtual:uno.css";
 
 watch(
   () => store.settings?.theme,

@@ -265,6 +265,14 @@ function effortTierOf(val: string): EffortKey {
 
 const currentEffortTier = computed<EffortKey>(() => effortTierOf(currentEffortValue.value));
 
+const THINK_TIER_CLASSES: Record<EffortKey, string> = {
+  low: "text-[#38bdf8] bg-[rgba(56,189,248,0.14)] border-[rgba(56,189,248,0.26)]",
+  medium: "text-[#10b981] bg-[rgba(16,185,129,0.14)] border-[rgba(16,185,129,0.26)]",
+  high: "text-[#a78bfa] bg-[rgba(167,139,250,0.16)] border-[rgba(167,139,250,0.28)]",
+  xhigh: "text-[#f59e0b] bg-[rgba(245,158,11,0.16)] border-[rgba(245,158,11,0.28)]",
+  max: "text-[#f43f5e] bg-[rgba(244,63,94,0.17)] border-[rgba(244,63,94,0.3)]",
+};
+
 function pickEffort(val: string) {
   localEffort.value = val;
   localStorage.setItem("oc.effort", val);
@@ -774,80 +782,90 @@ defineExpose({ addFiles });
 
 <template>
   <div
-    class="composer-wrap"
+    class="relative w-full"
     @dragenter.prevent="onDragEnter"
     @dragover.prevent
     @dragleave="onDragLeave"
     @drop.prevent="onDrop"
   >
-
-
     <!-- Peeking back cards (click any card to bring it to the front) -->
-    <div v-if="backDeckCards.length" class="deck-peeks">
+    <div v-if="backDeckCards.length" class="flex flex-col items-center relative z-1 -mb-[10px]">
       <button
         v-for="(kind, idx) in backDeckCards"
         :key="kind"
         type="button"
-        class="deck-peek"
+        class="group/peek flex items-center gap-2 h-[38px] px-[14px] pb-2 border border-solid border-b-0 rounded-t-[14px] glass text-ink-2 text-[12px] cursor-pointer transition-all duration-200 ease-oc hover:-translate-y-[2px] hover:text-ink"
         :class="[
-          `kind-${kind}`,
-          backDeckCards.length >= 2 && idx === 0 ? 'tier-far' : 'tier-near',
+          backDeckCards.length >= 2 && idx === 0 ? 'w-[90%] -mb-[10px] z-1 opacity-88' : 'w-[95%] z-2',
+          kind === 'permission'
+            ? 'border-[color-mix(in_srgb,var(--warn)_36%,var(--border-strong))] bg-[color-mix(in_srgb,var(--warn-soft)_45%,var(--surface-2))] hover:bg-[color-mix(in_srgb,var(--warn-soft)_65%,var(--surface))]'
+            : 'border-line-strong bg-surface-2 hover:bg-surface',
         ]"
         @click="selectDeck(kind)"
       >
         <template v-if="kind === 'permission' && currentPerm">
-          <span class="peek-dot warn" />
-          <span class="peek-label">待确认{{ permList.length > 1 ? ` (${permList.length})` : '' }}</span>
-          <span class="peek-text">{{ currentPerm.title }}</span>
-          <span class="peek-switch">切换</span>
+          <span class="w-[6px] h-[6px] rounded-full flex-none bg-warn animate-oc-pulse-fast" />
+          <span class="fw-560 text-ink flex-none">待确认{{ permList.length > 1 ? ` (${permList.length})` : '' }}</span>
+          <span class="flex-1 min-w-0 text-left text-ink-2 truncate">{{ currentPerm.title }}</span>
+          <span class="text-[11px] text-ink-3 flex-none px-[6px] py-[1px] rounded-[5px] bg-hover transition-colors duration-140 group-hover/peek:text-ink group-hover/peek:bg-active">切换</span>
         </template>
         <template v-else-if="kind === 'skills'">
-          <span class="peek-dot skills" />
-          <span class="peek-label">Skills 与命令 ({{ allSkills.length }})</span>
-          <span class="peek-text">{{ selectedSkill ? `当前：/${selectedSkill.name}` : '点击展开选择' }}</span>
-          <span class="peek-switch">切换</span>
+          <span class="w-[6px] h-[6px] rounded-full flex-none bg-[#6366f1]" />
+          <span class="fw-560 text-ink flex-none">Skills 与命令 ({{ allSkills.length }})</span>
+          <span class="flex-1 min-w-0 text-left text-ink-2 truncate">{{ selectedSkill ? `当前：/${selectedSkill.name}` : '点击展开选择' }}</span>
+          <span class="text-[11px] text-ink-3 flex-none px-[6px] py-[1px] rounded-[5px] bg-hover transition-colors duration-140 group-hover/peek:text-ink group-hover/peek:bg-active">切换</span>
         </template>
         <template v-else-if="kind === 'queue'">
-          <span class="peek-dot queue" />
-          <span class="peek-label">待发消息 ({{ queueList.length }})</span>
-          <span class="peek-text">{{ queuePreview(queueList[0].blocks) }}</span>
-          <span class="peek-switch">切换</span>
+          <span class="w-[6px] h-[6px] rounded-full flex-none bg-ink-solid opacity-70" />
+          <span class="fw-560 text-ink flex-none">待发消息 ({{ queueList.length }})</span>
+          <span class="flex-1 min-w-0 text-left text-ink-2 truncate">{{ queuePreview(queueList[0].blocks) }}</span>
+          <span class="text-[11px] text-ink-3 flex-none px-[6px] py-[1px] rounded-[5px] bg-hover transition-colors duration-140 group-hover/peek:text-ink group-hover/peek:bg-active">切换</span>
         </template>
         <template v-else-if="kind === 'files'">
-          <span class="peek-dot files" />
-          <span class="peek-label">已选附件 ({{ attached.length }})</span>
-          <span class="peek-text">{{ filesSummary }}</span>
-          <span class="peek-switch">切换</span>
+          <span class="w-[6px] h-[6px] rounded-full flex-none bg-ok" />
+          <span class="fw-560 text-ink flex-none">已选附件 ({{ attached.length }})</span>
+          <span class="flex-1 min-w-0 text-left text-ink-2 truncate">{{ filesSummary }}</span>
+          <span class="text-[11px] text-ink-3 flex-none px-[6px] py-[1px] rounded-[5px] bg-hover transition-colors duration-140 group-hover/peek:text-ink group-hover/peek:bg-active">切换</span>
         </template>
       </button>
     </div>
 
-    <div class="composer-shell" :class="{ 'has-tray': effectiveDeck !== null, 'is-perm': effectiveDeck === 'permission' }">
+    <div
+      class="relative z-2 rounded-[20px]"
+      :class="[
+        effectiveDeck !== null ? 'border border-solid glass shadow-composer' : '',
+        effectiveDeck === 'permission'
+          ? 'border-[color-mix(in_srgb,var(--warn)_38%,var(--border-strong))] bg-[color-mix(in_srgb,var(--warn-soft)_32%,var(--surface-2))]'
+          : effectiveDeck !== null
+            ? 'border-line-strong bg-surface-2'
+            : '',
+      ]"
+    >
       <!-- Active Front Card: Permission Confirmation -->
-      <div v-if="effectiveDeck === 'permission' && currentPerm" class="tray-panel perm-panel">
-        <div class="perm-head">
-          <span class="perm-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+      <div v-if="effectiveDeck === 'permission' && currentPerm" class="px-[14px] py-[11px]">
+        <div class="flex items-center gap-[10px] min-w-0">
+          <span class="w-7 h-7 rounded-[8px] inline-grid place-items-center flex-none bg-[color-mix(in_srgb,var(--warn)_15%,transparent)] text-warn" aria-hidden="true">
+            <svg viewBox="0 0 24 24" class="w-[15px] h-[15px]" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
               <path d="M12 8v4" />
               <path d="M12 16h.01" />
             </svg>
           </span>
-          <div class="perm-meta" @click="emit('jump-turn', currentPerm.turnId)">
-            <div class="perm-title-row">
-              <span class="perm-title">{{ currentPerm.title }}</span>
-              <span v-if="permList.length > 1" class="perm-count mono">1 / {{ permList.length }}</span>
+          <div class="flex-1 min-w-0 cursor-pointer" @click="emit('jump-turn', currentPerm.turnId)">
+            <div class="flex items-center gap-[6px] min-w-0">
+              <span class="text-[13px] fw-580 text-ink truncate">{{ currentPerm.title }}</span>
+              <span v-if="permList.length > 1" class="text-[10.5px] leading-4 px-[5px] rounded-[5px] bg-[color-mix(in_srgb,var(--warn)_18%,transparent)] text-warn flex-none font-mono">1 / {{ permList.length }}</span>
             </div>
-            <div v-if="currentPerm.detail" class="perm-detail mono" :title="currentPerm.detail">
+            <div v-if="currentPerm.detail" class="text-[11px] text-ink-3 mt-[1px] truncate font-mono" :title="currentPerm.detail">
               {{ nicePath(currentPerm.detail) }}
             </div>
           </div>
-          <div class="perm-actions">
+          <div class="inline-flex items-center gap-[6px] flex-none">
             <button
               v-for="o in permRejects"
               :key="o.optionId"
               type="button"
-              class="perm-btn reject"
+              class="h-[27px] px-[11px] rounded-[8px] text-[12px] fw-540 cursor-pointer border border-solid border-line-strong bg-surface-strong text-ink-2 whitespace-nowrap transition-all duration-140 hover:not-disabled:text-err hover:not-disabled:border-[color-mix(in_srgb,var(--err)_35%,var(--border-strong))] hover:not-disabled:bg-err-soft disabled:opacity-55 disabled:cursor-wait"
               :disabled="submittingPermId === currentPerm.requestId"
               @click="answerPerm(currentPerm.requestId, o.optionId)"
             >
@@ -857,8 +875,12 @@ defineExpose({ addFiles });
               v-for="o in permAllows"
               :key="o.optionId"
               type="button"
-              class="perm-btn"
-              :class="o.kind === 'allow_always' ? 'allow-always' : 'allow-once'"
+              class="h-[27px] px-[11px] rounded-[8px] text-[12px] fw-540 cursor-pointer border border-solid whitespace-nowrap transition-all duration-140 disabled:opacity-55 disabled:cursor-wait"
+              :class="
+                o.kind === 'allow_always'
+                  ? 'border-line-strong bg-surface-strong text-ink hover:not-disabled:bg-hover hover:not-disabled:border-[color-mix(in_srgb,var(--ink)_28%,var(--border-strong))]'
+                  : 'bg-ink-solid border-ink-solid text-ink-inv hover:not-disabled:opacity-88'
+              "
               :disabled="submittingPermId === currentPerm.requestId"
               @click="answerPerm(currentPerm.requestId, o.optionId)"
             >
@@ -869,14 +891,14 @@ defineExpose({ addFiles });
       </div>
 
       <!-- Active Front Card: Queued Messages -->
-      <div v-else-if="effectiveDeck === 'queue' && queueList.length" class="tray-panel queue-panel">
-        <div class="queue-list">
-          <div v-for="(item, qi) in queueList" :key="item.id" class="queue-row">
-            <span class="queue-tag mono">{{ qi + 1 }}</span>
-            <span class="queue-text" :title="queuePreview(item.blocks)">{{ queuePreview(item.blocks) }}</span>
-            <div class="queue-acts">
+      <div v-else-if="effectiveDeck === 'queue' && queueList.length" class="px-3 py-2">
+        <div class="w-full flex flex-col gap-1 max-h-[116px] overflow-y-auto">
+          <div v-for="(item, qi) in queueList" :key="item.id" class="flex items-center gap-2 min-h-[26px] py-[2px] pl-[6px] pr-1 rounded-[7px] transition-colors duration-140 ease-oc hover:bg-hover">
+            <span class="w-[17px] h-[17px] rounded-[5px] bg-hover border border-solid border-line text-ink-3 text-[10.5px] inline-grid place-items-center flex-none font-mono">{{ qi + 1 }}</span>
+            <span class="flex-1 min-w-0 text-[12px] text-ink truncate" :title="queuePreview(item.blocks)">{{ queuePreview(item.blocks) }}</span>
+            <div class="inline-flex items-center gap-[2px] flex-none">
               <Tooltip title="立即打断当前输出并发送" :mouse-enter-delay="0.25">
-                <button type="button" class="queue-ic steer" aria-label="立即发送" @click.stop="emit('steer-queued', item.id)">
+                <button type="button" class="w-[22px] h-[22px] border-0 rounded-[6px] bg-transparent text-ink-2 inline-grid place-items-center cursor-pointer transition-colors duration-140 hover:bg-ink-solid hover:text-ink-inv [&>svg]:w-[12.5px] [&>svg]:h-[12.5px]" aria-label="立即发送" @click.stop="emit('steer-queued', item.id)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="9 10 4 15 9 20" />
                     <path d="M20 4v7a4 4 0 0 1-4 4H4" />
@@ -884,14 +906,14 @@ defineExpose({ addFiles });
                 </button>
               </Tooltip>
               <Tooltip title="放回输入框编辑" :mouse-enter-delay="0.25">
-                <button type="button" class="queue-ic" aria-label="编辑" @click.stop="emit('edit-queued', item.id)">
+                <button type="button" class="w-[22px] h-[22px] border-0 rounded-[6px] bg-transparent text-ink-3 inline-grid place-items-center cursor-pointer transition-colors duration-140 hover:bg-active hover:text-ink [&>svg]:w-[12.5px] [&>svg]:h-[12.5px]" aria-label="编辑" @click.stop="emit('edit-queued', item.id)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
                   </svg>
                 </button>
               </Tooltip>
               <Tooltip title="移出队列" :mouse-enter-delay="0.25">
-                <button type="button" class="queue-ic danger" aria-label="删除" @click.stop="emit('remove-queued', item.id)">
+                <button type="button" class="w-[22px] h-[22px] border-0 rounded-[6px] bg-transparent text-ink-3 inline-grid place-items-center cursor-pointer transition-colors duration-140 hover:bg-err-soft hover:text-err [&>svg]:w-[12.5px] [&>svg]:h-[12.5px]" aria-label="删除" @click.stop="emit('remove-queued', item.id)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 6 6 18" />
                     <path d="m6 6 12 12" />
@@ -904,88 +926,118 @@ defineExpose({ addFiles });
       </div>
 
       <!-- Active Front Card: Skills & Commands Tray triggered by typing / -->
-      <div v-else-if="effectiveDeck === 'skills' && slashOpen" class="tray-panel skills-tray">
-        <div class="skills-tray-head">
-          <span class="skills-tray-title">
-            <span class="skills-slash-mark mono">/</span>
+      <div v-else-if="effectiveDeck === 'skills' && slashOpen" class="px-3 pt-[10px] pb-3 flex flex-col gap-[9px]">
+        <div class="flex items-center gap-2 px-[2px]">
+          <span class="inline-flex items-center gap-[3px] text-[12px] fw-560 text-ink flex-none">
+            <span class="oc-skill-slash font-bold font-mono">/</span>
             <span>{{ slashQuery ? slashQuery : 'Skills 与命令' }}</span>
           </span>
-          <span class="skills-tray-hint">↑↓ 选择 · Enter 唤起 · Esc 收起</span>
-          <span class="grow" />
-          <div v-if="skillFilterTabs.length > 2" class="skills-tabs">
+          <span class="text-[10.5px] text-ink-3 truncate">↑↓ 选择 · Enter 唤起 · Esc 收起</span>
+          <span class="flex-1" />
+          <div v-if="skillFilterTabs.length > 2" class="inline-flex items-center gap-[2px] p-[2px] rounded-[7px] bg-hover flex-none">
             <button
               v-for="tab in skillFilterTabs"
               :key="tab.key"
               type="button"
-              class="skills-tab"
-              :class="{ active: skillFilter === tab.key }"
+              class="border-0 text-[11px] leading-[18px] px-[7px] rounded-[5px] cursor-pointer transition-colors duration-120"
+              :class="skillFilter === tab.key ? 'bg-surface-strong text-ink fw-540 shadow-[0_1px_2px_rgba(0,0,0,0.06)]' : 'bg-transparent text-ink-3 hover:text-ink-2'"
               @mousedown.prevent="skillFilter = tab.key"
             >
               {{ tab.label }}
             </button>
           </div>
-          <button type="button" class="skills-tray-close" aria-label="收起" @mousedown.prevent="slashDismissed = true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <button type="button" class="w-[22px] h-[22px] border-0 rounded-[6px] bg-transparent text-ink-3 inline-grid place-items-center cursor-pointer flex-none transition-colors duration-120 hover:bg-hover hover:text-ink" aria-label="收起" @mousedown.prevent="slashDismissed = true">
+            <svg viewBox="0 0 24 24" class="w-[13px] h-[13px]" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M18 6 6 18" />
               <path d="m6 6 12 12" />
             </svg>
           </button>
         </div>
 
-        <div v-if="slashItems.length" class="skills-grid">
+        <div v-if="slashItems.length" class="grid [grid-template-columns:repeat(auto-fill,minmax(168px,1fr))] gap-2 max-h-[168px] overflow-y-auto p-[1px]">
           <button
             v-for="(c, i) in slashItems"
             :key="c.name"
             type="button"
-            class="skill-tile"
-            :class="{ active: i === slashIndex }"
+            class="flex flex-col gap-1 px-[10px] py-2 rounded-[11px] border border-solid shadow-card text-left cursor-pointer min-w-0 transition-all duration-150 ease-oc hover:-translate-y-[1px] hover:border-[color-mix(in_srgb,#6366f1_34%,var(--border-strong))] hover:shadow-pop"
+            :class="
+              i === slashIndex
+                ? 'border-[color-mix(in_srgb,#6366f1_52%,var(--border-strong))] bg-[color-mix(in_srgb,#6366f1_7%,var(--surface-strong))]'
+                : 'border-line bg-surface-strong'
+            "
             :title="c.description || c.name"
             @mouseenter="slashIndex = i"
             @mousedown.prevent="pickSkill(c)"
           >
-            <div class="skill-tile-top">
-              <span class="skill-tile-dot" :class="c.kind === 'command' ? 'is-cmd' : `is-${c.source}`" />
-              <span class="skill-tile-name mono">/{{ c.name }}</span>
-              <span class="skill-tile-tag" :class="c.kind === 'command' ? 'is-cmd' : `is-${c.source}`">
+            <div class="flex items-center gap-[6px] min-w-0">
+              <span
+                class="w-[5px] h-[5px] rounded-full flex-none"
+                :class="c.kind === 'command' ? 'bg-ink-3' : c.source === 'project' ? 'bg-[#6366f1]' : 'bg-[#10b981]'"
+              />
+              <span class="flex-1 min-w-0 text-[12px] fw-580 text-ink truncate font-mono">/{{ c.name }}</span>
+              <span
+                class="flex-none text-[10px] leading-[15px] px-[5px] rounded-[4px]"
+                :class="
+                  c.kind === 'skill' && c.source === 'project'
+                    ? 'oc-skill-tag-project bg-[color-mix(in_srgb,#6366f1_11%,transparent)]'
+                    : 'bg-hover text-ink-3'
+                "
+              >
                 {{ skillBadgeText(c) }}
               </span>
             </div>
-            <div class="skill-tile-desc">{{ c.description || '点击或按 Enter 唤起' }}</div>
+            <div class="text-[11px] leading-[1.4] text-ink-3 truncate">{{ c.description || '点击或按 Enter 唤起' }}</div>
           </button>
         </div>
-        <div v-else class="skills-tray-empty">
+        <div v-else class="py-3 px-2 text-center text-[12px] text-ink-3">
           {{ allSkills.length ? '未找到匹配的 Skill 或命令' : '暂无可用 Skills（可在项目 .claude/skills 或 ~/.claude/skills 添加）' }}
         </div>
       </div>
 
       <!-- Active Front Card: Uploaded Files / Images -->
-      <div v-else-if="effectiveDeck === 'files' && attached.length" class="top-tray">
+      <div v-else-if="effectiveDeck === 'files' && attached.length" class="flex items-center gap-[14px] px-4 py-3 bg-transparent">
         <div
-          class="mini-cards-group"
+          class="oc-mini-cards-group flex items-center gap-[10px]"
           :class="{ 'is-stacked': attached.length > 1 }"
           :style="attached.length > 1 ? { '--fan-count': Math.min(attached.length, 4) } : undefined"
         >
-          <div v-for="(a, i) in attached.slice(0, 4)" :key="i" class="mini-card" :class="{ 'is-img': a.type === 'image' }">
-            <button class="mini-card-remove" @click.stop="removeAt(i)" aria-label="移除">×</button>
+          <div
+            v-for="(a, i) in attached.slice(0, 4)"
+            :key="i"
+            class="oc-mini-card group/card w-[68px] h-[68px] rounded-[12px] border border-solid border-line-strong bg-surface-strong shadow-card flex flex-col items-center justify-center gap-1 relative cursor-pointer select-none flex-none"
+            :class="{ 'p-0': a.type === 'image' }"
+          >
+            <button
+              class="absolute -top-[6px] -right-[6px] z-6 w-[18px] h-[18px] rounded-full bg-ink-solid text-ink-inv text-[12px] leading-none flex items-center justify-center border-0 cursor-pointer opacity-0 scale-85 transition-all duration-140 group-hover/card:opacity-100 group-hover/card:scale-100"
+              @click.stop="removeAt(i)"
+              aria-label="移除"
+            >
+              ×
+            </button>
             <img
               v-if="a.type === 'image'"
               :src="`data:${a.mimeType};base64,${a.data}`"
               alt="附件图片"
-              class="mini-card-thumb"
+              class="w-full h-full object-cover rounded-[11px] block"
             />
             <template v-else>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="mini-file-ic">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="w-[18px] h-[18px] text-ink-2 flex-none">
                 <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
                 <polyline points="14 2 14 8 20 8" />
               </svg>
-              <span class="mini-card-title">{{ (a as { name: string }).name }}</span>
+              <span class="text-[10px] text-ink-2 max-w-[56px] truncate">{{ (a as { name: string }).name }}</span>
             </template>
-            <span v-if="i === 0 && attached.length > 4" class="mini-more mono">+{{ attached.length - 4 }}</span>
+            <span v-if="i === 0 && attached.length > 4" class="absolute bottom-1 right-1 text-[10px] leading-[15px] px-[5px] rounded-full bg-ink-solid text-ink-inv font-semibold font-mono">+{{ attached.length - 4 }}</span>
           </div>
         </div>
 
         <Tooltip title="继续添加图片或文件" :mouse-enter-delay="0.3">
-          <button type="button" class="upload-dashed-tile" aria-label="添加图片或文件" @click="inputFiles?.click()">
+          <button
+            type="button"
+            class="w-[68px] h-[68px] rounded-[12px] border-[1.5px] border-dashed border-line-strong bg-transparent flex items-center justify-center text-ink-3 cursor-pointer flex-none transition-all duration-160 ease-oc hover:border-ink-solid hover:bg-surface hover:text-ink active:scale-[0.96]"
+            aria-label="添加图片或文件"
+            @click="inputFiles?.click()"
+          >
             <!-- Lucide image-plus -->
             <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
               <path d="M16 5h6" />
@@ -1000,163 +1052,192 @@ defineExpose({ addFiles });
 
       <!-- Layer 2: Main Sender card keeps its full 4-corner 18px rounded border intact -->
       <div
-        class="composer"
-        :class="{ busy: running, dragging }"
+        class="relative z-2 border border-solid glass rounded-[18px] transition-all duration-180 ease-oc overflow-hidden focus-within:bg-surface-strong focus-within:border-[color-mix(in_srgb,var(--ink)_28%,var(--border-strong))] focus-within:shadow-[var(--shadow-composer),0_0_0_3px_var(--accent-soft)]"
+        :class="[
+          effectiveDeck !== null ? 'mx-[-1px] mb-[-1px] bg-surface-strong shadow-[0_-2px_12px_rgba(0,0,0,0.1),var(--glass-rim)]' : 'bg-surface shadow-composer',
+          dragging ? 'border-ink-solid shadow-[0_0_0_3px_var(--accent-soft)]' : 'border-line-strong',
+        ]"
         @compositionstart.capture="onCompositionStart"
         @compositionend.capture="onCompositionEnd"
       >
-        <div v-if="dragging" class="drop-overlay">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="lucide">
+        <div v-if="dragging" class="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-surface-strong glass text-ink text-[13px] fw-550 pointer-events-none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-[15px] h-[15px] flex-none">
             <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
           </svg>
           <span>松手即可附加图片或文件</span>
         </div>
 
         <Sender
-        ref="senderRef"
-        :value="draft"
-        :skill="senderSkill"
-        :loading="false"
-        :disabled="disabled"
-        :submit-type="sendKey"
-        :auto-size="{ minRows: lockProvider ? 1 : 2, maxRows: 10 }"
-        :placeholder="selectedSkill ? `使用 /${selectedSkill.name}，输入补充说明或直接发送…` : (placeholder ?? '描述你想完成的任务…')"
-        :on-change="onSenderChange"
-        :on-key-down="onKeydown"
-        :on-paste-file="onPasteFile"
-        :on-paste="onPaste"
-        :on-submit="submit"
-        :on-cancel="() => emit('stop')"
-        class="sender"
-      >
-        <template #suffix><span style="display: none" /></template>
-        <template #footer>
-          <div class="bar">
-            <!-- Leftmost: File / Image attachment + Skills Picker -->
-            <Tooltip title="添加图片或文件（支持拖拽 / 粘贴）" :mouse-enter-delay="0.3">
-              <button type="button" class="icon-ctrl" @click="inputFiles?.click()" aria-label="添加附件">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="lucide">
-                  <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-              </button>
-            </Tooltip>
-
-
-
-            <span class="grow" />
-
-            <!-- Rightmost: Standalone Thinking/Reasoning icon (Codex-style) + Agent/Model Picker + Send -->
-            <div class="right-controls">
-              <Dropdown :menu="effortMenu" :trigger="['click']" placement="topRight">
-                <Tooltip :title="`思考强度：${currentEffortLabel}`" :mouse-enter-delay="0.3">
-                  <button
-                    class="icon-ctrl think-btn"
-                    :class="`tier-${currentEffortTier}`"
-                    aria-label="思考强度"
-                  >
-                    <!-- Lucide Brain -->
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="lucide">
-                      <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
-                      <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
-                      <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
-                      <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
-                      <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
-                      <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
-                      <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
-                      <path d="M6 18a4 4 0 0 1-1.967-.516" />
-                      <path d="M19.967 17.484A4 4 0 0 1 18 18" />
-                    </svg>
-                  </button>
-                </Tooltip>
-              </Dropdown>
-
-              <ProviderPicker
-                :model-value="agentId"
-                :model-option="modelOption"
-                :selected-model-value="selectedModelValue"
-                :live-status="live.status"
-                :locked="lockProvider"
-                :cwd="cwd"
-                @update:model-value="(id) => emit('update:agentId', id)"
-                @pick-model="(cid, val) => emit('pick-model', cid, val)"
-                @manage="emit('manage')"
-              />
-
-              <template v-if="running">
-                <Tooltip
-                  v-if="canSend"
-                  :title="`加入待发队列 (${sendKey === 'enter' ? 'Enter' : 'Shift+Enter'})`"
-                  :mouse-enter-delay="0.3"
+          ref="senderRef"
+          :value="draft"
+          :skill="senderSkill"
+          :loading="false"
+          :disabled="disabled"
+          :submit-type="sendKey"
+          :auto-size="{ minRows: lockProvider ? 1 : 2, maxRows: 10 }"
+          :placeholder="selectedSkill ? `使用 /${selectedSkill.name}，输入补充说明或直接发送…` : (placeholder ?? '描述你想完成的任务…')"
+          :on-change="onSenderChange"
+          :on-key-down="onKeydown"
+          :on-paste-file="onPasteFile"
+          :on-paste="onPaste"
+          :on-submit="submit"
+          :on-cancel="() => emit('stop')"
+          class="oc-sender"
+        >
+          <template #suffix><span class="hidden" /></template>
+          <template #footer>
+            <div class="flex items-center gap-[6px] min-h-8">
+              <!-- Leftmost: File / Image attachment -->
+              <Tooltip title="添加图片或文件（支持拖拽 / 粘贴）" :mouse-enter-delay="0.3">
+                <button
+                  type="button"
+                  class="inline-grid place-items-center w-7 h-7 border border-solid border-transparent rounded-[8px] bg-transparent text-ink-2 cursor-pointer transition-colors duration-140 hover:bg-hover hover:border-line hover:text-ink"
+                  @click="inputFiles?.click()"
+                  aria-label="添加附件"
                 >
-                  <button class="send-btn queue-btn" @click="() => submit()" aria-label="加入队列">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-[15px] h-[15px] flex-none">
+                    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </button>
+              </Tooltip>
+
+              <span class="flex-1" />
+
+              <!-- Rightmost: Standalone Thinking/Reasoning icon (Codex-style) + Agent/Model Picker + Send -->
+              <div class="inline-flex items-center gap-[5px]">
+                <Dropdown :menu="effortMenu" :trigger="['click']" placement="topRight">
+                  <Tooltip :title="`思考强度：${currentEffortLabel}`" :mouse-enter-delay="0.3">
+                    <button
+                      class="inline-grid place-items-center w-7 h-7 border border-solid rounded-[8px] cursor-pointer transition-colors duration-140"
+                      :class="THINK_TIER_CLASSES[currentEffortTier]"
+                      aria-label="思考强度"
+                    >
+                      <!-- Lucide Brain -->
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="w-[15px] h-[15px] flex-none">
+                        <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+                        <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+                        <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
+                        <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
+                        <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
+                        <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
+                        <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
+                        <path d="M6 18a4 4 0 0 1-1.967-.516" />
+                        <path d="M19.967 17.484A4 4 0 0 1 18 18" />
+                      </svg>
+                    </button>
+                  </Tooltip>
+                </Dropdown>
+
+                <ProviderPicker
+                  :model-value="agentId"
+                  :model-option="modelOption"
+                  :selected-model-value="selectedModelValue"
+                  :live-status="live.status"
+                  :locked="lockProvider"
+                  :cwd="cwd"
+                  @update:model-value="(id) => emit('update:agentId', id)"
+                  @pick-model="(cid, val) => emit('pick-model', cid, val)"
+                  @manage="emit('manage')"
+                />
+
+                <template v-if="running">
+                  <Tooltip
+                    v-if="canSend"
+                    :title="`加入待发队列 (${sendKey === 'enter' ? 'Enter' : 'Shift+Enter'})`"
+                    :mouse-enter-delay="0.3"
+                  >
+                    <button
+                      class="w-[30px] h-[30px] rounded-full border border-solid border-line-strong bg-surface-2 text-ink inline-grid place-items-center cursor-pointer flex-none transition-all duration-140 ease-oc hover:bg-ink-solid hover:border-ink-solid hover:text-ink-inv hover:scale-[1.04] active:scale-[0.96]"
+                      @click="() => submit()"
+                      aria-label="加入队列"
+                    >
+                      <!-- Lucide ArrowUp -->
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="w-[14px] h-[14px]">
+                        <line x1="12" y1="19" x2="12" y2="5" />
+                        <polyline points="5 12 12 5 19 12" />
+                      </svg>
+                    </button>
+                  </Tooltip>
+                  <Tooltip title="停止生成" :mouse-enter-delay="0.3">
+                    <button
+                      class="w-[30px] h-[30px] rounded-full border-0 bg-ink-solid text-ink-inv inline-grid place-items-center cursor-pointer flex-none transition-all duration-140 ease-oc hover:scale-[1.04] active:scale-[0.96]"
+                      @click="emit('stop')"
+                      aria-label="停止"
+                    >
+                      <span class="w-[9px] h-[9px] rounded-[2px] bg-ink-inv" />
+                    </button>
+                  </Tooltip>
+                </template>
+                <Tooltip v-else :title="`发送 (${sendKey === 'enter' ? 'Enter' : 'Shift+Enter'})`" :mouse-enter-delay="0.3">
+                  <button
+                    class="w-[30px] h-[30px] rounded-full border-0 bg-ink-solid text-ink-inv inline-grid place-items-center cursor-pointer flex-none transition-all duration-140 ease-oc hover:not-disabled:scale-[1.04] active:not-disabled:scale-[0.96] disabled:bg-hover disabled:text-ink-3 disabled:cursor-not-allowed disabled:opacity-65"
+                    :disabled="!canSend"
+                    @click="() => submit()"
+                    aria-label="发送"
+                  >
                     <!-- Lucide ArrowUp -->
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="send-ic">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="w-[14px] h-[14px]">
                       <line x1="12" y1="19" x2="12" y2="5" />
                       <polyline points="5 12 12 5 19 12" />
                     </svg>
                   </button>
                 </Tooltip>
-                <Tooltip title="停止生成" :mouse-enter-delay="0.3">
-                  <button class="send-btn stop" @click="emit('stop')" aria-label="停止">
-                    <span class="stop-square" />
-                  </button>
-                </Tooltip>
-              </template>
-              <Tooltip v-else :title="`发送 (${sendKey === 'enter' ? 'Enter' : 'Shift+Enter'})`" :mouse-enter-delay="0.3">
-                <button class="send-btn" :disabled="!canSend" @click="() => submit()" aria-label="发送">
-                  <!-- Lucide ArrowUp -->
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="send-ic">
-                    <line x1="12" y1="19" x2="12" y2="5" />
-                    <polyline points="5 12 12 5 19 12" />
-                  </svg>
-                </button>
-              </Tooltip>
+              </div>
             </div>
-          </div>
-        </template>
-      </Sender>
+          </template>
+        </Sender>
       </div>
     </div>
 
     <!-- Below Sender: Permission Select (downward), Directory, and Git Branch -->
-    <div class="subbar">
+    <div class="flex items-center gap-1 px-[6px] pt-2 h-8 flex-nowrap overflow-hidden">
       <Dropdown :menu="permissionMenu" :trigger="['click']" placement="bottomLeft" :disabled="isPi">
         <Tooltip :title="isPi ? 'Pi 仅支持完全访问模式' : '选择权限模式'" :mouse-enter-delay="0.35">
-          <button class="sub-pill" :class="{ warn: effectivePerm === 'full', auto: effectivePerm === 'auto', locked: isPi }">
+          <button
+            class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-[11.5px] flex-none transition-colors duration-140"
+            :class="[
+              isPi ? 'cursor-default' : 'cursor-pointer hover:bg-surface-2 hover:border-line hover:text-ink',
+              effectivePerm === 'full' ? 'text-warn' : effectivePerm === 'auto' ? 'text-ink' : 'text-ink-2',
+            ]"
+          >
             <!-- Lucide LockOpen / Zap / Shield -->
-            <svg v-if="effectivePerm === 'full'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="lucide xs">
+            <svg v-if="effectivePerm === 'full'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
               <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
               <path d="M7 11V7a5 5 0 0 1 9.9-1" />
             </svg>
-            <svg v-else-if="effectivePerm === 'auto'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="lucide xs">
+            <svg v-else-if="effectivePerm === 'auto'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
             </svg>
-            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="lucide xs">
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
             </svg>
             <span>{{ currentPermLabel }}</span>
-            <svg v-if="!isPi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sub-chev">
+            <svg v-if="!isPi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[11px] h-[11px] opacity-65 flex-none">
               <polyline points="6 9 12 15 18 9" />
             </svg>
           </button>
         </Tooltip>
       </Dropdown>
 
-      <span class="sub-sep" />
+      <span class="w-[1px] h-3 bg-line-strong mx-[2px]" />
 
-      <button class="sub-pill cwd-pill" :title="cwd" @click="emit('cwd')">
+      <button
+        class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-ink-2 text-[11.5px] cursor-pointer flex-[0_1_auto] min-w-0 max-w-[260px] transition-colors duration-140 hover:bg-surface-2 hover:border-line hover:text-ink"
+        :title="cwd"
+        @click="emit('cwd')"
+      >
         <!-- Lucide Folder -->
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="lucide xs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
           <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
         </svg>
-        <span class="cwd-path mono">{{ cwdLabel }}</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sub-chev">
+        <span class="truncate font-mono">{{ cwdLabel }}</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[11px] h-[11px] opacity-65 flex-none">
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>
 
       <template v-if="isGitRepo">
-        <span class="sub-sep" />
+        <span class="w-[1px] h-3 bg-line-strong mx-[2px]" />
         <Dropdown
           :menu="branchMenu"
           :trigger="['click']"
@@ -1165,1196 +1246,27 @@ defineExpose({ addFiles });
           @open-change="(open: boolean) => { if (open && cwd) void refreshGit(cwd); }"
         >
           <Tooltip :title="`切换 Git 分支（当前：${currentBranch}）`" :mouse-enter-delay="0.35">
-            <button class="sub-pill branch-pill" :disabled="switchingBranch">
+            <button
+              class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-ink-2 text-[11.5px] cursor-pointer flex-[0_1_auto] min-w-0 max-w-[190px] transition-colors duration-140 hover:bg-surface-2 hover:border-line hover:text-ink disabled:opacity-60 disabled:cursor-wait"
+              :disabled="switchingBranch"
+            >
               <!-- Lucide GitBranch -->
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="lucide xs">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
                 <line x1="6" x2="6" y1="3" y2="15" />
                 <circle cx="18" cy="6" r="3" />
                 <circle cx="6" cy="18" r="3" />
                 <path d="M18 9a9 9 0 0 1-9 9" />
               </svg>
-              <span class="branch-name mono">{{ switchingBranch ? '切换中…' : currentBranch }}</span>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sub-chev">
+              <span class="truncate font-mono">{{ switchingBranch ? '切换中…' : currentBranch }}</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[11px] h-[11px] opacity-65 flex-none">
                 <polyline points="6 9 12 15 18 9" />
               </svg>
             </button>
           </Tooltip>
         </Dropdown>
       </template>
-
     </div>
 
     <input ref="inputFiles" type="file" multiple hidden @change="(e) => addFiles((e.target as HTMLInputElement).files!)" />
   </div>
 </template>
-
-<style scoped>
-.composer-wrap {
-  position: relative;
-  width: 100%;
-}
-
-.lucide {
-  width: 15px;
-  height: 15px;
-  flex: none;
-}
-.lucide.sm {
-  width: 13px;
-  height: 13px;
-}
-.lucide.xs {
-  width: 12.5px;
-  height: 12.5px;
-}
-
-/* Peeking back cards above the composer shell (click any card to switch to front) */
-.deck-peeks {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  position: relative;
-  z-index: 1;
-  margin-bottom: -10px;
-}
-
-.deck-peek {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 38px;
-  padding: 0 14px 8px;
-  border: 1px solid var(--border-strong);
-  border-bottom: none;
-  border-radius: 14px 14px 0 0;
-  background: var(--surface-2);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  color: var(--text-2);
-  font-size: 12px;
-  cursor: pointer;
-  transition: transform 0.2s var(--ease), background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-}
-.deck-peek.tier-near {
-  width: 95%;
-  z-index: 2;
-}
-.deck-peek.tier-far {
-  width: 90%;
-  margin-bottom: -10px;
-  z-index: 1;
-  opacity: 0.88;
-}
-.deck-peek:hover {
-  transform: translateY(-2px);
-  background: var(--surface);
-  color: var(--text);
-}
-.deck-peek.kind-permission {
-  border-color: color-mix(in srgb, var(--warn) 36%, var(--border-strong));
-  background: color-mix(in srgb, var(--warn-soft) 45%, var(--surface-2));
-}
-.deck-peek.kind-permission:hover {
-  background: color-mix(in srgb, var(--warn-soft) 65%, var(--surface));
-}
-
-.peek-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: none;
-}
-.peek-dot.warn {
-  background: var(--warn);
-  animation: oc-pulse 1.4s ease-in-out infinite;
-}
-.peek-dot.queue {
-  background: var(--ink);
-  opacity: 0.7;
-}
-.peek-dot.files {
-  background: var(--ok);
-}
-.peek-label {
-  font-weight: 560;
-  color: var(--text);
-  flex: none;
-}
-.peek-text {
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.peek-switch {
-  font-size: 11px;
-  color: var(--text-3);
-  flex: none;
-  padding: 1px 6px;
-  border-radius: 5px;
-  background: var(--hover);
-  transition: color 0.14s, background 0.14s;
-}
-.deck-peek:hover .peek-switch {
-  color: var(--text);
-  background: var(--active);
-}
-
-/* Outer shell matching sender-stacked-studio: rounded 20px tray seamlessly wrapping the 18px Sender card */
-.composer-shell {
-  position: relative;
-  z-index: 2;
-  border-radius: 20px;
-}
-.composer-shell.has-tray {
-  border: 1px solid var(--border-strong);
-  background: var(--surface-2);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  box-shadow: var(--shadow-composer);
-}
-.composer-shell.is-perm {
-  border-color: color-mix(in srgb, var(--warn) 38%, var(--border-strong));
-  background: color-mix(in srgb, var(--warn-soft) 32%, var(--surface-2));
-}
-
-.tray-panel {
-  padding: 11px 14px;
-}
-
-/* Active Permission Confirmation Panel */
-.perm-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.perm-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  background: color-mix(in srgb, var(--warn) 15%, transparent);
-  color: var(--warn);
-}
-.perm-icon svg {
-  width: 15px;
-  height: 15px;
-}
-.perm-meta {
-  flex: 1;
-  min-width: 0;
-  cursor: pointer;
-}
-.perm-title-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.perm-title {
-  font-size: 13px;
-  font-weight: 580;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.perm-count {
-  font-size: 10.5px;
-  line-height: 16px;
-  padding: 0 5px;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--warn) 18%, transparent);
-  color: var(--warn);
-  flex: none;
-}
-.perm-detail {
-  font-size: 11px;
-  color: var(--text-3);
-  margin-top: 1px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.perm-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-}
-.perm-btn {
-  height: 27px;
-  padding: 0 11px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 540;
-  cursor: pointer;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-strong);
-  color: var(--text-2);
-  transition: background 0.14s, color 0.14s, border-color 0.14s, opacity 0.14s;
-  white-space: nowrap;
-}
-.perm-btn:disabled {
-  opacity: 0.55;
-  cursor: wait;
-}
-.perm-btn.reject:hover:not(:disabled) {
-  color: var(--err);
-  border-color: color-mix(in srgb, var(--err) 35%, var(--border-strong));
-  background: var(--err-soft);
-}
-.perm-btn.allow-always {
-  color: var(--text);
-  background: var(--surface-strong);
-}
-.perm-btn.allow-always:hover:not(:disabled) {
-  background: var(--hover);
-  border-color: color-mix(in srgb, var(--ink) 28%, var(--border-strong));
-}
-.perm-btn.allow-once {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--ink-inv);
-}
-.perm-btn.allow-once:hover:not(:disabled) {
-  opacity: 0.88;
-}
-
-/* Active Queued Messages Panel */
-.queue-panel {
-  padding: 8px 12px;
-}
-.queue-list {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 116px;
-  overflow-y: auto;
-}
-.queue-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 26px;
-  padding: 2px 4px 2px 6px;
-  border-radius: 7px;
-  transition: background 0.14s var(--ease);
-}
-.queue-row:hover {
-  background: var(--hover);
-}
-.queue-tag {
-  width: 17px;
-  height: 17px;
-  border-radius: 5px;
-  background: var(--hover);
-  border: 1px solid var(--border);
-  color: var(--text-3);
-  font-size: 10.5px;
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-}
-.queue-text {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.queue-acts {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex: none;
-}
-.queue-ic {
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-3);
-  display: inline-grid;
-  place-items: center;
-  cursor: pointer;
-  transition: background 0.14s, color 0.14s;
-}
-.queue-ic svg {
-  width: 12.5px;
-  height: 12.5px;
-}
-.queue-ic:hover {
-  background: var(--active);
-  color: var(--text);
-}
-.queue-ic.steer {
-  color: var(--text-2);
-}
-.queue-ic.steer:hover {
-  background: var(--ink);
-  color: var(--ink-inv);
-}
-.queue-ic.danger:hover {
-  background: var(--err-soft);
-  color: var(--err);
-}
-
-.composer {
-  position: relative;
-  z-index: 2;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border-radius: 18px;
-  box-shadow: var(--shadow-composer);
-  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease), background 0.18s var(--ease);
-  overflow: hidden;
-}
-.composer-shell.has-tray .composer {
-  margin: 0 -1px -1px -1px;
-  background: var(--surface-strong);
-  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.1), var(--glass-rim);
-}
-.composer:focus-within {
-  background: var(--surface-strong);
-  border-color: color-mix(in srgb, var(--ink) 28%, var(--border-strong));
-  box-shadow: var(--shadow-composer), 0 0 0 3px var(--accent-soft);
-}
-.composer.dragging {
-  border-color: var(--ink);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.drop-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  background: var(--surface-strong);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 550;
-  pointer-events: none;
-}
-
-.sender {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-.sender :deep(.antd-sender-content) {
-  padding: 12px 16px 6px 16px !important;
-}
-.sender :deep(textarea),
-.sender :deep(.ant-input) {
-  font-size: 14.5px !important;
-  line-height: 1.62 !important;
-  padding: 0 !important;
-  color: var(--text) !important;
-}
-.sender :deep(.antd-sender-input-slot) {
-  font-size: 14.5px !important;
-  line-height: 24px !important;
-  padding: 0 !important;
-  color: var(--text) !important;
-  outline: none !important;
-  overflow-x: hidden !important;
-  box-sizing: border-box !important;
-}
-.sender :deep(.antd-sender-input-slot .ProseMirror) {
-  font-size: 14.5px !important;
-  line-height: 24px !important;
-  padding: 0 !important;
-  color: var(--text) !important;
-  outline: none !important;
-  min-height: 24px !important;
-  overflow: visible !important;
-}
-.sender :deep(textarea:focus-visible),
-.sender :deep(.ant-input:focus-visible) {
-  box-shadow: none !important;
-}
-.sender :deep(.antd-sender-footer) {
-  padding: 4px 12px 10px 10px !important;
-  border-top: none !important;
-}
-.sender :deep(.antd-sender-input) {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-.sender :deep(.antd-sender-skill) {
-  display: inline-flex !important;
-  align-items: center !important;
-  height: 21px !important;
-  line-height: 21px !important;
-  margin: 0 !important;
-  vertical-align: middle !important;
-  transform: translateY(-1px);
-}
-.sender :deep(.antd-sender-skill-wrapper) {
-  display: inline-flex !important;
-  align-items: center !important;
-  height: 21px !important;
-}
-.sender :deep(.antd-sender-skill-holder) {
-  width: 6px !important;
-  height: 21px !important;
-}
-.sender :deep(.antd-sender-skill-tag) {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 4px !important;
-  height: 21px !important;
-  padding: 0 4px 0 7px !important;
-  box-sizing: border-box !important;
-  border-radius: 6px !important;
-  background: color-mix(in srgb, #6366f1 10%, var(--surface-2)) !important;
-  border: 1px solid color-mix(in srgb, #6366f1 22%, var(--border-strong)) !important;
-  color: var(--text) !important;
-  font-size: 12px !important;
-  font-weight: 530 !important;
-  line-height: 1 !important;
-  box-shadow: none !important;
-  transition: background 0.15s var(--ease), border-color 0.15s var(--ease) !important;
-}
-.sender :deep(.antd-sender-skill-tag:hover) {
-  background: color-mix(in srgb, #6366f1 15%, var(--surface-2)) !important;
-  border-color: color-mix(in srgb, #6366f1 34%, var(--border-strong)) !important;
-}
-.sender :deep(.antd-sender-skill-tag-text) {
-  display: inline-flex !important;
-  align-items: center !important;
-  line-height: 1 !important;
-}
-.sender :deep(.oc-skill-label) {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  font-size: 12px;
-}
-.sender :deep(.oc-skill-slash) {
-  color: #6366f1;
-  font-weight: 600;
-}
-:root[data-theme="dark"] .sender :deep(.oc-skill-slash) {
-  color: #818cf8;
-}
-.sender :deep(.oc-skill-name) {
-  letter-spacing: -0.01em;
-}
-.sender :deep(.antd-sender-skill-close) {
-  display: inline-grid !important;
-  place-items: center !important;
-  width: 14px !important;
-  height: 14px !important;
-  border-radius: 4px !important;
-  color: var(--text-3) !important;
-  font-size: 9px !important;
-  opacity: 0.72;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s, opacity 0.12s !important;
-}
-.sender :deep(.antd-sender-skill-close:hover) {
-  opacity: 1;
-  background: color-mix(in srgb, var(--ink) 12%, transparent) !important;
-  color: var(--text) !important;
-}
-.skill-btn.active {
-  background: color-mix(in srgb, #6366f1 12%, transparent);
-  border-color: color-mix(in srgb, #6366f1 28%, var(--border));
-  color: #6366f1;
-}
-:root[data-theme="dark"] .skill-btn.active {
-  color: #818cf8;
-}
-
-.bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-}
-
-.icon-ctrl {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-2);
-  cursor: pointer;
-  transition: background 0.14s, color 0.14s, border-color 0.14s;
-}
-.icon-ctrl:hover {
-  background: var(--hover);
-  border-color: var(--border);
-  color: var(--text);
-}
-.think-btn.tier-low {
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.14);
-  border-color: rgba(56, 189, 248, 0.26);
-}
-.think-btn.tier-medium {
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.14);
-  border-color: rgba(16, 185, 129, 0.26);
-}
-.think-btn.tier-high {
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.16);
-  border-color: rgba(167, 139, 250, 0.28);
-}
-.think-btn.tier-xhigh {
-  color: #f59e0b;
-  background: rgba(245, 158, 11, 0.16);
-  border-color: rgba(245, 158, 11, 0.28);
-}
-.think-btn.tier-max {
-  color: #f43f5e;
-  background: rgba(244, 63, 94, 0.17);
-  border-color: rgba(244, 63, 94, 0.3);
-}
-
-.right-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.send-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 999px;
-  border: none;
-  background: var(--ink);
-  color: var(--ink-inv);
-  display: inline-grid;
-  place-items: center;
-  cursor: pointer;
-  flex: none;
-  transition: transform 0.14s var(--ease), opacity 0.14s, background 0.14s;
-}
-.send-ic {
-  width: 14px;
-  height: 14px;
-}
-.send-btn:hover:not(:disabled) {
-  transform: scale(1.04);
-}
-.send-btn:active:not(:disabled) {
-  transform: scale(0.96);
-}
-.send-btn:disabled {
-  background: var(--hover);
-  color: var(--text-3);
-  cursor: not-allowed;
-  opacity: 0.65;
-}
-.send-btn.queue-btn {
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  color: var(--text);
-}
-.send-btn.queue-btn:hover {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--ink-inv);
-}
-.send-btn.stop {
-  background: var(--ink);
-}
-.stop-square {
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  background: var(--ink-inv);
-}
-
-.sel {
-  font-size: 12px;
-  max-width: 150px;
-}
-.sel :deep(.ant-select-selection-item) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 26px !important;
-  font-size: 12px;
-}
-.sel :deep(.ant-select-selector) {
-  padding: 0 7px !important;
-  height: 26px !important;
-  color: var(--text-2) !important;
-  font-size: 12px;
-  border-radius: 8px !important;
-  transition: background 0.14s, color 0.14s;
-}
-.sel:hover :deep(.ant-select-selector) {
-  background: var(--hover) !important;
-  color: var(--text) !important;
-}
-
-.grow {
-  flex: 1;
-}
-
-/* Below-sender bar: Permission Select, Directory, Git Branch */
-.subbar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 6px 0;
-  height: 32px;
-  flex-wrap: nowrap;
-  overflow: hidden;
-}
-
-.sub-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 11.5px;
-  cursor: pointer;
-  flex: none;
-  transition: background 0.14s, color 0.14s, border-color 0.14s;
-}
-.sub-pill:hover:not(.locked) {
-  background: var(--surface-2);
-  border-color: var(--border);
-  color: var(--text);
-}
-.sub-pill.locked {
-  cursor: default;
-}
-.sub-pill.auto {
-  color: var(--text);
-}
-.sub-pill.warn {
-  color: var(--warn);
-}
-.cwd-pill {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 260px;
-}
-.cwd-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.branch-pill {
-  color: var(--text-2);
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 190px;
-}
-.branch-pill:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-.branch-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sub-chev {
-  width: 11px;
-  height: 11px;
-  opacity: 0.65;
-  flex: none;
-}
-.sub-sep {
-  width: 1px;
-  height: 12px;
-  background: var(--border-strong);
-  margin: 0 2px;
-}
-
-
-/* Top stacked mini-cards tray (matches sender-stacked-studio 1:1 curved seam) */
-.top-tray {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 12px 16px;
-  background: transparent;
-}
-
-.mini-cards-group {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  transition: width 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.mini-cards-group.is-stacked {
-  position: relative;
-  width: 78px;
-  height: 68px;
-}
-.mini-cards-group.is-stacked:hover {
-  width: calc((var(--fan-count, 2) - 1) * 64px + 72px);
-}
-
-.mini-card {
-  width: 68px;
-  height: 68px;
-  border-radius: 12px;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-strong);
-  box-shadow: var(--shadow-card);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  position: relative;
-  cursor: pointer;
-  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.24s ease, border-color 0.16s ease;
-  user-select: none;
-  flex: none;
-}
-.mini-card.is-img {
-  padding: 0;
-}
-.mini-card-thumb {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 11px;
-  display: block;
-}
-.mini-file-ic {
-  width: 18px;
-  height: 18px;
-  color: var(--text-2);
-  flex: none;
-}
-.mini-card-title {
-  font-size: 10px;
-  color: var(--text-2);
-  max-width: 56px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mini-more {
-  position: absolute;
-  bottom: 4px;
-  right: 4px;
-  font-size: 10px;
-  line-height: 15px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--ink);
-  color: var(--ink-inv);
-  font-weight: 600;
-}
-
-.mini-card-remove {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  z-index: 6;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--ink);
-  color: var(--ink-inv);
-  font-size: 12px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  cursor: pointer;
-  opacity: 0;
-  transform: scale(0.85);
-  transition: opacity 0.14s ease, transform 0.14s ease;
-}
-.mini-card:hover .mini-card-remove {
-  opacity: 1;
-  transform: scale(1);
-}
-
-/* Stacked overlap & tilt physics */
-.mini-cards-group.is-stacked .mini-card {
-  position: absolute;
-  top: 0;
-  left: 0;
-  transform-origin: bottom center;
-}
-.mini-cards-group.is-stacked .mini-card:nth-child(1) {
-  z-index: 4;
-  transform: translate(0, 0) rotate(0deg);
-}
-.mini-cards-group.is-stacked .mini-card:nth-child(2) {
-  z-index: 3;
-  transform: translate(6px, -3px) rotate(5deg);
-}
-.mini-cards-group.is-stacked .mini-card:nth-child(3) {
-  z-index: 2;
-  transform: translate(-5px, -5px) rotate(-6deg);
-}
-.mini-cards-group.is-stacked .mini-card:nth-child(4) {
-  z-index: 1;
-  transform: translate(10px, -6px) rotate(8deg);
-}
-
-/* Hover spring fan-out */
-.mini-cards-group.is-stacked:hover .mini-card:nth-child(1) {
-  transform: translate(0, -4px) rotate(-2deg);
-  box-shadow: var(--shadow-pop);
-}
-.mini-cards-group.is-stacked:hover .mini-card:nth-child(2) {
-  transform: translate(62px, -2px) rotate(3deg);
-  box-shadow: var(--shadow-pop);
-}
-.mini-cards-group.is-stacked:hover .mini-card:nth-child(3) {
-  transform: translate(124px, 0px) rotate(6deg);
-  box-shadow: var(--shadow-pop);
-}
-.mini-cards-group.is-stacked:hover .mini-card:nth-child(4) {
-  transform: translate(186px, 2px) rotate(9deg);
-  box-shadow: var(--shadow-pop);
-}
-
-.upload-dashed-tile {
-  width: 68px;
-  height: 68px;
-  border-radius: 12px;
-  border: 1.5px dashed var(--border-strong);
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-3);
-  cursor: pointer;
-  flex: none;
-  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease, transform 0.16s var(--ease);
-}
-.upload-dashed-tile:hover {
-  border-color: var(--ink);
-  background: var(--surface);
-  color: var(--text);
-}
-.upload-dashed-tile:active {
-  transform: scale(0.96);
-}
-
-.peek-dot.skills {
-  background: #6366f1;
-}
-
-/* Integrated Skills Tray inside composer-shell (triggered by typing /) */
-.skills-tray {
-  padding: 10px 12px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-.skills-tray-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 2px;
-}
-.skills-tray-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 12px;
-  font-weight: 560;
-  color: var(--text);
-  flex: none;
-}
-.skills-slash-mark {
-  color: #6366f1;
-  font-weight: 700;
-}
-:root[data-theme="dark"] .skills-slash-mark {
-  color: #818cf8;
-}
-.skills-tray-hint {
-  font-size: 10.5px;
-  color: var(--text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.skills-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 7px;
-  background: var(--hover);
-  flex: none;
-}
-.skills-tab {
-  border: none;
-  background: transparent;
-  color: var(--text-3);
-  font-size: 11px;
-  line-height: 18px;
-  padding: 0 7px;
-  border-radius: 5px;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.skills-tab:hover {
-  color: var(--text-2);
-}
-.skills-tab.active {
-  background: var(--surface-strong);
-  color: var(--text);
-  font-weight: 540;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-}
-.skills-tray-close {
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-3);
-  display: inline-grid;
-  place-items: center;
-  cursor: pointer;
-  flex: none;
-  transition: background 0.12s, color 0.12s;
-}
-.skills-tray-close svg {
-  width: 13px;
-  height: 13px;
-}
-.skills-tray-close:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-.skills-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: 8px;
-  max-height: 168px;
-  overflow-y: auto;
-  padding: 1px;
-}
-.skill-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 11px;
-  border: 1px solid var(--border);
-  background: var(--surface-strong);
-  box-shadow: var(--shadow-card);
-  text-align: left;
-  cursor: pointer;
-  min-width: 0;
-  transition: transform 0.15s var(--ease), border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-}
-.skill-tile:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, #6366f1 34%, var(--border-strong));
-  box-shadow: var(--shadow-pop);
-}
-.skill-tile.active {
-  border-color: color-mix(in srgb, #6366f1 52%, var(--border-strong));
-  background: color-mix(in srgb, #6366f1 7%, var(--surface-strong));
-}
-.skill-tile-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.skill-tile-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  flex: none;
-  background: var(--text-3);
-}
-.skill-tile-dot.is-project {
-  background: #6366f1;
-}
-.skill-tile-dot.is-user {
-  background: #10b981;
-}
-.skill-tile-dot.is-cmd {
-  background: var(--text-3);
-}
-.skill-tile-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  font-weight: 580;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skill-tile-tag {
-  flex: none;
-  font-size: 10px;
-  line-height: 15px;
-  padding: 0 5px;
-  border-radius: 4px;
-  background: var(--hover);
-  color: var(--text-3);
-}
-.skill-tile-tag.is-project {
-  color: #6366f1;
-  background: color-mix(in srgb, #6366f1 11%, transparent);
-}
-:root[data-theme="dark"] .skill-tile-tag.is-project {
-  color: #818cf8;
-}
-.skill-tile-desc {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skills-tray-empty {
-  padding: 12px 8px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-3);
-}
-
-.pop-enter-active,
-.pop-leave-active {
-  transition: opacity 0.14s var(--ease), transform 0.14s var(--ease);
-}
-.pop-enter-from,
-.pop-leave-to {
-  opacity: 0;
-  transform: translateY(4px);
-}
-</style>
-
-<style>
-.perm-opt {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 196px;
-  padding: 2px 2px;
-}
-.perm-opt-main {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  flex: 1;
-}
-.perm-opt-label {
-  font-size: 12.5px;
-  font-weight: 520;
-  color: var(--text);
-  line-height: 17px;
-}
-.perm-opt-desc {
-  font-size: 11px;
-  color: var(--text-3);
-  line-height: 14px;
-}
-.perm-opt-check {
-  width: 13px;
-  height: 13px;
-  color: var(--text);
-  flex: none;
-}
-.effort-opt {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 132px;
-  padding: 2px 2px;
-}
-.effort-opt-label {
-  flex: 1;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--text);
-}
-.effort-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: none;
-}
-.effort-dot.tier-low {
-  background: #38bdf8;
-}
-.effort-dot.tier-medium {
-  background: #10b981;
-}
-.effort-dot.tier-high {
-  background: #a78bfa;
-}
-.effort-dot.tier-xhigh {
-  background: #f59e0b;
-}
-.effort-dot.tier-max {
-  background: #f43f5e;
-}
-.branch-dropdown .ant-dropdown-menu {
-  max-height: 280px;
-  overflow-y: auto;
-}
-.branch-opt {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 160px;
-  max-width: 260px;
-  padding: 2px 2px;
-}
-.branch-opt-name {
-  flex: 1;
-  font-size: 12px;
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.branch-opt.active .branch-opt-name {
-  color: var(--text);
-  font-weight: 560;
-}
-.branch-empty {
-  font-size: 12px;
-  color: var(--text-3);
-}
-</style>

@@ -274,32 +274,32 @@ async function refreshCurrent() {
     @open-change="onOpenChange"
   >
     <template #content>
-      <div class="t3-picker">
+      <div class="flex w-[376px] h-[312px] overflow-hidden rounded-[13px] bg-modal">
         <!-- Left vertical rail: Favorites + Agent Provider Icons -->
-        <div class="rail">
+        <div class="w-[46px] flex-none flex flex-col items-center gap-1 py-[10px] border-0 border-r border-solid border-line bg-[color-mix(in_srgb,var(--ink)_3.5%,var(--modal-bg))]">
           <button
-            class="rail-btn"
-            :class="{ active: activeRail === 'fav' }"
+            class="relative w-[34px] h-8 border-0 rounded-[8px] grid place-items-center cursor-pointer transition-all duration-140"
+            :class="activeRail === 'fav' ? 'bg-active text-ink' : 'bg-transparent text-ink-2 hover:bg-hover hover:text-ink'"
             title="收藏的模型"
             @click="activeRail = 'fav'"
           >
             <!-- Lucide Star -->
-            <svg viewBox="0 0 24 24" fill="currentColor" class="rail-star">
+            <svg viewBox="0 0 24 24" fill="currentColor" class="w-[15px] h-[15px]">
               <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
             </svg>
           </button>
 
-          <span class="rail-divider" />
+          <span class="w-5 h-[1px] bg-line my-[2px]" />
 
           <button
             v-for="a in agents"
             :key="a.id"
-            class="rail-btn"
-            :class="{
-              active: activeRail === a.id,
-              dim: !a.available || (locked && a.id !== modelValue),
-              'rail-locked': locked && a.id !== modelValue,
-            }"
+            class="relative w-[34px] h-8 border-0 rounded-[8px] grid place-items-center transition-all duration-140"
+            :class="[
+              activeRail === a.id ? 'bg-active text-ink' : 'bg-transparent text-ink-2 hover:not-disabled:bg-hover hover:not-disabled:text-ink',
+              !a.available || (locked && a.id !== modelValue) ? 'opacity-35' : '',
+              locked && a.id !== modelValue ? 'cursor-not-allowed' : 'cursor-pointer',
+            ]"
             :disabled="locked && a.id !== modelValue"
             :title="
               locked && a.id !== modelValue
@@ -315,10 +315,10 @@ async function refreshCurrent() {
         </div>
 
         <!-- Right main pane: Search + Model list + Manage footer -->
-        <div class="pane">
-          <div class="search-bar">
+        <div class="flex-1 min-w-0 flex flex-col">
+          <div class="group flex items-center gap-2 px-3 pt-[10px] pb-[9px] border-0 border-b border-solid border-line transition-colors duration-140 ease-oc hover:bg-hover focus-within:bg-[color-mix(in_srgb,var(--hover)_70%,transparent)] focus-within:border-b-line-strong">
             <!-- Lucide Search -->
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="search-ic">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-[14px] h-[14px] text-ink-3 flex-none transition-colors duration-140 group-focus-within:text-ink-2">
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
@@ -326,23 +326,30 @@ async function refreshCurrent() {
               ref="searchEl"
               v-model="query"
               type="text"
-              class="search-input"
+              class="w-full border-0 outline-none bg-transparent text-ink text-[12.5px] placeholder:text-ink-3 focus-visible:outline-none focus-visible:shadow-none"
               :placeholder="locked ? `搜索 ${currentAgent?.name ?? '当前 Agent'} 的模型...` : 'Search models...'"
               @keydown="onSearchKeydown"
             />
           </div>
 
-          <div class="model-list">
+          <div class="flex-1 min-h-0 overflow-y-auto p-[6px] flex flex-col gap-[2px]">
             <template v-for="(r, idx) in visibleRows" :key="r.key">
               <button
-                class="model-row"
-                :class="{ active: isRowActive(r), dim: !r.available }"
+                class="group w-full flex items-center gap-2 px-2 py-[7px] border-0 rounded-[8px] text-ink text-[12.5px] text-left cursor-pointer transition-colors duration-120"
+                :class="[
+                  isRowActive(r) ? 'bg-active' : 'bg-transparent hover:bg-hover',
+                  !r.available ? 'opacity-55' : '',
+                ]"
                 @click="pickRow(r)"
               >
                 <ProviderIcon :id="r.agentId" :name="r.agentName" :size="15" />
-                <span class="model-name" :title="r.probeError || r.modelLabel">{{ r.modelLabel }}</span>
+                <span class="flex-1 min-w-0 truncate fw-470" :title="r.probeError || r.modelLabel">{{ r.modelLabel }}</span>
 
-                <span v-if="r.probing" class="row-spin" aria-hidden="true" />
+                <span
+                  v-if="r.probing"
+                  class="w-3 h-3 rounded-full border-[1.5px] border-solid border-line-strong border-t-ink-solid flex-none animate-oc-spin"
+                  aria-hidden="true"
+                />
 
                 <!-- Lucide Check -->
                 <svg
@@ -353,15 +360,15 @@ async function refreshCurrent() {
                   stroke-width="2"
                   stroke-linecap="round"
                   stroke-linejoin="round"
-                  class="row-check"
+                  class="w-[13px] h-[13px] text-ink flex-none"
                 >
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
 
                 <span
                   v-if="!r.probing"
-                  class="fav-btn"
-                  :class="{ starred: favKeys.includes(r.key) }"
+                  class="inline-grid place-items-center w-[18px] h-[18px] transition-all duration-120 flex-none [&>svg]:w-[13px] [&>svg]:h-[13px]"
+                  :class="favKeys.includes(r.key) ? 'opacity-100 text-[#f59e0b]' : 'opacity-0 text-ink-3 group-hover:opacity-100'"
                   role="button"
                   title="收藏"
                   @click.stop="toggleFav(r.key)"
@@ -378,18 +385,30 @@ async function refreshCurrent() {
                   </svg>
                 </span>
 
-                <span v-if="!r.probing && idx < 9" class="kbd-badge">{{ isMac ? '⌘' : 'Ctrl+' }}{{ idx + 1 }}</span>
+                <span
+                  v-if="!r.probing && idx < 9"
+                  class="flex-none text-[10.5px] leading-4 px-[5px] rounded-[5px] bg-hover border border-solid border-line text-ink-3 font-mono"
+                >
+                  {{ isMac ? '⌘' : 'Ctrl+' }}{{ idx + 1 }}
+                </span>
               </button>
-              <div v-if="r.probeError" class="probe-err selectable">{{ r.probeError }}</div>
+              <div v-if="r.probeError" class="mx-[6px] mt-[2px] mb-1 px-2 py-[6px] rounded-[7px] bg-err-soft text-err text-[11px] leading-[1.45] break-words selectable">
+                {{ r.probeError }}
+              </div>
             </template>
 
-            <div v-if="!visibleRows.length" class="empty">
+            <div v-if="!visibleRows.length" class="py-7 px-[14px] text-center text-[12px] leading-[1.55] text-ink-3">
               {{ emptyText }}
             </div>
           </div>
 
-          <div class="pane-foot">
-            <button v-if="!locked" class="manage-btn refresh-btn" :disabled="refreshing" @click="refreshCurrent">
+          <div class="flex gap-[6px] border-0 border-t border-solid border-line px-[6px] py-[5px]">
+            <button
+              v-if="!locked"
+              class="flex-none flex items-center gap-[7px] px-2 py-[6px] border-0 rounded-[7px] bg-transparent text-ink-2 text-[12px] cursor-pointer transition-colors duration-120 hover:not-disabled:bg-hover hover:not-disabled:text-ink disabled:cursor-default disabled:opacity-55"
+              :disabled="refreshing"
+              @click="refreshCurrent"
+            >
               <!-- Lucide RefreshCw -->
               <svg
                 viewBox="0 0 24 24"
@@ -398,8 +417,8 @@ async function refreshCurrent() {
                 stroke-width="1.8"
                 stroke-linecap="round"
                 stroke-linejoin="round"
-                class="foot-ic"
-                :class="{ spin: refreshing }"
+                class="w-[13px] h-[13px] flex-none"
+                :class="{ 'animate-oc-spin': refreshing }"
               >
                 <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
                 <path d="M21 3v5h-5" />
@@ -408,15 +427,18 @@ async function refreshCurrent() {
               </svg>
               <span>刷新模型</span>
             </button>
-            <button class="manage-btn" @click="openSettings">
+            <button
+              class="flex-1 min-w-0 flex items-center gap-[7px] px-2 py-[6px] border-0 rounded-[7px] bg-transparent text-ink-2 text-[12px] cursor-pointer transition-colors duration-120 hover:bg-hover hover:text-ink"
+              @click="openSettings"
+            >
               <!-- Lucide Plus -->
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="foot-ic">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-[13px] h-[13px] flex-none">
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
               <span>管理 ACP 供应商</span>
               <!-- Lucide Settings -->
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="foot-gear">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="w-[13px] h-[13px] flex-none ml-auto text-ink-3">
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
@@ -427,13 +449,16 @@ async function refreshCurrent() {
     </template>
 
     <button
-      class="trigger"
-      :class="{ open, off: currentAgent && !currentAgent.available }"
+      class="inline-flex items-center gap-[6px] h-7 px-[9px] rounded-[8px] border border-solid text-[12.5px] fw-520 cursor-pointer transition-colors duration-140 disabled:cursor-default disabled:opacity-60"
+      :class="[
+        open ? 'bg-hover border-line' : 'border-transparent bg-transparent hover:not-disabled:bg-hover hover:not-disabled:border-line',
+        currentAgent && !currentAgent.available ? 'text-ink-3' : 'text-ink',
+      ]"
       :disabled="disabled"
       :title="locked ? `切换 ${currentAgent?.name ?? '当前 Agent'} 的模型` : '选择 Agent 与模型'"
     >
       <ProviderIcon v-if="currentAgent" :id="currentAgent.id" :name="currentAgent.name" :size="15" />
-      <span class="trigger-name">{{ currentModelLabel }}</span>
+      <span class="max-w-[158px] truncate">{{ currentModelLabel }}</span>
       <!-- Lucide ChevronDown -->
       <svg
         viewBox="0 0 24 24"
@@ -442,327 +467,10 @@ async function refreshCurrent() {
         stroke-width="2"
         stroke-linecap="round"
         stroke-linejoin="round"
-        class="chev"
+        class="w-3 h-3 text-ink-3 flex-none"
       >
         <polyline points="6 9 12 15 18 9" />
       </svg>
     </button>
   </Popover>
 </template>
-
-<style scoped>
-.trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 9px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 520;
-  cursor: pointer;
-  transition: background 0.14s, border-color 0.14s, color 0.14s;
-}
-.trigger:hover:not(:disabled),
-.trigger.open {
-  background: var(--hover);
-  border-color: var(--border);
-}
-.trigger:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-.trigger.off {
-  color: var(--text-3);
-}
-.trigger-name {
-  max-width: 158px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chev {
-  width: 12px;
-  height: 12px;
-  color: var(--text-3);
-  flex: none;
-}
-
-/* T3 Code dual-pane picker (solid opaque surface to avoid background text bleed) */
-.t3-picker {
-  display: flex;
-  width: 376px;
-  height: 312px;
-  overflow: hidden;
-  border-radius: 13px;
-  background: var(--modal-bg);
-}
-
-.rail {
-  width: 46px;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 10px 0;
-  border-right: 1px solid var(--border);
-  background: color-mix(in srgb, var(--ink) 3.5%, var(--modal-bg));
-}
-
-.rail-divider {
-  width: 20px;
-  height: 1px;
-  background: var(--border);
-  margin: 2px 0;
-}
-
-.rail-btn {
-  position: relative;
-  width: 34px;
-  height: 32px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-2);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition: background 0.14s, color 0.14s, opacity 0.14s;
-}
-.rail-btn:hover:not(:disabled) {
-  background: var(--hover);
-  color: var(--text);
-}
-.rail-btn.active {
-  background: var(--active);
-  color: var(--text);
-}
-.rail-btn.dim {
-  opacity: 0.35;
-}
-.rail-btn.rail-locked {
-  cursor: not-allowed;
-}
-.rail-star {
-  width: 15px;
-  height: 15px;
-}
-
-.pane {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.search-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px 9px;
-  border-bottom: 1px solid var(--border);
-  transition: background 0.14s var(--ease), border-color 0.14s var(--ease);
-}
-.search-bar:hover {
-  background: var(--hover);
-}
-.search-bar:focus-within {
-  background: color-mix(in srgb, var(--hover) 70%, transparent);
-  border-bottom-color: var(--border-strong);
-}
-.search-ic {
-  width: 14px;
-  height: 14px;
-  color: var(--text-3);
-  flex: none;
-  transition: color 0.14s;
-}
-.search-bar:focus-within .search-ic {
-  color: var(--text-2);
-}
-.search-input {
-  width: 100%;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 12.5px;
-}
-.search-input:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-.search-input::placeholder {
-  color: var(--text-3);
-}
-
-.model-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.model-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  font-size: 12.5px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.model-row:hover {
-  background: var(--hover);
-}
-.model-row.active {
-  background: var(--active);
-}
-.model-row.dim {
-  opacity: 0.55;
-}
-
-.model-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 470;
-}
-
-.row-check {
-  width: 13px;
-  height: 13px;
-  color: var(--text);
-  flex: none;
-}
-
-.row-spin {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 1.5px solid var(--border-strong);
-  border-top-color: var(--ink);
-  flex: none;
-  animation: picker-spin 0.75s linear infinite;
-}
-@keyframes picker-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.probe-err {
-  margin: 2px 6px 4px;
-  padding: 6px 8px;
-  border-radius: 7px;
-  background: var(--err-soft);
-  color: var(--err);
-  font-size: 11px;
-  line-height: 1.45;
-  word-break: break-word;
-}
-
-.fav-btn {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  color: var(--text-3);
-  opacity: 0;
-  transition: opacity 0.12s, color 0.12s;
-  flex: none;
-}
-.fav-btn svg {
-  width: 13px;
-  height: 13px;
-}
-.model-row:hover .fav-btn,
-.fav-btn.starred {
-  opacity: 1;
-}
-.fav-btn.starred {
-  color: #f59e0b;
-}
-
-.kbd-badge {
-  flex: none;
-  font-size: 10.5px;
-  line-height: 16px;
-  padding: 0 5px;
-  border-radius: 5px;
-  background: var(--hover);
-  border: 1px solid var(--border);
-  color: var(--text-3);
-  font-family: var(--mono);
-}
-
-.empty {
-  padding: 28px 14px;
-  text-align: center;
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--text-3);
-}
-
-.pane-foot {
-  display: flex;
-  gap: 6px;
-  border-top: 1px solid var(--border);
-  padding: 5px 6px;
-}
-.manage-btn {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 8px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.manage-btn:hover:not(:disabled) {
-  background: var(--hover);
-  color: var(--text);
-}
-.manage-btn:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-.refresh-btn {
-  flex: none;
-  color: var(--text-2);
-}
-.refresh-btn .spin {
-  animation: picker-spin 0.75s linear infinite;
-}
-.foot-ic,
-.foot-gear {
-  width: 13px;
-  height: 13px;
-  flex: none;
-}
-.foot-gear {
-  margin-left: auto;
-  color: var(--text-3);
-}
-</style>
