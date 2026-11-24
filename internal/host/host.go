@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,6 +66,11 @@ type Host struct {
 
 	termMu sync.Mutex
 	terms  map[string]*termSession
+
+	fileSrvMu      sync.Mutex
+	fileSrv        *http.Server
+	fileSrvBaseURL string
+	fileSrvToken   string
 }
 
 type live struct {
@@ -95,6 +101,7 @@ func New(opts Options) (*Host, error) {
 
 // Close stops the agents, terminals and writes everything pending to disk.
 func (h *Host) Close() {
+	h.closeFileServer()
 	h.closeAllTerms()
 	h.scMu.Lock()
 	sc := h.sc

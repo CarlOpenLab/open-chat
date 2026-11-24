@@ -4,6 +4,7 @@ import {
   CloseOutlined,
   CodeOutlined,
   CopyOutlined,
+  ExportOutlined,
   FolderOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -15,12 +16,34 @@ import type { FileContentService, FolderTreeData } from "@antdv-next/x";
 import { App, Spin, Tooltip, message } from "antdv-next";
 import { computed, h, onBeforeUnmount, ref, watch } from "vue";
 import type { VNodeChild } from "vue";
-import { api } from "../api";
+import { api, inApp } from "../api";
 import { directoryIcons } from "../fileIcons";
 import { isDark, store } from "../store";
-import type { WorkspaceNode } from "../types";
+import type { WorkspaceFileInfo, WorkspaceNode } from "../types";
 import CodeEditor from "./CodeEditor.vue";
+import FilePreview, { type RichPreviewKind } from "./FilePreview.vue";
 import TerminalPane from "./TerminalPane.vue";
+
+type PreviewKind = RichPreviewKind | "code";
+
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "ico", "bmp"]);
+const AUDIO_EXTS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus"]);
+const VIDEO_EXTS = new Set(["mp4", "m4v", "webm", "mov", "ogv"]);
+const MARKDOWN_EXTS = new Set(["md", "markdown", "mdx"]);
+
+function detectPreviewKind(relPath: string): PreviewKind {
+  const lower = relPath.toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  if (dot < 0) return "code";
+  const ext = lower.slice(dot + 1);
+  if (IMAGE_EXTS.has(ext)) return "image";
+  if (ext === "svg") return "svg";
+  if (MARKDOWN_EXTS.has(ext)) return "markdown";
+  if (ext === "pdf") return "pdf";
+  if (AUDIO_EXTS.has(ext)) return "audio";
+  if (VIDEO_EXTS.has(ext)) return "video";
+  return "code";
+}
 
 const props = defineProps<{
   open: boolean;
@@ -38,25 +61,45 @@ const filterText = ref("");
 const selectedFile = ref<string[]>([]);
 const expandedPaths = ref<string[]>([]);
 
-// Direct VS Code-style file editor state
+// Direct VS Code-style file editor & rich preview state
 const loadingFile = ref(false);
 const fileLoadError = ref("");
+const sourceLoadError = ref("");
 const draft = ref("");
 const originalContent = ref("");
+const fileInfo = ref<WorkspaceFileInfo | null>(null);
+const viewMode = ref<"preview" | "source">("preview");
 const saving = ref(false);
 let loadSeq = 0;
 
 const activeRelPath = computed(() => selectedFile.value.join("/"));
+const previewKind = computed<PreviewKind>(() => detectPreviewKind(activeRelPath.value));
+const supportsDualMode = computed(() => previewKind.value === "svg" || previewKind.value === "markdown");
+const isBinaryMedia = computed(
+  () =>
+    previewKind.value === "image" ||
+    previewKind.value === "pdf" ||
+    previewKind.value === "audio" ||
+    previewKind.value === "video",
+);
 const isDirty = computed(
-  () => Boolean(activeRelPath.value) && !loadingFile.value && !fileLoadError.value && draft.value !== originalContent.value,
+  () =>
+    Boolean(activeRelPath.value) &&
+    !isBinaryMedia.value &&
+    !loadingFile.value &&
+    !fileLoadError.value &&
+    !sourceLoadError.value &&
+    draft.value !== originalContent.value,
 );
 
 function clearEditorState() {
   loadSeq++;
   loadingFile.value = false;
   fileLoadError.value = "";
+  sourceLoadError.value = "";
   draft.value = "";
   originalContent.value = "";
+  fileInfo.value = null;
 }
 
 async function loadSelectedFile(relPath: string) {
@@ -65,15 +108,44 @@ async function loadSelectedFile(relPath: string) {
     return;
   }
   const seq = ++loadSeq;
+  const kind = detectPreviewKind(relPath);
   loadingFile.value = true;
   fileLoadError.value = "";
+  sourceLoadError.value = "";
   draft.value = "";
   originalContent.value = "";
+  fileInfo.value = null;
+  viewMode.value = kind === "svg" || kind === "markdown" ? "preview" : "source";
+
   try {
-    const text = await api.workspaceReadFile(props.cwd, relPath);
-    if (seq !== loadSeq) return;
-    originalContent.value = text;
-    draft.value = text;
+    if (kind === "image" || kind === "pdf" || kind === "audio" || kind === "video") {
+      const info = await api.workspaceFileInfo(props.cwd, relPath);
+      if (seq !== loadSeq) return;
+      fileInfo.value = info;
+    } else if (kind === "svg") {
+      const [infoRes, textRes] = await Promise.allSettled([
+        api.workspaceFileInfo(props.cwd, relPath),
+        api.workspaceReadFile(props.cwd, relPath),
+      ]);
+      if (seq !== loadSeq) return;
+      if (infoRes.status === "fulfilled") {
+        fileInfo.value = infoRes.value;
+      }
+      if (textRes.status === "fulfilled") {
+        originalContent.value = textRes.value;
+        draft.value = textRes.value;
+      } else {
+        sourceLoadError.value = textRes.reason instanceof Error ? textRes.reason.message : String(textRes.reason);
+      }
+      if (infoRes.status === "rejected" && textRes.status === "rejected") {
+        fileLoadError.value = infoRes.reason instanceof Error ? infoRes.reason.message : String(infoRes.reason);
+      }
+    } else {
+      const text = await api.workspaceReadFile(props.cwd, relPath);
+      if (seq !== loadSeq) return;
+      originalContent.value = text;
+      draft.value = text;
+    }
   } catch (e) {
     if (seq !== loadSeq) return;
     fileLoadError.value = e instanceof Error ? e.message : String(e);
@@ -130,7 +202,7 @@ function revertDraft() {
 
 async function saveEdit() {
   const rel = activeRelPath.value;
-  if (!rel || !isDirty.value || saving.value || fileLoadError.value) return;
+  if (!rel || !isDirty.value || saving.value || fileLoadError.value || sourceLoadError.value) return;
   saving.value = true;
   try {
     await api.workspaceWriteFile(props.cwd, rel, draft.value);
@@ -144,7 +216,7 @@ async function saveEdit() {
 }
 
 async function copyContent() {
-  if (loadingFile.value || fileLoadError.value) return;
+  if (loadingFile.value || fileLoadError.value || sourceLoadError.value) return;
   try {
     await navigator.clipboard.writeText(draft.value);
     message.success("已复制到剪贴板");
@@ -153,14 +225,67 @@ async function copyContent() {
   }
 }
 
+async function openExternally() {
+  const rel = activeRelPath.value;
+  if (!rel) return;
+  if (inApp) {
+    try {
+      await api.openLink(rel, props.cwd);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : String(e));
+    }
+    return;
+  }
+  if (fileInfo.value?.url) {
+    window.open(fileInfo.value.url, "_blank", "noopener");
+  }
+}
+
 function renderPreviewTitle(file: { title?: VNodeChild; path: string[] }) {
   const name = file.title || file.path[file.path.length - 1] || "";
+  const showSourceActions =
+    !isBinaryMedia.value &&
+    !loadingFile.value &&
+    !fileLoadError.value &&
+    !sourceLoadError.value &&
+    (!supportsDualMode.value || viewMode.value === "source" || isDirty.value);
+
   return h("div", { class: "ws-pv-head" }, [
     h("div", { class: "ws-pv-name" }, [
       h("span", { class: "antd-folder-preview-filename", title: file.path.join("/") }, name),
       isDirty.value ? h("span", { class: "ws-pv-dirty", title: "有未保存的更改" }, "• 未保存") : null,
     ]),
     h("div", { class: "ws-pv-acts" }, [
+      supportsDualMode.value && !loadingFile.value && !fileLoadError.value
+        ? h("div", { class: "ws-pv-seg", role: "tablist", "aria-label": "预览模式" }, [
+            h(
+              "button",
+              {
+                type: "button",
+                role: "tab",
+                "aria-selected": viewMode.value === "preview",
+                class: ["ws-pv-seg-btn", { active: viewMode.value === "preview" }],
+                onClick: () => {
+                  viewMode.value = "preview";
+                },
+              },
+              "预览",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                role: "tab",
+                "aria-selected": viewMode.value === "source",
+                class: ["ws-pv-seg-btn", { active: viewMode.value === "source" }],
+                onClick: () => {
+                  viewMode.value = "source";
+                },
+              },
+              "源码",
+            ),
+          ])
+        : null,
       isDirty.value
         ? h(
             "button",
@@ -174,7 +299,7 @@ function renderPreviewTitle(file: { title?: VNodeChild; path: string[] }) {
             [h(UndoOutlined)],
           )
         : null,
-      !loadingFile.value && !fileLoadError.value
+      showSourceActions
         ? h(
             "button",
             {
@@ -187,7 +312,7 @@ function renderPreviewTitle(file: { title?: VNodeChild; path: string[] }) {
             [h(CheckOutlined), h("span", saving.value ? "保存中…" : "保存")],
           )
         : null,
-      !loadingFile.value && !fileLoadError.value
+      !isBinaryMedia.value && !loadingFile.value && !fileLoadError.value && !sourceLoadError.value
         ? h(
             "button",
             {
@@ -197,6 +322,18 @@ function renderPreviewTitle(file: { title?: VNodeChild; path: string[] }) {
               onClick: () => void copyContent(),
             },
             [h(CopyOutlined)],
+          )
+        : null,
+      isBinaryMedia.value && !loadingFile.value && !fileLoadError.value && fileInfo.value
+        ? h(
+            "button",
+            {
+              type: "button",
+              class: "ws-pv-icon-btn",
+              title: inApp ? "在访达中显示" : "在新标签页打开",
+              onClick: () => void openExternally(),
+            },
+            [h(ExportOutlined)],
           )
         : null,
     ]),
@@ -212,6 +349,18 @@ function renderPreview() {
   }
   if (fileLoadError.value) {
     return h("div", { class: "ws-pv-state err" }, [h("span", fileLoadError.value)]);
+  }
+  const kind = previewKind.value;
+  if (kind !== "code" && (!supportsDualMode.value || viewMode.value === "preview")) {
+    return h(FilePreview, {
+      kind,
+      filename: activeRelPath.value,
+      fileInfo: fileInfo.value,
+      textContent: draft.value,
+    });
+  }
+  if (sourceLoadError.value) {
+    return h("div", { class: "ws-pv-state err" }, [h("span", sourceLoadError.value)]);
   }
   return h(CodeEditor, {
     modelValue: draft.value,
@@ -377,6 +526,9 @@ onBeforeUnmount(() => {
 
 async function refreshFiles() {
   await loadTree();
+  if (activeRelPath.value && !isDirty.value) {
+    void loadSelectedFile(activeRelPath.value);
+  }
   if (!treeError.value) message.success("已刷新文件列表");
 }
 </script>

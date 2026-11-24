@@ -416,6 +416,11 @@ func (a *API) WorkspaceWriteFile(cwd, relPath, content string) error {
 	return writeWorkspaceFile(cwd, relPath, content)
 }
 
+// WorkspaceFileInfo returns metadata and a streaming HTTP URL for a workspace file.
+func (a *API) WorkspaceFileInfo(cwd, relPath string) (WorkspaceFileInfo, error) {
+	return a.h.workspaceFileInfo(cwd, relPath)
+}
+
 // TermCreate spawns an interactive PTY shell session rooted at cwd.
 func (a *API) TermCreate(cwd string, cols, rows int) (TermInfo, error) {
 	return a.h.termCreate(cwd, cols, rows)

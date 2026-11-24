@@ -19,6 +19,7 @@ import type {
   Settings,
   SkillInfo,
   TermInfo,
+  WorkspaceFileInfo,
   WorkspaceNode,
 } from "./types";
 
@@ -73,6 +74,7 @@ export const api = {
   workspaceReadFile: (cwd: string, relPath: string) => call<string>("WorkspaceReadFile", cwd, relPath),
   workspaceWriteFile: (cwd: string, relPath: string, content: string) =>
     call<void>("WorkspaceWriteFile", cwd, relPath, content),
+  workspaceFileInfo: (cwd: string, relPath: string) => call<WorkspaceFileInfo>("WorkspaceFileInfo", cwd, relPath),
   termCreate: (cwd: string, cols: number, rows: number) => call<TermInfo>("TermCreate", cwd, cols, rows),
   termWrite: (id: string, data: string) => call<void>("TermWrite", id, data),
   termResize: (id: string, cols: number, rows: number) => call<void>("TermResize", id, cols, rows),

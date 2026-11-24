@@ -87,6 +87,8 @@ func Handler(api *API, hub *Hub, frontend fs.FS, token string) http.Handler {
 		_ = json.NewEncoder(w).Encode(map[string]any{"result": out})
 	})
 
+	mux.HandleFunc("GET /api/workspace/file", serveWorkspaceFile)
+
 	mux.HandleFunc("GET /api/push", func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {

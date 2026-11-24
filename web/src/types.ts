@@ -217,6 +217,13 @@ export interface WorkspaceNode {
   children?: WorkspaceNode[];
 }
 
+export interface WorkspaceFileInfo {
+  url: string;
+  mimeType: string;
+  size: number;
+  modTime: number;
+}
+
 export interface TermInfo {
   id: string;
   cwd: string;

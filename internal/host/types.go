@@ -178,6 +178,14 @@ type WorkspaceNode struct {
 	Children []WorkspaceNode `json:"children,omitempty"`
 }
 
+// WorkspaceFileInfo describes a workspace file and its streaming HTTP preview URL.
+type WorkspaceFileInfo struct {
+	URL      string `json:"url"`
+	MimeType string `json:"mimeType"`
+	Size     int64  `json:"size"`
+	ModTime  int64  `json:"modTime"`
+}
+
 // TermInfo describes a newly spawned PTY terminal session.
 type TermInfo struct {
 	ID    string `json:"id"`
