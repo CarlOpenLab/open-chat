@@ -135,6 +135,14 @@ func auClassifyPath(rawPath string, agent auAgentSpec, ctx auClassifyContext) au
 	realPath := auSafeRealpath(rawPath, ctx.Realpath)
 	facts := ctx.Facts
 
+	// mise 必须先判：mise 管理的 Node 里 `npm prefix -g` 落在 mise installs 下，
+	// 先匹配 npm root 会把 mise 装的包误标成 npm。
+	if auIsUnderPath(rawPath, facts.MiseShimDir) {
+		return auPathInstall{Channel: auChannelMise, Path: rawPath, RealPath: realPath, Key: "mise"}
+	}
+	if auMatchRoot(realPath, facts.MiseInstallPaths) != "" {
+		return auPathInstall{Channel: auChannelMise, Path: rawPath, RealPath: realPath, Key: "mise"}
+	}
 	if root := auMatchRoot(realPath, facts.NpmRoots); root != "" {
 		return auPathInstall{Channel: auChannelNpm, Path: rawPath, RealPath: realPath, Key: "npm:" + root}
 	}
@@ -143,12 +151,6 @@ func auClassifyPath(rawPath string, agent auAgentSpec, ctx auClassifyContext) au
 	}
 	if root := auMatchRoot(realPath, facts.PnpmRoots); root != "" {
 		return auPathInstall{Channel: auChannelPnpm, Path: rawPath, RealPath: realPath, Key: "pnpm:" + root}
-	}
-	if auIsUnderPath(rawPath, facts.MiseShimDir) {
-		return auPathInstall{Channel: auChannelMise, Path: rawPath, RealPath: realPath, Key: "mise"}
-	}
-	if auMatchRoot(realPath, facts.MiseInstallPaths) != "" {
-		return auPathInstall{Channel: auChannelMise, Path: rawPath, RealPath: realPath, Key: "mise"}
 	}
 	if prefix := auMatchRoot(realPath, facts.BrewPrefixes); prefix != "" {
 		return auPathInstall{Channel: auChannelBrew, Path: rawPath, RealPath: realPath, Key: "brew:" + prefix}
@@ -687,6 +689,11 @@ func auInspectAgent(agent auAgentSpec, candidates []string, deps auInspectDeps) 
 	facts := deps.Facts
 	if miseSel != nil {
 		facts.MiseInstallPaths = auInstallPathsFor(miseSel.Tool, deps.Active, deps.Installed)
+		// mise 管理的 Node 里全局 bin（含 npm 包装的 CLI）也在 MiseDataDir 下，
+		// 一并视为 mise 安装，避免显示成 npm / unknown。
+		if facts.MiseDataDir != "" {
+			facts.MiseInstallPaths = append(facts.MiseInstallPaths, facts.MiseDataDir)
+		}
 	} else {
 		facts.MiseInstallPaths = nil
 	}

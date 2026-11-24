@@ -58,6 +58,55 @@ func TestAgentUpdateClassifyAndInspect(t *testing.T) {
 	}
 }
 
+func TestQoderMiseMetadataAndClassification(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows 路径语义")
+	}
+	spec, ok := auMatchAgent(auDefaultAgents(), "qoder")
+	if !ok {
+		t.Fatal("qoder 不在默认 agent 列表中")
+	}
+	if !reflect.DeepEqual(spec.MiseTools, []string{"npm:@qoder-ai/qodercli"}) {
+		t.Fatalf("MiseTools = %v", spec.MiseTools)
+	}
+	if spec.NpmPackage != "@qoder-ai/qodercli" {
+		t.Fatalf("NpmPackage = %q", spec.NpmPackage)
+	}
+
+	// mise 管理的 Node：npm prefix -g 落在 mise installs 下，必须优先判成 mise。
+	install := filepath.Join(`C:\Users\u\AppData\Local\mise\installs`, "npm-qoder-ai-qodercli", "1.1.96")
+	bin := filepath.Join(install, "node_modules", ".bin", "qoder.cmd")
+	got := auClassifyPath(bin, spec, auClassifyContext{
+		Facts: auSystemFacts{
+			MiseShimDir:      filepath.Join(`C:\Users\u\AppData\Local\mise`, "shims"),
+			MiseInstallPaths: []string{install},
+			NpmRoots: []string{
+				filepath.Join(install, "node_modules"),
+				filepath.Join(`C:\Users\u\AppData\Local\mise\installs`, "node", "24.20.0"),
+			},
+		},
+		Realpath: func(p string) (string, error) { return p, nil },
+	})
+	if got.Channel != auChannelMise {
+		t.Fatalf("channel = %q, want mise", got.Channel)
+	}
+
+	// 生效文件在 mise 管理的 Node 全局 bin 下（npm prefix -g），同样算 mise。
+	nodeBin := filepath.Join(`C:\Users\u\AppData\Local\mise\installs`, "node", "24.20.0", "qoder.cmd")
+	got = auClassifyPath(nodeBin, spec, auClassifyContext{
+		Facts: auSystemFacts{
+			MiseDataDir:      filepath.Join(`C:\Users\u`, "AppData", "Local", "mise"),
+			MiseShimDir:      filepath.Join(`C:\Users\u\AppData\Local\mise`, "shims"),
+			MiseInstallPaths: []string{install, filepath.Join(`C:\Users\u`, "AppData", "Local", "mise")},
+			NpmRoots:         []string{filepath.Join(`C:\Users\u\AppData\Local\mise\installs`, "node", "24.20.0")},
+		},
+		Realpath: func(p string) (string, error) { return p, nil },
+	})
+	if got.Channel != auChannelMise {
+		t.Fatalf("channel = %q, want mise (node global bin under mise)", got.Channel)
+	}
+}
+
 func TestAuDefaultMiseDataDir(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("仅 Windows 语义")

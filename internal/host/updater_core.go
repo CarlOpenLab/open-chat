@@ -191,11 +191,11 @@ func auDefaultAgents() []auAgentSpec {
 			NativeDirs:   []string{localBin},
 		},
 		{
-			// Qoder installs through its own script, so only native detection
-			// and `qoder update` are wired up here (no mise/npm package).
 			ID:           "qoder",
 			Name:         "Qoder",
 			Bin:          "qoder",
+			MiseTools:    []string{"npm:@qoder-ai/qodercli"},
+			NpmPackage:   "@qoder-ai/qodercli",
 			NativeUpdate: []string{"qoder", "update"},
 			NativeDirs:   []string{localBin},
 		},
