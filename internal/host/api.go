@@ -362,7 +362,13 @@ func (a *API) openLocalLink(target string, u *url.URL, cwd string) error {
 		p = u.Path
 		if u.Scheme == "file" {
 			if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
-				p = "//" + u.Host + p
+				// On Windows, "file://C:/path" parses with Host="C:" and Path="/path".
+				// The drive letter is part of the path, not a UNC host.
+				if runtime.GOOS == "windows" && len(u.Host) == 2 && u.Host[1] == ':' {
+					p = u.Host + p
+				} else {
+					p = "//" + u.Host + p
+				}
 			}
 			if runtime.GOOS == "windows" && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
 				p = p[1:]
