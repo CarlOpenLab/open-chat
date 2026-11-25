@@ -29,7 +29,6 @@ const renaming = ref<Meta | null>(null);
 const newTitle = ref("");
 const renameInput = ref<{ focus: () => void } | null>(null);
 const toDelete = ref<Meta | null>(null);
-const avatarInput = ref<HTMLInputElement | null>(null);
 const showArchived = ref(false);
 
 // Multi-select state for batch archive / delete
@@ -367,7 +366,10 @@ function menuFor(value: ConversationItemType) {
   const item = (key: string, icon: () => unknown, label: string, danger = false) => ({
     key,
     danger,
-    label: h("span", { class: "menu-item" }, [h("span" as never, { class: "menu-icon" }, [icon() as never]), label]),
+    label: h("span", { class: "menu-item" }, [
+      h("span" as never, { class: ["menu-icon", { "menu-icon-danger": danger }] }, [icon() as never]),
+      label,
+    ]),
   });
   return {
     items: [
@@ -468,10 +470,6 @@ function toggleTheme() {
   void saveSettings({ theme: isDark.value ? "light" : "dark" });
 }
 
-function triggerAvatarUpload() {
-  avatarInput.value?.click();
-}
-
 async function onAvatarPick(e: Event) {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -519,7 +517,11 @@ const avatarMenu = computed(() => ({
   items: [
     {
       key: "upload",
-      label: store.userAvatar ? "更换本地头像" : "上传本地头像",
+      label: h("label", {
+        for: "avatar-file-input",
+        class: "block cursor-pointer",
+        onClick: (event: MouseEvent) => event.stopPropagation(),
+      }, store.userAvatar ? "更换本地头像" : "上传本地头像"),
       extra: h(Tooltip, {
         title: "头像仅保存在本机",
         placement: "top",
@@ -540,7 +542,6 @@ const avatarMenu = computed(() => ({
     ...(store.userAvatar ? [{ key: "reset", label: "恢复默认头像", danger: true }] : []),
   ],
   onClick: ({ key }: { key: string }) => {
-    if (key === "upload") triggerAvatarUpload();
     if (key === "reset") {
       setUserAvatar("");
       message.success("已恢复默认头像");
@@ -674,7 +675,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         <Tooltip :title="`删除 (${selectedCount})`" :mouse-enter-delay="0.3">
           <button
             type="button"
-            class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] bg-transparent text-ink-2 text-[13.5px] cursor-pointer transition-colors duration-140 hover:not-disabled:bg-err-soft hover:not-disabled:text-err disabled:opacity-35 disabled:cursor-not-allowed"
+            class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] bg-transparent text-err text-[13.5px] cursor-pointer transition-colors duration-140 hover:not-disabled:bg-err-soft disabled:opacity-35 disabled:cursor-not-allowed"
             :disabled="selectedCount === 0 || batchBusy"
             aria-label="删除"
             @click="batchDeleteOpen = true"
@@ -739,7 +740,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         <span>未检测到 Node.js</span>
       </button>
       <div class="flex items-center gap-[5px]">
-        <Dropdown :menu="avatarMenu" :trigger="['click']" placement="topLeft" root-class="oc-avatar-dropdown" destroy-on-hidden>
+        <Dropdown :menu="avatarMenu" :trigger="['click']" placement="topLeft" root-class="oc-avatar-dropdown">
           <button
             class="group/avatar relative w-7 h-7 p-0 rounded-full border border-solid border-line-strong bg-surface text-ink-2 grid place-items-center overflow-hidden cursor-pointer flex-none shadow-card transition-colors duration-140 ease-oc hover:border-ink-solid"
             aria-label="用户头像"
@@ -771,7 +772,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
             </span>
           </button>
         </Dropdown>
-        <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatarPick" />
+        <input id="avatar-file-input" type="file" accept="image/*" hidden @change="onAvatarPick" />
 
         <span class="flex-1" />
 

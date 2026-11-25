@@ -488,12 +488,16 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
 }
 .menu-icon {
   display: inline-grid;
   place-items: center;
   color: var(--text-3);
   font-size: 13px;
+}
+.menu-icon-danger {
+  color: inherit;
 }
 
 /* WorkspacePanel Folder & ant-tree overrides */
