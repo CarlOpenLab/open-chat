@@ -14,7 +14,7 @@ import {
   RollbackOutlined,
 } from "@antdv-next/icons";
 import { Dropdown, Input, Modal, Tooltip, message } from "antdv-next";
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { isArchived, isDark, isMac, newConversation, pin, remove, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
 import type { Meta } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
@@ -25,6 +25,14 @@ const renameInput = ref<{ focus: () => void } | null>(null);
 const toDelete = ref<Meta | null>(null);
 const avatarInput = ref<HTMLInputElement | null>(null);
 const showArchived = ref(false);
+
+// Multi-select state for batch archive / delete
+const selecting = ref(false);
+const selectedIds = ref<Set<string>>(new Set());
+const lastSelectedId = ref<string | null>(null);
+const batchArchiveOpen = ref(false);
+const batchDeleteOpen = ref(false);
+const batchBusy = ref(false);
 
 const convCtx = ref<{ open: boolean; x: number; y: number; meta: Meta | null }>({
   open: false,
@@ -57,10 +65,84 @@ function onListContextMenu(e: MouseEvent) {
   };
 }
 
-function onConvCtxAction(action: "pin" | "rename" | "archive" | "delete") {
+function enterSelectMode(initialId?: string) {
+  selecting.value = true;
+  if (initialId) {
+    const next = new Set(selectedIds.value);
+    next.add(initialId);
+    selectedIds.value = next;
+    lastSelectedId.value = initialId;
+  }
+}
+
+function exitSelectMode() {
+  selecting.value = false;
+  selectedIds.value = new Set();
+  lastSelectedId.value = null;
+  batchArchiveOpen.value = false;
+  batchDeleteOpen.value = false;
+}
+
+function toggleSelectMode() {
+  if (selecting.value) exitSelectMode();
+  else enterSelectMode();
+}
+
+function toggleItemSelected(id: string, range = false) {
+  const list = filtered.value;
+  const next = new Set(selectedIds.value);
+  if (range && lastSelectedId.value) {
+    const a = list.findIndex((m) => m.id === lastSelectedId.value);
+    const b = list.findIndex((m) => m.id === id);
+    if (a !== -1 && b !== -1) {
+      const [start, end] = a < b ? [a, b] : [b, a];
+      for (let i = start; i <= end; i++) next.add(list[i].id);
+      selectedIds.value = next;
+      lastSelectedId.value = id;
+      return;
+    }
+  }
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  selectedIds.value = next;
+  lastSelectedId.value = id;
+}
+
+function onListClickCapture(e: MouseEvent) {
+  if (e.button !== 0) return;
+  const target = e.target as HTMLElement | null;
+  if (!selecting.value && target?.closest(".antd-conversations-menu-icon")) return;
+  const itemEl = target?.closest(".antd-conversations-item");
+  const id = itemEl?.querySelector<HTMLElement>("[data-conv-id]")?.dataset.convId;
+  if (!id) return;
+  const modKey = isMac.value ? e.metaKey : e.ctrlKey;
+  if (selecting.value) {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleItemSelected(id, e.shiftKey);
+    return;
+  }
+  if (modKey || e.shiftKey) {
+    e.preventDefault();
+    e.stopPropagation();
+    selecting.value = true;
+    if (e.shiftKey && store.activeId && filtered.value.some((m) => m.id === store.activeId)) {
+      lastSelectedId.value = store.activeId;
+      toggleItemSelected(id, true);
+    } else {
+      toggleItemSelected(id, false);
+    }
+  }
+}
+
+function onConvCtxAction(action: "pin" | "rename" | "archive" | "delete" | "select") {
   const m = convCtx.value.meta;
   closeConvCtx();
   if (!m) return;
+  if (action === "select") {
+    enterSelectMode(m.id);
+    return;
+  }
   if (action === "pin") void pin(m.id, !m.pinned);
   if (action === "rename") void startRename(m);
   if (action === "archive") void toggleArchive(m);
@@ -68,7 +150,21 @@ function onConvCtxAction(action: "pin" | "rename" | "archive" | "delete") {
 }
 
 function onCtxKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") closeConvCtx();
+  if (e.key === "Escape") {
+    if (convCtx.value.open) {
+      closeConvCtx();
+    } else if (selecting.value && !renaming.value && !toDelete.value && !batchArchiveOpen.value && !batchDeleteOpen.value) {
+      exitSelectMode();
+    }
+    return;
+  }
+  if (selecting.value && (isMac.value ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "a") {
+    const tag = (document.activeElement as HTMLElement | null)?.tagName;
+    if (tag !== "INPUT" && tag !== "TEXTAREA" && !(document.activeElement as HTMLElement | null)?.isContentEditable) {
+      e.preventDefault();
+      toggleSelectAll();
+    }
+  }
 }
 
 onMounted(() => {
@@ -112,6 +208,43 @@ const items = computed<ConversationItemType[]>(() =>
     group: showArchived.value ? "已归档" : groupName(m),
     "data-meta": m,
   })),
+);
+
+const visibleSelectedIds = computed(() =>
+  filtered.value.filter((m) => selectedIds.value.has(m.id)).map((m) => m.id),
+);
+const selectedCount = computed(() => visibleSelectedIds.value.length);
+const allVisibleSelected = computed(
+  () => filtered.value.length > 0 && selectedCount.value === filtered.value.length,
+);
+const someVisibleSelected = computed(
+  () => selectedCount.value > 0 && selectedCount.value < filtered.value.length,
+);
+const selectedMetasPreview = computed(() =>
+  filtered.value.filter((m) => selectedIds.value.has(m.id)).slice(0, 3),
+);
+
+function toggleSelectAll() {
+  if (allVisibleSelected.value) {
+    const next = new Set(selectedIds.value);
+    for (const m of filtered.value) next.delete(m.id);
+    selectedIds.value = next;
+  } else {
+    const next = new Set(selectedIds.value);
+    for (const m of filtered.value) next.add(m.id);
+    selectedIds.value = next;
+  }
+}
+
+watch(showArchived, () => {
+  if (selecting.value) exitSelectMode();
+});
+
+watch(
+  () => filtered.value.length,
+  (len) => {
+    if (len === 0 && selecting.value) exitSelectMode();
+  },
 );
 
 function ago(t: number) {
@@ -173,9 +306,38 @@ function statusNodeFor(m: Meta) {
 
 function labelRender(item: ConversationItemType) {
   const m = (item as unknown as { "data-meta": Meta })["data-meta"];
-  return h("div", { class: "conv", "data-conv-id": m.id }, [
+  const checked = selecting.value && selectedIds.value.has(m.id);
+  const leading = selecting.value
+    ? h(
+        "span",
+        {
+          class: ["conv-check", { "is-checked": checked }],
+          role: "checkbox",
+          "aria-checked": checked,
+        },
+        checked
+          ? [
+              h(
+                "svg",
+                {
+                  viewBox: "0 0 24 24",
+                  fill: "none",
+                  stroke: "currentColor",
+                  "stroke-width": "2.8",
+                  "stroke-linecap": "round",
+                  "stroke-linejoin": "round",
+                  class: "conv-check-ic",
+                },
+                [h("polyline", { points: "20 6 9 17 4 12" })],
+              ),
+            ]
+          : [],
+      )
+    : h(ProviderIcon, { id: m.agentId, name: m.agentName, size: 13, class: "conv-logo" });
+
+  return h("div", { class: "conv", "data-conv-id": m.id, "data-selected": checked ? "true" : void 0 }, [
     h("div", { class: "conv-row" }, [
-      h(ProviderIcon, { id: m.agentId, name: m.agentName, size: 13, class: "conv-logo" }),
+      leading,
       h("span", { class: "conv-title" }, m.title || "新对话"),
       statusNodeFor(m),
     ]),
@@ -207,6 +369,24 @@ async function toggleArchive(m: Meta) {
   message.success(next ? "已归档" : "已恢复到对话列表");
 }
 
+const checkSquareIcon = () =>
+  h(
+    "svg",
+    {
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "1.9",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "w-[13px] h-[13px]",
+    },
+    [
+      h("rect", { x: "3", y: "3", width: "18", height: "18", rx: "3" }),
+      h("path", { d: "m9 12 2 2 4-4" }),
+    ],
+  );
+
 function menuFor(value: ConversationItemType) {
   const m = (value as unknown as { "data-meta": Meta })["data-meta"];
   const archived = isArchived(m.id);
@@ -220,10 +400,15 @@ function menuFor(value: ConversationItemType) {
       ...(archived ? [] : [item("pin", () => (m.pinned ? h(PushpinFilled) : h(PushpinOutlined)), m.pinned ? "取消置顶" : "置顶")]),
       item("rename", () => h(EditOutlined), "重命名"),
       item("archive", () => (archived ? h(RollbackOutlined) : h(InboxOutlined)), archived ? "取消归档" : "归档"),
+      item("select", checkSquareIcon, "多选"),
       { type: "divider" as const },
       item("delete", () => h(DeleteOutlined), "删除对话", true),
     ],
     onClick: ({ key }: { key: string }) => {
+      if (key === "select") {
+        enterSelectMode(m.id);
+        return;
+      }
       if (key === "pin") void pin(m.id, !m.pinned);
       if (key === "rename") void startRename(m);
       if (key === "archive") void toggleArchive(m);
@@ -253,6 +438,56 @@ async function confirmDelete() {
   if (!m) return;
   await remove(m.id);
   message.success("已删除");
+}
+
+async function confirmBatchArchive() {
+  const ids = [...visibleSelectedIds.value];
+  batchArchiveOpen.value = false;
+  if (!ids.length || batchBusy.value) return;
+  const targetArchived = !showArchived.value;
+  batchBusy.value = true;
+  try {
+    const results = await Promise.allSettled(ids.map((id) => setArchived(id, targetArchived)));
+    const okCount = results.filter((r) => r.status === "fulfilled").length;
+    const failCount = results.length - okCount;
+    if (targetArchived && store.activeId && ids.includes(store.activeId)) {
+      void select(null);
+    }
+    exitSelectMode();
+    if (!targetArchived && showArchived.value && archivedCount.value === 0) {
+      showArchived.value = false;
+    }
+    if (failCount === 0) {
+      message.success(targetArchived ? `已归档 ${okCount} 个对话` : `已恢复 ${okCount} 个对话`);
+    } else {
+      message.warning(`已完成 ${okCount} 个，${failCount} 个失败`);
+    }
+  } finally {
+    batchBusy.value = false;
+  }
+}
+
+async function confirmBatchDelete() {
+  const ids = [...visibleSelectedIds.value];
+  batchDeleteOpen.value = false;
+  if (!ids.length || batchBusy.value) return;
+  batchBusy.value = true;
+  try {
+    const results = await Promise.allSettled(ids.map((id) => remove(id)));
+    const okCount = results.filter((r) => r.status === "fulfilled").length;
+    const failCount = results.length - okCount;
+    exitSelectMode();
+    if (showArchived.value && archivedCount.value === 0) {
+      showArchived.value = false;
+    }
+    if (failCount === 0) {
+      message.success(`已删除 ${okCount} 个对话`);
+    } else {
+      message.warning(`已删除 ${okCount} 个，${failCount} 个失败`);
+    }
+  } finally {
+    batchBusy.value = false;
+  }
 }
 
 function toggleTheme() {
@@ -349,7 +584,28 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
       :class="isMac ? 'pl-[78px]' : 'pl-[14px]'"
     >
       <div class="flex-1" />
-      <div class="opacity-55 transition-opacity duration-150 ease-oc group-hover:opacity-100 no-drag">
+      <div
+        class="flex items-center gap-[2px] transition-opacity duration-150 ease-oc no-drag"
+        :class="selecting ? 'opacity-100' : 'opacity-55 group-hover:opacity-100'"
+      >
+        <Tooltip
+          v-if="filtered.length > 0 || selecting"
+          :title="selecting ? '退出多选 (Esc)' : `多选 (${isMac ? '⌘' : 'Ctrl'}+点击)`"
+          :mouse-enter-delay="0.4"
+        >
+          <button
+            class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] cursor-pointer transition-colors duration-140"
+            :class="selecting ? 'bg-hover text-ink' : 'bg-transparent text-ink-3 hover:bg-hover hover:text-ink'"
+            aria-label="多选"
+            @click="toggleSelectMode"
+          >
+            <!-- Lucide SquareCheck -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[14px] h-[14px]">
+              <rect width="18" height="18" x="3" y="3" rx="4" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
+          </button>
+        </Tooltip>
         <Tooltip :title="`收起侧栏 (${isMac ? '⌘' : 'Ctrl'} B)`" :mouse-enter-delay="0.4">
           <button class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] bg-transparent text-ink-3 cursor-pointer text-[14px] transition-colors duration-140 hover:bg-hover hover:text-ink" @click="store.sidebarCollapsed = true">
             <MenuFoldOutlined />
@@ -416,16 +672,69 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
       <span class="ml-auto text-[11px] text-ink-3 px-[6px] leading-[17px] rounded-full bg-hover font-mono">{{ archivedCount }}</span>
     </div>
 
-    <div class="flex-1 min-h-0 overflow-y-auto px-2 pb-[10px]" @contextmenu="onListContextMenu" @scroll="closeConvCtx">
+    <div v-if="selecting" class="flex-none flex items-center gap-[6px] pl-[18px] pr-[10px] pt-[2px] pb-[6px]">
+      <button
+        type="button"
+        class="inline-flex items-center gap-[7px] border-0 bg-transparent py-[3px] px-[4px] -ml-[4px] rounded-[7px] text-[12px] text-ink-2 cursor-pointer transition-colors duration-130 hover:bg-hover hover:text-ink"
+        @click="toggleSelectAll"
+      >
+        <span
+          class="conv-check"
+          :class="{ 'is-checked': allVisibleSelected || someVisibleSelected }"
+        >
+          <svg v-if="allVisibleSelected" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" class="conv-check-ic">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <svg v-else-if="someVisibleSelected" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" class="conv-check-ic">
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </span>
+        <span>{{ allVisibleSelected ? '取消全选' : '全选' }}</span>
+      </button>
+      <span class="text-[11px] text-ink-3 font-mono">{{ selectedCount }} / {{ filtered.length }}</span>
+      <div class="ml-auto inline-flex items-center gap-[2px]">
+        <Tooltip :title="showArchived ? `取消归档 (${selectedCount})` : `归档 (${selectedCount})`" :mouse-enter-delay="0.3">
+          <button
+            type="button"
+            class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] bg-transparent text-ink-2 text-[13.5px] cursor-pointer transition-colors duration-140 hover:not-disabled:bg-hover hover:not-disabled:text-ink disabled:opacity-35 disabled:cursor-not-allowed"
+            :disabled="selectedCount === 0 || batchBusy"
+            :aria-label="showArchived ? '取消归档' : '归档'"
+            @click="batchArchiveOpen = true"
+          >
+            <RollbackOutlined v-if="showArchived" />
+            <InboxOutlined v-else />
+          </button>
+        </Tooltip>
+        <Tooltip :title="`删除 (${selectedCount})`" :mouse-enter-delay="0.3">
+          <button
+            type="button"
+            class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] bg-transparent text-ink-2 text-[13.5px] cursor-pointer transition-colors duration-140 hover:not-disabled:bg-err-soft hover:not-disabled:text-err disabled:opacity-35 disabled:cursor-not-allowed"
+            :disabled="selectedCount === 0 || batchBusy"
+            aria-label="删除"
+            @click="batchDeleteOpen = true"
+          >
+            <DeleteOutlined />
+          </button>
+        </Tooltip>
+      </div>
+    </div>
+
+    <div
+      class="flex-1 min-h-0 overflow-y-auto px-2 pb-[10px]"
+      @click.capture="onListClickCapture"
+      @contextmenu="onListContextMenu"
+      @scroll="closeConvCtx"
+    >
       <Conversations
         v-if="items.length"
         :items="items"
-        :active-key="store.activeId ?? undefined"
+        :active-key="selecting ? undefined : (store.activeId ?? undefined)"
         :label-render="labelRender"
-        :menu="menuFor"
+        :menu="selecting ? undefined : menuFor"
         :groupable="{ label: (g: string) => g, collapsible: false }"
         class="oc-convs"
-        @active-change="(key: string) => select(key)"
+        :class="{ 'is-selecting': selecting }"
+        @active-change="(key: string) => { if (!selecting) void select(key); }"
       />
       <div v-else class="flex flex-col items-center justify-center gap-2 py-10 px-[14px] text-center">
         <InboxOutlined v-if="showArchived" class="text-[18px] text-ink-3 opacity-50" />
@@ -594,6 +903,49 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         「{{ toDelete?.title }}」的记录会从本机删除，无法恢复。agent 那边的会话不受影响。
       </p>
     </Modal>
+    <Modal
+      :open="batchArchiveOpen"
+      :title="showArchived ? `取消归档选中的 ${selectedCount} 个对话？` : `归档选中的 ${selectedCount} 个对话？`"
+      :width="380"
+      centered
+      :ok-text="showArchived ? '取消归档' : '归档'"
+      cancel-text="取消"
+      :confirm-loading="batchBusy"
+      @ok="confirmBatchArchive"
+      @cancel="batchArchiveOpen = false"
+    >
+      <div class="flex flex-col gap-2">
+        <p class="text-ink-2 m-0">
+          {{ showArchived ? '这些对话会恢复到主对话列表。' : '归档后会从主对话列表隐藏，可随时在「已归档」中恢复。' }}
+        </p>
+        <ul v-if="selectedMetasPreview.length" class="m-0 pl-4 text-[12px] text-ink-3 flex flex-col gap-[3px]">
+          <li v-for="m in selectedMetasPreview" :key="m.id" class="truncate">{{ m.title || '新对话' }}</li>
+          <li v-if="selectedCount > selectedMetasPreview.length" class="list-none -ml-4 text-ink-3">等共 {{ selectedCount }} 个对话</li>
+        </ul>
+      </div>
+    </Modal>
+    <Modal
+      :open="batchDeleteOpen"
+      :title="`删除选中的 ${selectedCount} 个对话？`"
+      :width="380"
+      centered
+      ok-text="删除"
+      ok-type="danger"
+      cancel-text="取消"
+      :confirm-loading="batchBusy"
+      @ok="confirmBatchDelete"
+      @cancel="batchDeleteOpen = false"
+    >
+      <div class="flex flex-col gap-2">
+        <p class="text-ink-2 m-0">
+          这些对话的记录会从本机永久删除，无法恢复。agent 那边的会话不受影响。
+        </p>
+        <ul v-if="selectedMetasPreview.length" class="m-0 pl-4 text-[12px] text-ink-3 flex flex-col gap-[3px]">
+          <li v-for="m in selectedMetasPreview" :key="m.id" class="truncate">{{ m.title || '新对话' }}</li>
+          <li v-if="selectedCount > selectedMetasPreview.length" class="list-none -ml-4 text-ink-3">等共 {{ selectedCount }} 个对话</li>
+        </ul>
+      </div>
+    </Modal>
 
     <Teleport to="body">
       <div
@@ -626,6 +978,16 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
           <RollbackOutlined v-if="isArchived(convCtx.meta.id)" class="text-[13px] text-ink-3" />
           <InboxOutlined v-else class="text-[13px] text-ink-3" />
           <span>{{ isArchived(convCtx.meta.id) ? '取消归档' : '归档' }}</span>
+        </button>
+        <button
+          class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
+          @click="onConvCtxAction('select')"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="w-[13px] h-[13px] text-ink-3">
+            <rect x="3" y="3" width="18" height="18" rx="3" />
+            <path d="m9 12 2 2 4-4" />
+          </svg>
+          <span>多选</span>
         </button>
         <div class="h-[1px] bg-line my-[3px] mx-[6px]" />
         <button
