@@ -75,6 +75,11 @@ export const api = {
   workspaceWriteFile: (cwd: string, relPath: string, content: string) =>
     call<void>("WorkspaceWriteFile", cwd, relPath, content),
   workspaceFileInfo: (cwd: string, relPath: string) => call<WorkspaceFileInfo>("WorkspaceFileInfo", cwd, relPath),
+  workspaceCreate: (cwd: string, relPath: string, isDir: boolean) =>
+    call<void>("WorkspaceCreate", cwd, relPath, isDir),
+  workspaceRename: (cwd: string, oldRelPath: string, newRelPath: string) =>
+    call<void>("WorkspaceRename", cwd, oldRelPath, newRelPath),
+  workspaceDelete: (cwd: string, relPath: string) => call<void>("WorkspaceDelete", cwd, relPath),
   termCreate: (cwd: string, cols: number, rows: number) => call<TermInfo>("TermCreate", cwd, cols, rows),
   termWrite: (id: string, data: string) => call<void>("TermWrite", id, data),
   termResize: (id: string, cols: number, rows: number) => call<void>("TermResize", id, cols, rows),

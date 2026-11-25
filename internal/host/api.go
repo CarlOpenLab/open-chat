@@ -453,6 +453,21 @@ func (a *API) WorkspaceFileInfo(cwd, relPath string) (WorkspaceFileInfo, error) 
 	return a.h.workspaceFileInfo(cwd, relPath)
 }
 
+// WorkspaceCreate creates a new file or directory inside cwd.
+func (a *API) WorkspaceCreate(cwd, relPath string, isDir bool) error {
+	return createWorkspaceEntry(cwd, relPath, isDir)
+}
+
+// WorkspaceRename renames a file or directory inside cwd.
+func (a *API) WorkspaceRename(cwd, oldRelPath, newRelPath string) error {
+	return renameWorkspaceEntry(cwd, oldRelPath, newRelPath)
+}
+
+// WorkspaceDelete removes a file or directory inside cwd.
+func (a *API) WorkspaceDelete(cwd, relPath string) error {
+	return deleteWorkspaceEntry(cwd, relPath)
+}
+
 // TermCreate spawns an interactive PTY shell session rooted at cwd.
 func (a *API) TermCreate(cwd string, cols, rows int) (TermInfo, error) {
 	return a.h.termCreate(cwd, cols, rows)

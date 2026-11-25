@@ -603,3 +603,143 @@ func writeWorkspaceFile(root, relPath, content string) error {
 	}
 	return nil
 }
+
+// resolveWorkspaceTarget validates a relative path for create/rename/delete
+// operations strictly inside root, blocking root itself, ".git", and symlink escapes.
+func resolveWorkspaceTarget(root, relPath string) (cleanRoot, fullPath, normRel string, err error) {
+	dir := expandHome(strings.TrimSpace(root))
+	if dir == "" {
+		return "", "", "", errors.New("未指定工作目录")
+	}
+	cleanRoot, err = filepath.Abs(filepath.Clean(dir))
+	if err != nil {
+		return "", "", "", err
+	}
+	st, err := os.Stat(cleanRoot)
+	if err != nil || !st.IsDir() {
+		return "", "", "", fmt.Errorf("工作目录不存在：%s", cleanRoot)
+	}
+
+	raw := strings.TrimSpace(strings.ReplaceAll(relPath, "\\", "/"))
+	raw = strings.TrimPrefix(raw, "/")
+	raw = strings.TrimSuffix(raw, "/")
+	if raw == "" {
+		return "", "", "", errors.New("路径不能为空")
+	}
+	segments := strings.Split(raw, "/")
+	for _, seg := range segments {
+		if seg == "" || seg == "." || seg == ".." {
+			return "", "", "", fmt.Errorf("无效的路径：%s", relPath)
+		}
+		if seg == ".git" {
+			return "", "", "", errors.New("不允许操作 .git 目录")
+		}
+	}
+	normRel = strings.Join(segments, "/")
+	fullPath, err = filepath.Abs(filepath.Join(cleanRoot, filepath.FromSlash(normRel)))
+	if err != nil {
+		return "", "", "", err
+	}
+	if fullPath == cleanRoot || !strings.HasPrefix(fullPath, cleanRoot+string(os.PathSeparator)) {
+		return "", "", "", errors.New("拒绝操作工作目录之外的路径")
+	}
+
+	// Verify symlink safety using the closest existing ancestor.
+	realRoot := cleanRoot
+	if r, rerr := filepath.EvalSymlinks(cleanRoot); rerr == nil {
+		realRoot = r
+	}
+	probe := fullPath
+	for {
+		if _, serr := os.Lstat(probe); serr == nil {
+			if realProbe, rerr := filepath.EvalSymlinks(probe); rerr == nil {
+				if realProbe != realRoot && !strings.HasPrefix(realProbe, realRoot+string(os.PathSeparator)) {
+					return "", "", "", errors.New("拒绝通过符号链接操作工作目录之外的路径")
+				}
+			}
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			break
+		}
+		probe = parent
+	}
+
+	return cleanRoot, fullPath, normRel, nil
+}
+
+// createWorkspaceEntry creates a new empty file or directory strictly inside root.
+func createWorkspaceEntry(root, relPath string, isDir bool) error {
+	_, fullPath, normRel, err := resolveWorkspaceTarget(root, relPath)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(fullPath); err == nil {
+		return fmt.Errorf("目标已存在：%s", normRel)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if isDir {
+		return os.MkdirAll(fullPath, 0o755)
+	}
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("目标已存在：%s", normRel)
+		}
+		return err
+	}
+	return f.Close()
+}
+
+// renameWorkspaceEntry renames or moves a file or directory strictly inside root.
+func renameWorkspaceEntry(root, oldRelPath, newRelPath string) error {
+	_, oldFull, oldNorm, err := resolveWorkspaceTarget(root, oldRelPath)
+	if err != nil {
+		return err
+	}
+	_, newFull, newNorm, err := resolveWorkspaceTarget(root, newRelPath)
+	if err != nil {
+		return err
+	}
+	if oldFull == newFull {
+		return nil
+	}
+	if _, err := os.Lstat(oldFull); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("原路径不存在：%s", oldNorm)
+		}
+		return err
+	}
+	if _, err := os.Lstat(newFull); err == nil {
+		// Allow case-only renames on case-insensitive filesystems (macOS/Windows).
+		if !strings.EqualFold(oldFull, newFull) {
+			return fmt.Errorf("目标已存在：%s", newNorm)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(newFull), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(oldFull, newFull)
+}
+
+// deleteWorkspaceEntry deletes a file or directory strictly inside root.
+func deleteWorkspaceEntry(root, relPath string) error {
+	_, fullPath, normRel, err := resolveWorkspaceTarget(root, relPath)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(fullPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("目标不存在：%s", normRel)
+		}
+		return err
+	}
+	return os.RemoveAll(fullPath)
+}
