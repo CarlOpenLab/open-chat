@@ -477,9 +477,12 @@
   border-color: var(--ink);
 }
 .conv-check-ic {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   display: block;
+}
+.conv-check-ic g {
+  stroke-width: 2.5;
 }
 .menu-item {
   display: inline-flex;

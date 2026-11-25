@@ -11,13 +11,19 @@ import {
   MessageOutlined,
   PushpinFilled,
   PushpinOutlined,
-  RollbackOutlined,
 } from "@antdv-next/icons";
 import { Dropdown, Input, Modal, Tooltip, message } from "antdv-next";
+import { Icon, addCollection, type IconifyJSON } from "@iconify/vue";
+import rawLucide from "@iconify-json/lucide/icons.json";
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { isArchived, isDark, isMac, newConversation, pin, remove, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
 import type { Meta } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
+
+addCollection(rawLucide as unknown as IconifyJSON);
+
+const lucideIcon = (name: string, size = 14, className?: string) =>
+  h(Icon, { icon: `lucide:${name}`, width: size, height: size, class: className });
 
 const renaming = ref<Meta | null>(null);
 const newTitle = ref("");
@@ -315,23 +321,7 @@ function labelRender(item: ConversationItemType) {
           role: "checkbox",
           "aria-checked": checked,
         },
-        checked
-          ? [
-              h(
-                "svg",
-                {
-                  viewBox: "0 0 24 24",
-                  fill: "none",
-                  stroke: "currentColor",
-                  "stroke-width": "2.8",
-                  "stroke-linecap": "round",
-                  "stroke-linejoin": "round",
-                  class: "conv-check-ic",
-                },
-                [h("polyline", { points: "20 6 9 17 4 12" })],
-              ),
-            ]
-          : [],
+        checked ? [lucideIcon("check", 11, "conv-check-ic")] : [],
       )
     : h(ProviderIcon, { id: m.agentId, name: m.agentName, size: 13, class: "conv-logo" });
 
@@ -369,23 +359,7 @@ async function toggleArchive(m: Meta) {
   message.success(next ? "已归档" : "已恢复到对话列表");
 }
 
-const checkSquareIcon = () =>
-  h(
-    "svg",
-    {
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "1.9",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      class: "w-[13px] h-[13px]",
-    },
-    [
-      h("rect", { x: "3", y: "3", width: "18", height: "18", rx: "3" }),
-      h("path", { d: "m9 12 2 2 4-4" }),
-    ],
-  );
+const checkSquareIcon = () => lucideIcon("square-check", 13);
 
 function menuFor(value: ConversationItemType) {
   const m = (value as unknown as { "data-meta": Meta })["data-meta"];
@@ -399,7 +373,7 @@ function menuFor(value: ConversationItemType) {
     items: [
       ...(archived ? [] : [item("pin", () => (m.pinned ? h(PushpinFilled) : h(PushpinOutlined)), m.pinned ? "取消置顶" : "置顶")]),
       item("rename", () => h(EditOutlined), "重命名"),
-      item("archive", () => (archived ? h(RollbackOutlined) : h(InboxOutlined)), archived ? "取消归档" : "归档"),
+      item("archive", () => lucideIcon(archived ? "archive-arrow-up" : "archive-arrow-down", 13), archived ? "取消归档" : "归档"),
       item("select", checkSquareIcon, "多选"),
       { type: "divider" as const },
       item("delete", () => h(DeleteOutlined), "删除对话", true),
@@ -599,11 +573,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
             aria-label="多选"
             @click="toggleSelectMode"
           >
-            <!-- Lucide SquareCheck -->
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[14px] h-[14px]">
-              <rect width="18" height="18" x="3" y="3" rx="4" />
-              <path d="m9 12 2 2 4-4" />
-            </svg>
+            <Icon icon="lucide:square-check" :width="14" :height="14" />
           </button>
         </Tooltip>
         <Tooltip :title="`收起侧栏 (${isMac ? '⌘' : 'Ctrl'} B)`" :mouse-enter-delay="0.4">
@@ -682,12 +652,8 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
           class="conv-check"
           :class="{ 'is-checked': allVisibleSelected || someVisibleSelected }"
         >
-          <svg v-if="allVisibleSelected" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" class="conv-check-ic">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-          <svg v-else-if="someVisibleSelected" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" class="conv-check-ic">
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
+          <Icon v-if="allVisibleSelected" icon="lucide:check" :width="11" :height="11" class="conv-check-ic" />
+          <Icon v-else-if="someVisibleSelected" icon="lucide:minus" :width="11" :height="11" class="conv-check-ic" />
         </span>
         <span>{{ allVisibleSelected ? '取消全选' : '全选' }}</span>
       </button>
@@ -701,8 +667,8 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
             :aria-label="showArchived ? '取消归档' : '归档'"
             @click="batchArchiveOpen = true"
           >
-            <RollbackOutlined v-if="showArchived" />
-            <InboxOutlined v-else />
+            <Icon v-if="showArchived" icon="lucide:archive-arrow-up" :width="14" :height="14" />
+            <Icon v-else icon="lucide:archive-arrow-down" :width="14" :height="14" />
           </button>
         </Tooltip>
         <Tooltip :title="`删除 (${selectedCount})`" :mouse-enter-delay="0.3">
@@ -975,18 +941,15 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
           class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
           @click="onConvCtxAction('archive')"
         >
-          <RollbackOutlined v-if="isArchived(convCtx.meta.id)" class="text-[13px] text-ink-3" />
-          <InboxOutlined v-else class="text-[13px] text-ink-3" />
+          <Icon v-if="isArchived(convCtx.meta.id)" icon="lucide:archive-arrow-up" :width="13" :height="13" class="text-ink-3" />
+          <Icon v-else icon="lucide:archive-arrow-down" :width="13" :height="13" class="text-ink-3" />
           <span>{{ isArchived(convCtx.meta.id) ? '取消归档' : '归档' }}</span>
         </button>
         <button
           class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
           @click="onConvCtxAction('select')"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="w-[13px] h-[13px] text-ink-3">
-            <rect x="3" y="3" width="18" height="18" rx="3" />
-            <path d="m9 12 2 2 4-4" />
-          </svg>
+          <Icon icon="lucide:square-check" :width="13" :height="13" class="text-ink-3" />
           <span>多选</span>
         </button>
         <div class="h-[1px] bg-line my-[3px] mx-[6px]" />
