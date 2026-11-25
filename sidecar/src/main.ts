@@ -157,7 +157,7 @@ interface Live {
 
 const adapters = new Map<
   string,
-  { adapter: AcpAgentAdapter; caps: AgentCapabilities; users: number; stderrTail: string[] }
+  { adapter: AcpAgentAdapter; caps: AgentCapabilities; users: number; stderrTail: string[]; baseKey: string }
 >();
 const lives = new Map<string, Live>();
 
@@ -166,9 +166,9 @@ const TURN_END = "__open_chat_turn_end__";
 
 /**
  * Cache key for a shared agent process. A per-launch generation counter lets
- * "refresh model list" force a fresh process: bump the generation, and the
- * next adapterFor spawns anew while already-live sessions keep their old
- * process (they hold the old key) until they close naturally.
+ * "refresh model list" or a forced cancel force a fresh process: bump the
+ * generation, and the next adapterFor spawns anew while already-live sessions
+ * keep their old process (they hold the old key) until they close naturally.
  */
 const launchGeneration = new Map<string, number>();
 
@@ -176,14 +176,12 @@ function launchBase(agent: AgentLaunch, cwd: string): string {
   return JSON.stringify([agent.command, agent.args ?? [], agent.env ?? {}, cwd]);
 }
 
-function bumpGeneration(agent: AgentLaunch, cwd: string): void {
-  const base = launchBase(agent, cwd);
+function bumpGenerationBase(base: string): void {
   launchGeneration.set(base, (launchGeneration.get(base) ?? 0) + 1);
 }
 
-function agentKeyOf(agent: AgentLaunch, cwd: string): string {
-  const base = launchBase(agent, cwd);
-  return `${base}#${launchGeneration.get(base) ?? 0}`;
+function bumpGeneration(agent: AgentLaunch, cwd: string): void {
+  bumpGenerationBase(launchBase(agent, cwd));
 }
 
 function isPnpmShimDir(dir: string): boolean {
@@ -247,7 +245,8 @@ async function adapterFor(agent: AgentLaunch, cwd: string): Promise<{
   caps: AgentCapabilities;
   stderrTail: string[];
 }> {
-  const key = agentKeyOf(agent, cwd);
+  const baseKey = launchBase(agent, cwd);
+  const key = `${baseKey}#${launchGeneration.get(baseKey) ?? 0}`;
   const cached = adapters.get(key);
   if (cached && cached.adapter.rawConnection?.isConnected) return { key, ...cached };
   if (cached) adapters.delete(key);
@@ -283,7 +282,7 @@ async function adapterFor(agent: AgentLaunch, cwd: string): Promise<{
   );
   try {
     const caps = await adapter.connect();
-    adapters.set(key, { adapter, caps, users: 0, stderrTail });
+    adapters.set(key, { adapter, caps, users: 0, stderrTail, baseKey });
     return { key, adapter, caps, stderrTail };
   } catch (error) {
     await adapter.dispose().catch(() => {});
@@ -606,7 +605,13 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
   async cancel(params) {
     const key = String(params?.key ?? "");
     const live = lives.get(key);
-    if (!live) return { ok: true };
+    if (!live) {
+      // Reconcile host state if the Go side still thinks the turn is running.
+      if (key) {
+        notify("events", { key, events: [{ type: "turn_end", stopReason: "cancelled" }] });
+      }
+      return { ok: true };
+    }
     for (const requestId of live.pendingPermissions) {
       await live.session.cancelPermission(requestId).catch(() => {});
       enqueue(live, { type: "permission_resolved", requestId, optionId: null } as never);
@@ -617,9 +622,9 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
       forceCancel(live);
       return { ok: true };
     }
-    await live.session.interrupt().catch(() => {});
-    // Some ACP agents hang or ignore session/cancel; force-finish after a short grace window.
+    // Arm the grace timer before interrupt() so a blocked RPC pipe cannot prevent forceCancel.
     live.cancelTimer = setTimeout(() => forceCancel(live), 3_000);
+    await live.session.interrupt().catch(() => {});
     return { ok: true };
   },
 
@@ -700,7 +705,18 @@ function forceCancel(live: Live): void {
   if (lives.get(live.key) === live) {
     lives.delete(live.key);
     void live.session.dispose().catch(() => {});
-    release(live.agentKey);
+    // A forced cancel means the agent ignored session/cancel and is likely wedged.
+    // Bump the launch generation and dispose immediately if no other session shares it,
+    // so the next turn spawns a fresh process instead of reusing the hung one.
+    const entry = adapters.get(live.agentKey);
+    if (entry) {
+      entry.users -= 1;
+      bumpGenerationBase(entry.baseKey);
+      if (entry.users <= 0) {
+        adapters.delete(live.agentKey);
+        void entry.adapter.dispose().catch(() => {});
+      }
+    }
   }
 }
 
