@@ -21,6 +21,7 @@ import type {
   TermInfo,
   WorkspaceFileInfo,
   WorkspaceNode,
+  WorktreeInfo,
   WorktreeStatus,
 } from "./types";
 
@@ -52,7 +53,11 @@ export const api = {
   create: (agentId: string, cwd: string) => call<Meta>("Create", agentId, cwd),
   createWorktree: (agentId: string, repoDir: string, baseBranch = "", branchName = "") =>
     call<Meta>("CreateWorktree", agentId, repoDir, baseBranch, branchName),
+  attachWorktree: (agentId: string, wtPath: string) => call<Meta>("AttachWorktree", agentId, wtPath),
+  listWorktrees: (repoDir: string) => call<WorktreeInfo[]>("ListWorktrees", repoDir),
   worktreeStatus: (id: string) => call<WorktreeStatus>("WorktreeStatus", id),
+  mergeWorktree: (id: string, strategy: "merge" | "squash", commitMsg = "", cleanup = false) =>
+    call<void>("MergeWorktree", id, strategy, commitMsg, cleanup),
   removeWorktree: (id: string, force = false, deleteBranch = false) =>
     call<void>("RemoveWorktree", id, force, deleteBranch),
   open: (id: string) => call<Conversation>("Open", id),

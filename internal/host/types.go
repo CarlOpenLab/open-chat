@@ -77,6 +77,7 @@ type Meta struct {
 	Worktree       bool   `json:"worktree,omitempty"`
 	WorktreeRepo   string `json:"worktreeRepo,omitempty"`
 	WorktreeBranch string `json:"worktreeBranch,omitempty"`
+	WorktreeBase   string `json:"worktreeBase,omitempty"`
 	CreatedAt      int64  `json:"createdAt"`
 	UpdatedAt      int64  `json:"updatedAt"`
 	Pinned         bool   `json:"pinned,omitempty"`
@@ -240,13 +241,32 @@ type GitInfo struct {
 	Branches []string `json:"branches"`
 }
 
-// WorktreeStatus reports whether a conversation's linked git worktree still
-// exists on disk and has uncommitted changes.
-type WorktreeStatus struct {
-	Exists       bool   `json:"exists"`
+// WorktreeFileChange describes one uncommitted file in a worktree.
+type WorktreeFileChange struct {
+	Path   string `json:"path"`
+	Status string `json:"status"` // M | A | D | R | ?
+}
+
+// WorktreeInfo describes an existing git worktree belonging to a repository.
+type WorktreeInfo struct {
+	Path         string `json:"path"`
+	Branch       string `json:"branch"`
+	IsMain       bool   `json:"isMain"`
 	Dirty        bool   `json:"dirty"`
 	ChangedCount int    `json:"changedCount"`
-	Branch       string `json:"branch"`
+}
+
+// WorktreeStatus reports whether a conversation's linked git worktree still
+// exists on disk, how many commits it is ahead of its base branch, and any
+// uncommitted file changes.
+type WorktreeStatus struct {
+	Exists       bool                 `json:"exists"`
+	Dirty        bool                 `json:"dirty"`
+	ChangedCount int                  `json:"changedCount"`
+	AheadCount   int                  `json:"aheadCount"`
+	Branch       string               `json:"branch"`
+	BaseBranch   string               `json:"baseBranch"`
+	ChangedFiles []WorktreeFileChange `json:"changedFiles"`
 }
 
 // Block is one piece of a user's message (ACP ContentBlock).

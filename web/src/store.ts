@@ -617,6 +617,7 @@ export interface WorktreeLaunchOptions {
   enabled: boolean;
   baseBranch?: string;
   branchName?: string;
+  existingPath?: string;
 }
 
 export async function start(
@@ -627,7 +628,9 @@ export async function start(
   worktree?: WorktreeLaunchOptions | null,
 ) {
   const meta = worktree?.enabled
-    ? await api.createWorktree(agentId, cwd, worktree.baseBranch ?? "", worktree.branchName ?? "")
+    ? worktree.existingPath
+      ? await api.attachWorktree(agentId, worktree.existingPath)
+      : await api.createWorktree(agentId, cwd, worktree.baseBranch ?? "", worktree.branchName ?? "")
     : await api.create(agentId, cwd);
   store.metas[meta.id] = meta;
   store.transcripts[meta.id] = emptyTranscript();
@@ -740,7 +743,10 @@ export const respond = (id: string, requestId: string, optionId: string) => api.
 export const setMode = (id: string, modeId: string) => api.setMode(id, modeId);
 export const setConfig = (id: string, configId: string, value: string | boolean) => api.setConfig(id, configId, value);
 export const connect = (id: string) => api.connect(id);
+export const listWorktrees = (repoDir: string) => api.listWorktrees(repoDir);
 export const worktreeStatus = (id: string) => api.worktreeStatus(id);
+export const mergeWorktree = (id: string, strategy: "merge" | "squash", commitMsg = "", cleanup = false) =>
+  api.mergeWorktree(id, strategy, commitMsg, cleanup);
 export const removeWorktree = (id: string, force = false, deleteBranch = false) =>
   api.removeWorktree(id, force, deleteBranch);
 

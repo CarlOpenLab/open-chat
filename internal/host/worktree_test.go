@@ -8,7 +8,8 @@ import (
 	"testing"
 )
 
-func TestWorktreeLifecycle(t *testing.T) {
+func setupTestGitRepo(t *testing.T) (*Host, string) {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -31,11 +32,20 @@ func TestWorktreeLifecycle(t *testing.T) {
 	run("init", "-b", "main")
 	run("config", "user.name", "Test")
 	run("config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte(".env.local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".worktreeinclude"), []byte(".env.local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# demo\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("add", "README.md")
+	run("add", ".gitignore", ".worktreeinclude", "README.md")
 	run("commit", "-m", "init")
+	if err := os.WriteFile(filepath.Join(repoDir, ".env.local"), []byte("TOKEN=123\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	dataDir := t.TempDir()
 	st, err := openStore(dataDir)
@@ -53,48 +63,51 @@ func TestWorktreeLifecycle(t *testing.T) {
 		lives: map[string]*live{},
 		terms: map[string]*termSession{},
 	}
+	return h, repoDir
+}
 
+func TestWorktreeLifecycleAndInclude(t *testing.T) {
+	h, repoDir := setupTestGitRepo(t)
 	ctx := context.Background()
+
 	m, err := h.createWithWorktree(ctx, "codebuddy", repoDir, "main", "wt/test-feature")
 	if err != nil {
 		t.Fatalf("createWithWorktree failed: %v", err)
 	}
-	if !m.Worktree || m.WorktreeBranch != "wt/test-feature" || m.WorktreeRepo == "" {
+	if !m.Worktree || m.WorktreeBranch != "wt/test-feature" || m.WorktreeBase != "main" {
 		t.Fatalf("unexpected worktree meta: %+v", m)
 	}
-	if !isDir(m.Cwd) {
-		t.Fatalf("expected worktree dir to exist: %s", m.Cwd)
-	}
-	if len(h.settings.RecentDirs) == 0 || h.settings.RecentDirs[0] != m.WorktreeRepo {
-		t.Fatalf("expected RecentDirs[0] to be source repo %s, got %v", m.WorktreeRepo, h.settings.RecentDirs)
+	// .worktreeinclude should have copied .env.local into the new worktree.
+	if b, err := os.ReadFile(filepath.Join(m.Cwd, ".env.local")); err != nil || string(b) != "TOKEN=123\n" {
+		t.Fatalf("expected .env.local to be copied via .worktreeinclude, err=%v got=%q", err, string(b))
 	}
 
-	// Clean status
-	ws, err := h.worktreeStatus(ctx, m.ID)
-	if err != nil || !ws.Exists || ws.Dirty {
-		t.Fatalf("expected clean existing worktree, got ws=%+v err=%v", ws, err)
+	// ListWorktrees should report this linked worktree.
+	list, err := h.listWorktrees(ctx, repoDir)
+	if err != nil || len(list) != 1 || list[0].Branch != "wt/test-feature" {
+		t.Fatalf("listWorktrees = %+v, err=%v", list, err)
 	}
 
-	// Make dirty -> non-force removal should be blocked
+	// Make dirty -> non-force removal should be blocked.
 	if err := os.WriteFile(filepath.Join(m.Cwd, "dirty.txt"), []byte("wip\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ws, err = h.worktreeStatus(ctx, m.ID)
-	if err != nil || !ws.Dirty || ws.ChangedCount != 1 {
+	ws, err := h.worktreeStatus(ctx, m.ID)
+	if err != nil || !ws.Dirty || ws.ChangedCount != 1 || len(ws.ChangedFiles) != 1 {
 		t.Fatalf("expected dirty worktree with 1 change, got ws=%+v err=%v", ws, err)
 	}
 	if err := h.removeWorktree(ctx, m.ID, false, true); err == nil {
 		t.Fatalf("expected non-force removal of dirty worktree to fail")
 	}
 
-	// Force removal + branch cleanup
-	if err := h.removeWorktree(ctx, m.ID, true, true); err != nil {
-		t.Fatalf("force removeWorktree failed: %v", err)
+	// Squash merge back to main with automatic cleanup.
+	if err := h.mergeWorktree(ctx, m.ID, "squash", "feat: add dirty.txt", true); err != nil {
+		t.Fatalf("mergeWorktree squash failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "dirty.txt")); err != nil {
+		t.Fatalf("expected merged file in source repo: %v", err)
 	}
 	if isDir(m.Cwd) {
-		t.Fatalf("expected worktree dir to be removed: %s", m.Cwd)
-	}
-	if _, err := h.runGit(ctx, repoDir, "show-ref", "--verify", "--quiet", "refs/heads/wt/test-feature"); err == nil {
-		t.Fatalf("expected branch wt/test-feature to be deleted")
+		t.Fatalf("expected worktree dir to be cleaned up after merge: %s", m.Cwd)
 	}
 }

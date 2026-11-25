@@ -155,9 +155,29 @@ func (a *API) CreateWorktree(ctx context.Context, agentID, repoDir, baseBranch, 
 	return m, nil
 }
 
-// WorktreeStatus reports the disk existence and dirty state of a worktree conversation.
+// AttachWorktree starts a new conversation inside an existing linked git worktree.
+func (a *API) AttachWorktree(ctx context.Context, agentID, wtPath string) (Meta, error) {
+	m, err := a.h.attachWorktree(context.WithoutCancel(ctx), agentID, wtPath)
+	if err != nil {
+		return Meta{}, err
+	}
+	go func() { _, _ = a.h.connect(context.Background(), m.ID) }()
+	return m, nil
+}
+
+// ListWorktrees lists existing linked git worktrees for repoDir.
+func (a *API) ListWorktrees(ctx context.Context, repoDir string) ([]WorktreeInfo, error) {
+	return a.h.listWorktrees(context.WithoutCancel(ctx), repoDir)
+}
+
+// WorktreeStatus reports the disk existence, ahead count, and dirty files of a worktree conversation.
 func (a *API) WorktreeStatus(ctx context.Context, id string) (WorktreeStatus, error) {
 	return a.h.worktreeStatus(context.WithoutCancel(ctx), id)
+}
+
+// MergeWorktree merges a worktree conversation's changes back into its base branch.
+func (a *API) MergeWorktree(ctx context.Context, id, strategy, commitMsg string, cleanup bool) error {
+	return a.h.mergeWorktree(context.WithoutCancel(ctx), id, strategy, commitMsg, cleanup)
 }
 
 // RemoveWorktree removes the linked git worktree (and optionally its branch) for a conversation.
