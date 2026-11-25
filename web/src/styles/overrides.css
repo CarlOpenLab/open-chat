@@ -1040,8 +1040,9 @@
   background: #f43f5e;
 }
 .branch-dropdown .ant-dropdown-menu {
-  max-height: 280px;
+  max-height: min(280px, 40dvh);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .branch-opt {
   display: flex;

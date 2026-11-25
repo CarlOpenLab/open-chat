@@ -126,9 +126,10 @@ func (a *API) ProbeModels(ctx context.Context, agentID, cwd string) ([]any, erro
 }
 
 // RefreshModels re-reads configOptions from a freshly spawned agent process,
-// so models added outside (dsh profile, npm install, provider config) show up
-// without restarting open-chat.
+// so models added outside (dsh profile, npm install, provider config, or
+// CodeBuddy CN/intl environment changes) show up without restarting open-chat.
 func (a *API) RefreshModels(ctx context.Context, agentID, cwd string) ([]any, error) {
+	a.h.refreshEnv()
 	return a.h.probeAgent(context.WithoutCancel(ctx), agentID, cwd, true)
 }
 

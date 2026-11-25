@@ -1243,7 +1243,7 @@ defineExpose({ addFiles });
           :menu="branchMenu"
           :trigger="['click']"
           placement="bottomLeft"
-          overlay-class-name="branch-dropdown"
+          root-class="branch-dropdown"
           @open-change="(open: boolean) => { if (open && cwd) void refreshGit(cwd); }"
         >
           <Tooltip :title="`切换 Git 分支（当前：${currentBranch}）`" :mouse-enter-delay="0.35">

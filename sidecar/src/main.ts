@@ -149,6 +149,10 @@ interface Live {
   timer: NodeJS.Timeout | null;
   /** Permission requests waiting on the user, so a closing session can release them. */
   pendingPermissions: Set<string>;
+  /** Increments per prompt; guards against late completions after a forced cancel. */
+  promptSeq: number;
+  /** Grace timer set on cancel() to force-stop a hung prompt if the agent ignores session/cancel. */
+  cancelTimer: NodeJS.Timeout | null;
 }
 
 const adapters = new Map<
@@ -168,17 +172,18 @@ const TURN_END = "__open_chat_turn_end__";
  */
 const launchGeneration = new Map<string, number>();
 
-function launchBase(agent: AgentLaunch): string {
-  return JSON.stringify([agent.command, agent.args ?? [], agent.env ?? {}]);
+function launchBase(agent: AgentLaunch, cwd: string): string {
+  return JSON.stringify([agent.command, agent.args ?? [], agent.env ?? {}, cwd]);
 }
 
-function bumpGeneration(agent: AgentLaunch): void {
-  const base = launchBase(agent);
+function bumpGeneration(agent: AgentLaunch, cwd: string): void {
+  const base = launchBase(agent, cwd);
   launchGeneration.set(base, (launchGeneration.get(base) ?? 0) + 1);
 }
 
-function agentKeyOf(agent: AgentLaunch): string {
-  return `${launchBase(agent)}#${launchGeneration.get(launchBase(agent)) ?? 0}`;
+function agentKeyOf(agent: AgentLaunch, cwd: string): string {
+  const base = launchBase(agent, cwd);
+  return `${base}#${launchGeneration.get(base) ?? 0}`;
 }
 
 function isPnpmShimDir(dir: string): boolean {
@@ -236,24 +241,29 @@ async function withStderrContext(error: unknown, stderrTail: string[]): Promise<
   throw error;
 }
 
-async function adapterFor(agent: AgentLaunch): Promise<{
+async function adapterFor(agent: AgentLaunch, cwd: string): Promise<{
   key: string;
   adapter: AcpAgentAdapter;
   caps: AgentCapabilities;
   stderrTail: string[];
 }> {
-  const key = agentKeyOf(agent);
+  const key = agentKeyOf(agent, cwd);
   const cached = adapters.get(key);
   if (cached && cached.adapter.rawConnection?.isConnected) return { key, ...cached };
   if (cached) adapters.delete(key);
   const stderrTail: string[] = [];
   const cleanEnv: Record<string, string> = { ...(agent.env ?? {}) };
+  // An empty CODEBUDDY_INTERNET_ENVIRONMENT signals explicit unset (international).
+  // Node spawn omits keys whose value is undefined so the child does not inherit a stale value.
+  if ("CODEBUDDY_INTERNET_ENVIRONMENT" in cleanEnv && cleanEnv.CODEBUDDY_INTERNET_ENVIRONMENT === "") {
+    (cleanEnv as Record<string, string | undefined>).CODEBUDDY_INTERNET_ENVIRONMENT = undefined;
+  }
   // Avoid nested Claude Code rejection when open-chat is launched from inside Claude Code.
   if ("CLAUDECODE" in process.env) delete process.env.CLAUDECODE;
   const resolved = resolveLaunch(agent, cleanEnv);
   const adapter = new AcpAgentAdapter(
     agent.id,
-    { command: resolved.command, args: resolved.args, env: cleanEnv },
+    { command: resolved.command, args: resolved.args, env: cleanEnv, cwd },
     {
       clientInfo: { name: "open-chat", version: "0.1.0" },
       initializeTimeoutMs: 120_000,
@@ -376,6 +386,10 @@ function pump(live: Live): void {
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     }
+    if (live.cancelTimer) {
+      clearTimeout(live.cancelTimer);
+      live.cancelTimer = null;
+    }
     flush(live);
     if (lives.get(live.key) === live) {
       lives.delete(live.key);
@@ -454,8 +468,8 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
     // config changed outside (new models, new providers) is picked up.
     const refresh = params?.refresh === true;
     if (!agent?.command) throw new AdapterError("unknown", "probe 需要 agent");
-    if (refresh) bumpGeneration(agent);
-    const { key: agentKey, adapter, caps, stderrTail } = await adapterFor(agent);
+    if (refresh) bumpGeneration(agent, cwd);
+    const { key: agentKey, adapter, caps, stderrTail } = await adapterFor(agent, cwd);
     const entry = adapters.get(agentKey);
     if (entry) entry.users += 1;
     let session: AcpSession | null = null;
@@ -490,7 +504,7 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
       release(existing.agentKey);
     }
 
-    const { key: agentKey, adapter, caps, stderrTail } = await adapterFor(agent);
+    const { key: agentKey, adapter, caps, stderrTail } = await adapterFor(agent, cwd);
     let session: AcpSession;
     let resumed = false;
     try {
@@ -527,6 +541,8 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
       buffer: [],
       timer: null,
       pendingPermissions: new Set(),
+      promptSeq: 0,
+      cancelTimer: null,
     };
     lives.set(key, live);
     pump(live);
@@ -537,11 +553,40 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
     const live = liveOf(params);
     const blocks = (params?.blocks ?? []) as ContentBlock[];
     if (blocks.length === 0) throw new AdapterError("unknown", "消息不能为空");
+    if (live.cancelTimer) {
+      clearTimeout(live.cancelTimer);
+      live.cancelTimer = null;
+    }
+    const seq = ++live.promptSeq;
+    const rawConn = adapters.get(live.agentKey)?.adapter.rawConnection;
+    const runPrompt = rawConn
+      ? rawConn.prompt(live.session.id, blocks)
+      : live.session.prompt(blocks);
     // Answer at once: the turn's progress and its end arrive as events.
-    void live.session
-      .prompt(blocks)
-      .then((result) => live.session.emit({ type: "raw", update: { [TURN_END]: { stopReason: result.stopReason } } }))
-      .catch((error: unknown) =>
+    void runPrompt
+      .then((result) => {
+        if (live.promptSeq !== seq) return;
+        if (live.cancelTimer) {
+          clearTimeout(live.cancelTimer);
+          live.cancelTimer = null;
+        }
+        const error = promptErrorOf(result);
+        live.session.emit({
+          type: "raw",
+          update: {
+            [TURN_END]: {
+              stopReason: result.stopReason,
+              ...(error ? { error } : {}),
+            },
+          },
+        });
+      })
+      .catch((error: unknown) => {
+        if (live.promptSeq !== seq) return;
+        if (live.cancelTimer) {
+          clearTimeout(live.cancelTimer);
+          live.cancelTimer = null;
+        }
         live.session.emit({
           type: "raw",
           update: {
@@ -550,19 +595,28 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
               error: error instanceof Error ? error.message : String(error),
             },
           },
-        }),
-      );
+        });
+      });
     return { accepted: true };
   },
 
   async cancel(params) {
-    const live = liveOf(params);
+    const key = String(params?.key ?? "");
+    const live = lives.get(key);
+    if (!live) return { ok: true };
     for (const requestId of live.pendingPermissions) {
       await live.session.cancelPermission(requestId).catch(() => {});
       enqueue(live, { type: "permission_resolved", requestId, optionId: null } as never);
     }
     live.pendingPermissions.clear();
-    await live.session.interrupt();
+    // Second click while already cancelling immediately force-stops the hung session.
+    if (live.cancelTimer) {
+      forceCancel(live);
+      return { ok: true };
+    }
+    await live.session.interrupt().catch(() => {});
+    // Some ACP agents hang or ignore session/cancel; force-finish after a short grace window.
+    live.cancelTimer = setTimeout(() => forceCancel(live), 3_000);
     return { ok: true };
   },
 
@@ -632,11 +686,42 @@ const methods: Record<string, (params: Record<string, unknown> | undefined) => P
   },
 };
 
+function forceCancel(live: Live): void {
+  if (live.cancelTimer) {
+    clearTimeout(live.cancelTimer);
+    live.cancelTimer = null;
+  }
+  live.promptSeq += 1;
+  flush(live);
+  notify("events", { key: live.key, events: [{ type: "turn_end", stopReason: "cancelled" }] });
+  if (lives.get(live.key) === live) {
+    lives.delete(live.key);
+    void live.session.dispose().catch(() => {});
+    release(live.agentKey);
+  }
+}
+
 async function disposeAll(): Promise<void> {
-  for (const live of lives.values()) await live.session.dispose().catch(() => {});
+  for (const live of lives.values()) {
+    if (live.cancelTimer) clearTimeout(live.cancelTimer);
+    await live.session.dispose().catch(() => {});
+  }
   lives.clear();
   for (const { adapter } of adapters.values()) await adapter.dispose().catch(() => {});
   adapters.clear();
+}
+
+// Agents like CodeBuddy resolve session/prompt with stopReason "refusal"
+// instead of rejecting JSON-RPC, attaching the readable reason in _meta.
+function promptErrorOf(result: unknown): string | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  const meta = (result as { _meta?: Record<string, unknown> })._meta;
+  if (!meta || typeof meta !== "object") return undefined;
+  for (const key of ["codebuddy.ai/errorMessage", "errorMessage", "error"]) {
+    const v = meta[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
 }
 
 function errorFrame(id: number, error: unknown) {

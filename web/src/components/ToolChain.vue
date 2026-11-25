@@ -169,7 +169,7 @@ function toggle(id: string) {
       class="flex items-stretch gap-2 min-w-0"
     >
       <!-- Left rail: status dot/icon + dashed connector -->
-      <div class="w-[18px] flex-none flex flex-col items-center pt-1">
+      <div class="w-[18px] flex-none flex flex-col items-center pt-1 pr-1px">
         <span
           class="inline-flex items-center justify-center w-4 h-4 text-[13.5px] leading-none flex-none"
           :class="

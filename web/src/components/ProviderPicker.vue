@@ -88,8 +88,7 @@ function isFreeCredit(credit: string): boolean {
 
 function optionForAgent(agentId: string): ConfigOption | null {
   if (agentId === props.modelValue && props.modelOption) return props.modelOption;
-  if (!props.locked) return store.cachedModels[agentId] ?? null;
-  return null;
+  return store.cachedModels[agentId] ?? null;
 }
 
 const activeModelOpt = computed(() => optionForAgent(props.modelValue));
@@ -266,13 +265,13 @@ const refreshTarget = computed(() =>
 );
 const refreshing = computed(() => Boolean(refreshTarget.value && store.probingModels[refreshTarget.value]));
 
-/** Re-read models from a fresh agent process; only meaningful for new conversations, a live session keeps its own list. */
+/** Re-read models from a fresh agent process and sync both cache and active session options. */
 async function refreshCurrent() {
   const id = refreshTarget.value;
   if (!id || refreshing.value) return;
   try {
     await refreshModels(id, props.cwd ?? "");
-    message.success("模型列表已刷新，对新建会话生效");
+    message.success("模型列表已刷新");
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e));
   }
@@ -418,9 +417,8 @@ async function refreshCurrent() {
             </div>
           </div>
 
-          <div class="flex gap-[6px] border-0 border-t border-solid border-line px-[6px] py-[5px]">
+          <div class="flex items-center justify-between gap-[6px] border-0 border-t border-solid border-line px-[6px] py-[5px]">
             <button
-              v-if="!locked"
               class="flex-none flex items-center gap-[7px] px-2 py-[6px] border-0 rounded-[7px] bg-transparent text-ink-2 text-[12px] cursor-pointer transition-colors duration-120 hover:not-disabled:bg-hover hover:not-disabled:text-ink disabled:cursor-default disabled:opacity-55"
               :disabled="refreshing"
               @click="refreshCurrent"
@@ -444,17 +442,13 @@ async function refreshCurrent() {
               <span>刷新模型</span>
             </button>
             <button
-              class="flex-1 min-w-0 flex items-center gap-[7px] px-2 py-[6px] border-0 rounded-[7px] bg-transparent text-ink-2 text-[12px] cursor-pointer transition-colors duration-120 hover:bg-hover hover:text-ink"
+              class="flex-none inline-grid place-items-center w-7 h-7 border-0 rounded-[7px] bg-transparent text-ink-3 cursor-pointer transition-colors duration-120 hover:bg-hover hover:text-ink"
+              title="管理 ACP 供应商"
+              aria-label="管理 ACP 供应商"
               @click="openSettings"
             >
-              <!-- Lucide Plus -->
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-[13px] h-[13px] flex-none">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              <span>管理 ACP 供应商</span>
               <!-- Lucide Settings -->
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="w-[13px] h-[13px] flex-none ml-auto text-ink-3">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="w-[14px] h-[14px]">
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>

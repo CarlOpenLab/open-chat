@@ -42,6 +42,7 @@ import { answerText, userText } from "../transcript";
 import type { Block, PermissionOption } from "../types";
 import Composer from "./Composer.vue";
 import FolderPicker from "./FolderPicker.vue";
+import ProviderIcon from "./ProviderIcon.vue";
 import TurnView from "./TurnView.vue";
 import WindowControls from "./WindowControls.vue";
 import WorkspacePanel from "./WorkspacePanel.vue";
@@ -352,6 +353,29 @@ async function toggleArchive() {
   if (next) void select(null);
 }
 
+async function copySessionId() {
+  const m = meta.value;
+  const opts = live.value.configOptions ?? [];
+  const modelOpt =
+    opts.find((o) => o.category === "model") ??
+    opts.find((o) => o.type === "select" && o.id.includes("model"));
+  const modelVal = modelOpt?.currentValue != null ? String(modelOpt.currentValue) : "-";
+  const info = [
+    `会话 ID: ${m.id}`,
+    `ACP Session: ${m.acpSessionId || "-"}`,
+    `Agent: ${m.agentName} (${m.agentId})`,
+    `模型: ${modelVal}`,
+    `目录: ${m.cwd}`,
+    `状态: ${live.value.status}`,
+  ].join("\n");
+  try {
+    await navigator.clipboard.writeText(info);
+    message.success("已复制会话 ID 与诊断信息");
+  } catch {
+    message.error("复制失败");
+  }
+}
+
 const menu = computed(() => ({
   items: [
     { key: "rename", label: "重命名" },
@@ -359,6 +383,7 @@ const menu = computed(() => ({
     { key: "archive", label: archived.value ? "取消归档" : "归档对话" },
     { key: "new-same", label: "在同目录新建对话" },
     { key: "reveal", label: "在文件夹中显示" },
+    { key: "copy-id", label: "复制会话 ID" },
     { type: "divider" as const },
     { key: "delete", label: "删除对话", danger: true },
   ],
@@ -368,6 +393,7 @@ const menu = computed(() => ({
     if (key === "archive") void toggleArchive();
     if (key === "new-same") void newSameDir();
     if (key === "reveal") void reveal();
+    if (key === "copy-id") void copySessionId();
     if (key === "delete") confirmDelete();
   },
 }));
@@ -531,29 +557,54 @@ async function changeDir(path: string) {
         </button>
       </div>
 
-      <MessageScroller
-        ref="scroller"
-        :key="meta.id"
-        :follow="following"
-        class="flex-1 min-h-0"
-        :busy="running"
-        :navigation="turns.length > 1 ? 'rail' : undefined"
-        :items="scrollerItems"
-        item-selector="[data-message-id]"
-        :back-to-bottom="canScroll"
-        @update:follow="onFollowUpdate"
-        @rail-item-select="onRailItemSelect"
-        @scroll="updateScrollable"
-      >
-        <div class="max-w-content mx-auto px-5 pt-4 pb-[6px] min-h-full flex flex-col">
-          <div v-if="loadingHistory" class="flex items-center gap-2 justify-center text-[12.5px] text-ink-3 py-9">
+      <div class="flex-1 min-h-0 relative flex flex-col">
+        <div
+          v-if="loadingHistory || (live.status === 'connecting' && !turns.length)"
+          class="absolute inset-0 z-5 flex items-center justify-center px-5 pointer-events-none"
+        >
+          <div
+            v-if="loadingHistory"
+            class="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-surface glass-sm border border-solid border-line shadow-card text-[12.5px] text-ink-2 animate-oc-bubble-in"
+          >
             <span class="w-3 h-3 rounded-full border-[1.5px] border-solid border-line-strong border-t-ink-solid animate-oc-spin" />
             <span>正在加载对话记录…</span>
           </div>
-          <div v-else-if="live.status === 'connecting' && !turns.length" class="flex items-center gap-2 justify-center text-[12.5px] text-ink-3 py-9">
-            <span class="w-3 h-3 rounded-full border-[1.5px] border-solid border-line-strong border-t-ink-solid animate-oc-spin" />
-            <span>正在和 {{ meta.agentName }} 建立连接…</span>
+          <div
+            v-else
+            class="flex flex-col items-center gap-3 -mt-6 px-6 py-5 rounded-[16px] bg-surface glass-sm border border-solid border-line shadow-card animate-oc-bubble-in"
+          >
+            <div class="relative w-11 h-11 rounded-[13px] bg-modal border border-solid border-line-strong grid place-items-center text-ink">
+              <ProviderIcon :id="meta.agentId" :name="meta.agentName" :size="22" />
+              <span
+                class="absolute -inset-[4px] rounded-[16px] border border-solid border-line-strong opacity-60 animate-[oc-pulse_1.6s_ease-in-out_infinite]"
+                aria-hidden="true"
+              />
+            </div>
+            <div class="flex flex-col items-center gap-1 text-center">
+              <div class="flex items-center gap-2 text-[13.5px] fw-560 text-ink tracking-[-0.01em]">
+                <span class="w-3 h-3 rounded-full border-[1.5px] border-solid border-line-strong border-t-ink-solid animate-oc-spin flex-none" />
+                <span class="shimmer-text">正在与 {{ meta.agentName }} 建立连接</span>
+              </div>
+              <span class="text-[11.5px] text-ink-3 font-mono max-w-[260px] truncate">{{ shortCwd }}</span>
+            </div>
           </div>
+        </div>
+
+        <MessageScroller
+          ref="scroller"
+          :key="meta.id"
+          :follow="following"
+          class="flex-1 min-h-0"
+          :busy="running"
+          :navigation="turns.length > 1 ? 'rail' : undefined"
+          :items="scrollerItems"
+          item-selector="[data-message-id]"
+          :back-to-bottom="canScroll"
+          @update:follow="onFollowUpdate"
+          @rail-item-select="onRailItemSelect"
+          @scroll="updateScrollable"
+        >
+          <div class="max-w-content mx-auto px-5 pt-4 pb-[6px] min-h-full flex flex-col">
           <div v-if="hiddenTurnCount > 0" class="flex items-center justify-center gap-2 pt-1 pb-[14px]">
             <button
               type="button"
@@ -587,6 +638,7 @@ async function changeDir(path: string) {
           <div class="h-4 flex-none" />
         </div>
       </MessageScroller>
+      </div>
 
       <div class="flex-none relative px-5 pb-[14px] bg-transparent z-10">
         <div class="max-w-content mx-auto">

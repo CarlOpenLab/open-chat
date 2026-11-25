@@ -55,10 +55,7 @@ func loginEnv() []string {
 			}
 			for _, kv := range strings.Split(string(out[i+len(mark)+1:]), "\x00") {
 				k, _, _ := strings.Cut(kv, "=")
-				switch k {
-				case "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "NVM_DIR", "MISE_DATA_DIR", "VOLTA_HOME", "PNPM_HOME", "BUN_INSTALL",
-					"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY",
-					"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "ALL_PROXY", "all_proxy":
+				if shouldImportLoginEnv(k) {
 					put(kv)
 				}
 			}
@@ -79,6 +76,19 @@ func loginEnv() []string {
 		"/usr/local/bin",
 	}
 	return withPath(env, extra)
+}
+
+func shouldImportLoginEnv(k string) bool {
+	if strings.HasPrefix(k, "CODEBUDDY_") {
+		return true
+	}
+	switch k {
+	case "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "NVM_DIR", "MISE_DATA_DIR", "VOLTA_HOME", "PNPM_HOME", "BUN_INSTALL",
+		"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY",
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "ALL_PROXY", "all_proxy":
+		return true
+	}
+	return false
 }
 
 func envLookup(env []string, key string) (idx int, name, val string) {
