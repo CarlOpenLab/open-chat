@@ -523,6 +523,12 @@ function pickSkill(entry: SkillEntry) {
   });
 }
 
+const senderAutoSize = computed(() => ({ minRows: props.lockProvider ? 1 : 2, maxRows: 10 }));
+
+function onSenderCancel() {
+  emit("stop");
+}
+
 function onSenderChange(val: string, _event?: Event, _slotConfig?: SlotConfigType[], skill?: SkillType) {
   emit("update:value", val);
   if (selectedSkill.value && !skill) {
@@ -1076,14 +1082,14 @@ defineExpose({ addFiles });
           :loading="false"
           :disabled="disabled"
           :submit-type="sendKey"
-          :auto-size="{ minRows: lockProvider ? 1 : 2, maxRows: 10 }"
+          :auto-size="senderAutoSize"
           :placeholder="selectedSkill ? `使用 /${selectedSkill.name}，输入补充说明或直接发送…` : (placeholder ?? '描述你想完成的任务…')"
           :on-change="onSenderChange"
           :on-key-down="onKeydown"
           :on-paste-file="onPasteFile"
           :on-paste="onPaste"
           :on-submit="submit"
-          :on-cancel="() => emit('stop')"
+          :on-cancel="onSenderCancel"
           class="oc-sender"
         >
           <template #suffix><span class="hidden" /></template>

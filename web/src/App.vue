@@ -12,6 +12,7 @@ import { activeMeta, init, isDark, newConversation, openWorkspaceFile, store } f
 import { antdThemeFor } from "./theme";
 
 const theme = computed(() => antdThemeFor(isDark.value));
+const textAreaConfig = { changeOnComposing: true };
 
 const mod = navigator.platform.includes("Mac") ? (e: KeyboardEvent) => e.metaKey : (e: KeyboardEvent) => e.ctrlKey;
 
@@ -144,7 +145,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ConfigProvider :theme="theme">
+  <ConfigProvider :theme="theme" :text-area="textAreaConfig">
     <XProvider :theme="theme">
       <XProProvider :theme="theme" :locale="xProZhCN">
         <AntApp>
