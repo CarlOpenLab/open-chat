@@ -37,6 +37,8 @@ export const store = reactive({
   queues: {} as Record<string, QueuedMessage[]>,
   /** The open conversation; null shows the new-conversation screen. */
   activeId: null as string | null,
+  /** Working directory currently shown in the UI; new conversations start here. */
+  currentCwd: localStorage.getItem("oc.cwd") || "",
   loading: {} as Record<string, boolean>,
   sidebarCollapsed: localStorage.getItem("oc.sidebar") === "0",
   workspaceOpen: false,
@@ -136,6 +138,13 @@ watch(
 watch(
   () => store.workspaceWidth,
   (v) => localStorage.setItem("oc.workspaceWidth", String(Math.round(v))),
+);
+watch(
+  () => store.currentCwd,
+  (v) => {
+    if (v) localStorage.setItem("oc.cwd", v);
+    else localStorage.removeItem("oc.cwd");
+  },
 );
 
 function normalizeSlashPath(p: string): string {
@@ -523,6 +532,8 @@ export async function select(id: string | null) {
     localStorage.removeItem("oc.active");
   }
   if (id && !store.transcripts[id]) await load(id);
+  const cwd = id ? store.metas[id]?.cwd : "";
+  if (cwd) store.currentCwd = cwd;
 }
 
 export function newConversation() {

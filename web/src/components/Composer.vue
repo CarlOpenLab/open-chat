@@ -40,6 +40,8 @@ const props = defineProps<{
   cwd: string;
   sending: boolean;
   disabled?: boolean;
+  /** Disallow changing the working directory once a conversation has turns. */
+  cwdLocked?: boolean;
   placeholder?: string;
   /** Optional pre-selected model value before a conversation starts. */
   selectedModelValue?: string;
@@ -1223,8 +1225,10 @@ defineExpose({ addFiles });
       <span class="w-[1px] h-3 bg-line-strong mx-[2px]" />
 
       <button
-        class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-ink-2 text-[11.5px] cursor-pointer flex-[0_1_auto] min-w-0 max-w-[260px] transition-colors duration-140 hover:bg-surface-2 hover:border-line hover:text-ink"
-        :title="cwd"
+        class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-ink-2 text-[11.5px] flex-[0_1_auto] min-w-0 max-w-[260px] transition-colors duration-140"
+        :class="cwdLocked ? 'cursor-default opacity-65' : 'cursor-pointer hover:bg-surface-2 hover:border-line hover:text-ink'"
+        :title="cwdLocked ? '对话开始后不能改工作目录' : cwd"
+        :disabled="cwdLocked"
         @click="emit('cwd')"
       >
         <!-- Lucide Folder -->
@@ -1232,7 +1236,7 @@ defineExpose({ addFiles });
           <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
         </svg>
         <span class="truncate font-mono">{{ cwdLabel }}</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[11px] h-[11px] opacity-65 flex-none">
+        <svg v-if="!cwdLocked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[11px] h-[11px] opacity-65 flex-none">
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>

@@ -649,6 +649,7 @@ async function changeDir(path: string) {
             :agent-id="meta.agentId"
             :agent-name="meta.agentName"
             :cwd="meta.cwd"
+            :cwd-locked="turns.length > 0"
             :sending="running"
             :disabled="live.status === 'connecting'"
             :pending-perms="pendingPerms"

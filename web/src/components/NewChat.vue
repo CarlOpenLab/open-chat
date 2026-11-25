@@ -25,7 +25,7 @@ onMounted(() => {
   const preferred = store.settings?.defaultAgent ?? "";
   const available = store.agents.filter((a) => a.available && !a.disabled);
   selected.value = available.find((a) => a.id === preferred)?.id ?? available[0]?.id ?? store.agents[0]?.id ?? "";
-  cwd.value = store.settings?.recentDirs?.[0] || store.boot?.home || "";
+  cwd.value = store.currentCwd || store.settings?.recentDirs?.[0] || store.boot?.home || "";
 });
 
 const agents = computed(() => store.agents.filter((a) => !a.disabled));
@@ -68,6 +68,7 @@ const emptyLive = {
 
 const pickDir = (p: string) => {
   cwd.value = p;
+  store.currentCwd = p;
   folderOpen.value = false;
 };
 

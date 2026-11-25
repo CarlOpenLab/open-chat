@@ -263,7 +263,10 @@ async function adapterFor(agent: AgentLaunch, cwd: string): Promise<{
   const resolved = resolveLaunch(agent, cleanEnv);
   const adapter = new AcpAgentAdapter(
     agent.id,
-    { command: resolved.command, args: resolved.args, env: cleanEnv, cwd },
+    // Don't spawn in the conversation cwd: npm/npx reads devEngines there and
+    // fails with EBADDEVENGINES if the project pins a different node version.
+    // The session cwd is still passed via createSession({ cwd }).
+    { command: resolved.command, args: resolved.args, env: cleanEnv },
     {
       clientInfo: { name: "open-chat", version: "0.1.0" },
       initializeTimeoutMs: 120_000,
