@@ -48,6 +48,12 @@ export function antdThemeFor(dark: boolean) {
         primaryColor: dark ? "#0e1016" : "#ffffff",
       },
       Select: { optionSelectedFontWeight: 520 },
+      Input: {
+        hoverBorderColor: dark ? "rgba(255, 255, 255, 0.22)" : "rgba(15, 23, 42, 0.22)",
+        activeBorderColor: dark ? "rgba(255, 255, 255, 0.34)" : "rgba(15, 23, 42, 0.34)",
+        activeShadow: dark ? "0 0 0 3px rgba(255, 255, 255, 0.08)" : "0 0 0 3px rgba(15, 23, 42, 0.07)",
+        activeBg: dark ? "rgba(30, 34, 46, 0.92)" : "#ffffff",
+      },
       Modal: {
         titleFontSize: 15,
         contentBg: dark ? "#161922" : "#ffffff",

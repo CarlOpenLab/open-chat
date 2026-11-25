@@ -11,7 +11,7 @@ import {
 } from "@antdv-next/icons";
 import { MessageScroller } from "@antdv-next/x-pro";
 import type { MessageScrollerItem, MessageScrollerRef } from "@antdv-next/x-pro";
-import { Dropdown, Input, Modal, Tooltip, message } from "antdv-next";
+import { Checkbox, Dropdown, Modal, Tooltip, message } from "antdv-next";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api } from "../api";
 import {
@@ -27,6 +27,7 @@ import {
   popQueuedToDraft,
   remove,
   removeQueued,
+  removeWorktree,
   rename,
   respond,
   select,
@@ -37,9 +38,10 @@ import {
   start,
   steerQueued,
   store,
+  worktreeStatus,
 } from "../store";
 import { answerText, userText } from "../transcript";
-import type { Block, PermissionOption } from "../types";
+import type { Block, PermissionOption, WorktreeStatus } from "../types";
 import Composer from "./Composer.vue";
 import FolderPicker from "./FolderPicker.vue";
 import ProviderIcon from "./ProviderIcon.vue";
@@ -284,13 +286,35 @@ const usageLabel = computed(() => {
 function startEdit() {
   titleDraft.value = meta.value.title;
   editing.value = true;
-  void nextTick(() => document.getElementById("title-edit")?.focus());
+  void nextTick(() => {
+    const el = document.getElementById("title-edit") as HTMLInputElement | null;
+    if (!el) return;
+    el.focus();
+    el.select();
+  });
+}
+
+function cancelEdit() {
+  editing.value = false;
+  titleDraft.value = meta.value.title;
 }
 
 async function commitTitle() {
+  if (!editing.value) return;
   editing.value = false;
   const t = titleDraft.value.trim();
   if (t && t !== meta.value.title) await rename(meta.value.id, t);
+}
+
+function onTitleKeydown(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === "Enter") {
+    e.preventDefault();
+    void commitTitle();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    cancelEdit();
+  }
 }
 
 async function onSend(blocks: Block[]) {
@@ -317,7 +341,7 @@ async function reveal() {
 
 async function newSameDir() {
   try {
-    await start(meta.value.agentId, meta.value.cwd, []);
+    await start(meta.value.agentId, meta.value.worktreeRepo || meta.value.cwd, []);
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e));
   }
@@ -381,8 +405,9 @@ const menu = computed(() => ({
     { key: "rename", label: "重命名" },
     { key: "pin", label: meta.value.pinned ? "取消置顶" : "置顶" },
     { key: "archive", label: archived.value ? "取消归档" : "归档对话" },
-    { key: "new-same", label: "在同目录新建对话" },
+    { key: "new-same", label: meta.value.worktree ? "在源仓库新建对话" : "在同目录新建对话" },
     { key: "reveal", label: "在文件夹中显示" },
+    ...(meta.value.worktree ? [{ key: "clean-worktree", label: "清理 Worktree" }] : []),
     { key: "copy-id", label: "复制会话 ID" },
     { type: "divider" as const },
     { key: "delete", label: "删除对话", danger: true },
@@ -393,23 +418,85 @@ const menu = computed(() => ({
     if (key === "archive") void toggleArchive();
     if (key === "new-same") void newSameDir();
     if (key === "reveal") void reveal();
+    if (key === "clean-worktree") void openCleanWorktree();
     if (key === "copy-id") void copySessionId();
-    if (key === "delete") confirmDelete();
+    if (key === "delete") void confirmDelete();
   },
 }));
 
 const deleting = ref(false);
-function confirmDelete() {
+const deleteBusy = ref(false);
+const deleteWtStatus = ref<WorktreeStatus | null>(null);
+const deleteRemoveWt = ref(false);
+const deleteRemoveBranch = ref(false);
+
+async function confirmDelete() {
   deleting.value = true;
+  deleteWtStatus.value = null;
+  deleteRemoveWt.value = false;
+  deleteRemoveBranch.value = false;
+  if (!meta.value.worktree) return;
+  try {
+    const st = await worktreeStatus(meta.value.id);
+    deleteWtStatus.value = st;
+    if (st.exists && !st.dirty) {
+      deleteRemoveWt.value = true;
+    }
+  } catch {
+    deleteWtStatus.value = { exists: true, dirty: false, changedCount: 0, branch: meta.value.worktreeBranch || "" };
+  }
 }
 
-
-
 async function doDelete() {
-  deleting.value = false;
-  await remove(meta.value.id);
-  message.success("已删除");
-  void select(null);
+  if (deleteBusy.value) return;
+  deleteBusy.value = true;
+  try {
+    if (meta.value.worktree && deleteRemoveWt.value) {
+      const force = Boolean(deleteWtStatus.value?.dirty);
+      await removeWorktree(meta.value.id, force, deleteRemoveBranch.value);
+    }
+    deleting.value = false;
+    await remove(meta.value.id);
+    message.success("已删除");
+    void select(null);
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    deleteBusy.value = false;
+  }
+}
+
+const cleaningWt = ref(false);
+const cleanWtBusy = ref(false);
+const cleanWtStatus = ref<WorktreeStatus | null>(null);
+const cleanWtForce = ref(false);
+const cleanWtDeleteBranch = ref(false);
+
+async function openCleanWorktree() {
+  if (!meta.value.worktree) return;
+  cleaningWt.value = true;
+  cleanWtStatus.value = null;
+  cleanWtForce.value = false;
+  cleanWtDeleteBranch.value = false;
+  try {
+    cleanWtStatus.value = await worktreeStatus(meta.value.id);
+  } catch {
+    cleanWtStatus.value = { exists: true, dirty: false, changedCount: 0, branch: meta.value.worktreeBranch || "" };
+  }
+}
+
+async function doCleanWorktree() {
+  if (cleanWtBusy.value) return;
+  cleanWtBusy.value = true;
+  try {
+    await removeWorktree(meta.value.id, cleanWtForce.value, cleanWtDeleteBranch.value);
+    cleaningWt.value = false;
+    message.success("已清理 Worktree");
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    cleanWtBusy.value = false;
+  }
 }
 
 async function changeDir(path: string) {
@@ -436,15 +523,16 @@ async function changeDir(path: string) {
           </Tooltip>
 
           <div class="oc-title-line flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
-            <Input
+            <input
               v-if="editing"
               id="title-edit"
-              v-model:value="titleDraft"
-              size="small"
-              class="w-[280px] font-semibold no-drag"
-              :maxlength="60"
+              v-model="titleDraft"
+              type="text"
+              maxlength="60"
+              placeholder="输入对话标题…"
+              class="w-[260px] max-w-full h-[26px] px-2 rounded-[7px] border border-solid border-line-strong bg-surface-strong text-[13.5px] font-semibold tracking-[-0.015em] text-ink leading-5 outline-none transition-colors duration-140 focus:border-[color-mix(in_srgb,var(--ink)_36%,var(--border-strong))] focus-visible:shadow-none no-drag"
               @blur="commitTitle"
-              @press-enter="commitTitle"
+              @keydown="onTitleKeydown"
             />
             <button
               v-else
@@ -473,14 +561,28 @@ async function changeDir(path: string) {
               <span>{{ meta.agentName }}</span>
             </span>
 
-            <Tooltip :title="`在文件夹中显示：${meta.cwd}`" :mouse-enter-delay="0.4">
+            <Tooltip
+              :title="meta.worktree ? `Worktree 隔离目录：${meta.cwd}${meta.worktreeRepo ? `（源仓库：${meta.worktreeRepo}）` : ''}` : `在文件夹中显示：${meta.cwd}`"
+              :mouse-enter-delay="0.4"
+            >
               <button
-                class="oc-cwd-chip inline-flex items-center gap-[5px] h-[22px] px-[7px] rounded-[6px] border-0 bg-transparent text-[11px] text-ink-3 max-w-[240px] min-w-0 flex-[0_1_auto] cursor-pointer font-mono transition-colors duration-140 hover:bg-hover hover:text-ink-2 no-drag"
+                class="oc-cwd-chip inline-flex items-center gap-[5px] h-[22px] px-[7px] rounded-[6px] border-0 bg-transparent text-[11px] text-ink-3 max-w-[260px] min-w-0 flex-[0_1_auto] cursor-pointer font-mono transition-colors duration-140 hover:bg-hover hover:text-ink-2 no-drag"
                 @click="reveal"
               >
                 <FolderOpenOutlined />
                 <span class="oc-cwd-text truncate">{{ shortCwd }}</span>
               </button>
+            </Tooltip>
+
+            <Tooltip
+              v-if="meta.worktree"
+              :title="`Git Worktree 分支：${meta.worktreeBranch || 'detached'}${meta.worktreeRepo ? ` · 源仓库：${meta.worktreeRepo}` : ''}`"
+              :mouse-enter-delay="0.4"
+            >
+              <span class="inline-flex items-center gap-1 h-[20px] px-[7px] rounded-full bg-hover border border-solid border-line text-[10.5px] font-mono text-ink-2 flex-none max-w-[150px] no-drag">
+                <span class="w-[5px] h-[5px] rounded-full bg-ok flex-none" />
+                <span class="truncate">{{ meta.worktreeBranch || 'worktree' }}</span>
+              </span>
             </Tooltip>
           </div>
         </div>
@@ -677,14 +779,56 @@ async function changeDir(path: string) {
       <Modal
         :open="deleting"
         title="删除这个对话？"
-        :width="380"
+        :width="400"
         ok-text="删除"
         ok-type="danger"
         cancel-text="取消"
+        :confirm-loading="deleteBusy"
         @ok="doDelete"
         @cancel="deleting = false"
       >
-        <p class="text-ink-2 m-0">「{{ meta.title }}」的记录会从本机删除，无法恢复。</p>
+        <div class="flex flex-col gap-3">
+          <p class="text-ink-2 m-0">「{{ meta.title }}」的记录会从本机删除，无法恢复。</p>
+          <div v-if="meta.worktree && deleteWtStatus?.exists" class="flex flex-col gap-2 pt-2 border-0 border-t border-solid border-line">
+            <Checkbox v-model:checked="deleteRemoveWt">
+              <span class="text-[12.5px] text-ink">同时移除本地 Worktree 目录</span>
+            </Checkbox>
+            <div v-if="deleteWtStatus.dirty" class="text-[11.5px] text-warn pl-6">
+              检测到 {{ deleteWtStatus.changedCount }} 处未提交更改，勾选移除将强制丢弃这些改动。
+            </div>
+            <Checkbox v-if="deleteRemoveWt && meta.worktreeBranch" v-model:checked="deleteRemoveBranch" class="pl-6">
+              <span class="text-[12px] text-ink-2 font-mono">同时删除分支 {{ meta.worktreeBranch }}</span>
+            </Checkbox>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        :open="cleaningWt"
+        title="清理 Git Worktree"
+        :width="400"
+        ok-text="清理"
+        ok-type="danger"
+        cancel-text="取消"
+        :confirm-loading="cleanWtBusy"
+        :ok-button-props="{ disabled: Boolean(cleanWtStatus?.dirty && !cleanWtForce) }"
+        @ok="doCleanWorktree"
+        @cancel="cleaningWt = false"
+      >
+        <div class="flex flex-col gap-2.5">
+          <p class="text-ink-2 m-0 text-[12.5px]">
+            移除隔离目录 <code class="font-mono text-ink">{{ shortCwd }}</code>，保留对话记录并切回源仓库。
+          </p>
+          <div v-if="cleanWtStatus?.dirty" class="text-[12px] text-warn bg-warn-soft rounded-[8px] px-3 py-2">
+            检测到 {{ cleanWtStatus.changedCount }} 处未提交更改，清理前请先提交，或勾选下方强制清理。
+          </div>
+          <Checkbox v-if="cleanWtStatus?.dirty" v-model:checked="cleanWtForce">
+            <span class="text-[12.5px] text-err">强制清理（丢弃未提交更改）</span>
+          </Checkbox>
+          <Checkbox v-if="meta.worktreeBranch" v-model:checked="cleanWtDeleteBranch">
+            <span class="text-[12px] text-ink-2 font-mono">同时删除分支 {{ meta.worktreeBranch }}</span>
+          </Checkbox>
+        </div>
       </Modal>
     </div>
     <WorkspacePanel

@@ -334,7 +334,13 @@ function labelRender(item: ConversationItemType) {
       h("span", { class: "conv-sub" }, [
         h("span", { class: "conv-agent" }, m.agentName),
         m.cwd ? h("span", { class: "conv-sep" }, "·") : null,
-        m.cwd ? h("span", { class: "conv-dir mono" }, shortDir(m.cwd)) : null,
+        m.cwd
+          ? h(
+              "span",
+              { class: "conv-dir mono" },
+              m.worktree ? `wt:${m.worktreeBranch || shortDir(m.cwd)}` : shortDir(m.cwd),
+            )
+          : null,
       ]),
       h("span", { class: "conv-time mono" }, ago(m.updatedAt)),
     ]),

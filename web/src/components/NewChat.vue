@@ -14,6 +14,9 @@ const cwd = ref<string>("");
 const draft = ref("");
 const folderOpen = ref(false);
 const busy = ref(false);
+const worktreeEnabled = ref(false);
+const worktreeBranch = ref("");
+const gitBaseBranch = ref("");
 
 watch(selected, (id) => {
   const cached = store.cachedModels[id];
@@ -47,8 +50,17 @@ async function send(blocks: Block[]) {
   }
   busy.value = true;
   try {
-    await start(current.value.id, cwd.value, blocks, chosenModel.value);
+    await start(
+      current.value.id,
+      cwd.value,
+      blocks,
+      chosenModel.value,
+      worktreeEnabled.value
+        ? { enabled: true, baseBranch: gitBaseBranch.value, branchName: worktreeBranch.value.trim() }
+        : null,
+    );
     draft.value = "";
+    worktreeBranch.value = "";
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e));
   } finally {
@@ -69,6 +81,7 @@ const emptyLive = {
 const pickDir = (p: string) => {
   cwd.value = p;
   store.currentCwd = p;
+  worktreeBranch.value = "";
   folderOpen.value = false;
 };
 
@@ -100,6 +113,9 @@ const noAgent = computed(() => agents.value.length === 0);
         v-model:value="draft"
         v-model:agent-id="selected"
         v-model:cwd="cwd"
+        v-model:worktree-enabled="worktreeEnabled"
+        v-model:worktree-branch="worktreeBranch"
+        :allow-worktree="true"
         :live="emptyLive"
         :agent-name="current?.name ?? '选择供应商'"
         :selected-model-value="chosenModel?.value"
@@ -107,6 +123,7 @@ const noAgent = computed(() => agents.value.length === 0);
         :sending="busy"
         :disabled="!current?.available"
         :placeholder="current?.available ? `交给 ${current.name} 处理什么？` : '请在右下角选择一个已安装的 ACP 供应商…'"
+        @git-branch="(b) => (gitBaseBranch = b)"
         @send="send"
         @manage="store.settingsOpen = true"
         @pick-model="(cid, val) => (chosenModel = { configId: cid, value: val })"

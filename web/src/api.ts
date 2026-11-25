@@ -21,6 +21,7 @@ import type {
   TermInfo,
   WorkspaceFileInfo,
   WorkspaceNode,
+  WorktreeStatus,
 } from "./types";
 
 export const inApp = isMyGo();
@@ -49,6 +50,11 @@ export const api = {
   probeModels: (agentId: string, cwd: string) => call<ConfigOption[]>("ProbeModels", agentId, cwd),
   refreshModels: (agentId: string, cwd: string) => call<ConfigOption[]>("RefreshModels", agentId, cwd),
   create: (agentId: string, cwd: string) => call<Meta>("Create", agentId, cwd),
+  createWorktree: (agentId: string, repoDir: string, baseBranch = "", branchName = "") =>
+    call<Meta>("CreateWorktree", agentId, repoDir, baseBranch, branchName),
+  worktreeStatus: (id: string) => call<WorktreeStatus>("WorktreeStatus", id),
+  removeWorktree: (id: string, force = false, deleteBranch = false) =>
+    call<void>("RemoveWorktree", id, force, deleteBranch),
   open: (id: string) => call<Conversation>("Open", id),
   connect: (id: string) => call<LiveState>("Connect", id),
   send: (id: string, blocks: Block[]) => call<void>("Send", id, blocks),

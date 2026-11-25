@@ -53,12 +53,19 @@ const props = defineProps<{
   pendingPerms?: PendingPermission[];
   /** Queued follow-up messages waiting to be sent. */
   queuedMessages?: QueuedMessage[];
+  /** Show Worktree toggle in the bottom bar (NewChat only). */
+  allowWorktree?: boolean;
+  worktreeEnabled?: boolean;
+  worktreeBranch?: string;
 }>();
 
 const emit = defineEmits<{
   "update:value": [value: string];
   "update:agentId": [id: string];
   "update:cwd": [path: string];
+  "update:worktreeEnabled": [enabled: boolean];
+  "update:worktreeBranch": [branch: string];
+  "git-branch": [branch: string];
   send: [blocks: Block[]];
   enqueue: [blocks: Block[]];
   stop: [];
@@ -329,6 +336,17 @@ async function refreshGit(dir: string) {
     }
   }
 }
+
+watch(
+  () => [isGitRepo.value, gitInfo.value?.branch ?? ""] as const,
+  ([repo, branch]) => {
+    emit("git-branch", repo ? branch : "");
+    if (!repo && props.worktreeEnabled) {
+      emit("update:worktreeEnabled", false);
+    }
+  },
+  { immediate: true },
+);
 
 async function switchBranch(branch: string) {
   if (!props.cwd || !branch || branch === currentBranch.value || switchingBranch.value) return;
@@ -1275,6 +1293,42 @@ defineExpose({ addFiles });
             </button>
           </Tooltip>
         </Dropdown>
+
+        <template v-if="allowWorktree">
+          <span class="w-[1px] h-3 bg-line-strong mx-[2px]" />
+          <Tooltip
+            :title="worktreeEnabled ? '发送首条消息时将基于当前分支自动创建隔离 Worktree' : '开启后在独立 Git Worktree 中运行此对话，不干扰当前工作区'"
+            :mouse-enter-delay="0.35"
+          >
+            <button
+              type="button"
+              class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid rounded-[7px] text-[11.5px] cursor-pointer flex-none transition-colors duration-140"
+              :class="
+                worktreeEnabled
+                  ? 'bg-surface-2 border-line-strong text-ink fw-540'
+                  : 'bg-transparent border-transparent text-ink-2 hover:bg-surface-2 hover:border-line hover:text-ink'
+              "
+              @click="emit('update:worktreeEnabled', !worktreeEnabled)"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
+                <circle cx="6" cy="6" r="3" />
+                <circle cx="18" cy="6" r="3" />
+                <circle cx="6" cy="18" r="3" />
+                <path d="M6 9v6" />
+                <path d="M18 9a6 6 0 0 1-6 6H9" />
+              </svg>
+              <span>Worktree</span>
+            </button>
+          </Tooltip>
+          <input
+            v-if="worktreeEnabled"
+            :value="worktreeBranch ?? ''"
+            type="text"
+            class="h-6 w-[132px] px-2 rounded-[7px] border border-solid border-line bg-surface-2 text-ink text-[11px] font-mono outline-none placeholder:text-ink-3 focus:border-line-strong"
+            placeholder="自动分支名 (可选)"
+            @input="emit('update:worktreeBranch', ($event.target as HTMLInputElement).value)"
+          />
+        </template>
       </template>
     </div>
 

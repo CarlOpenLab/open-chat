@@ -68,16 +68,19 @@ type preset struct {
 
 // Meta describes a conversation in the sidebar.
 type Meta struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	TitleLocked bool   `json:"titleLocked,omitempty"`
-	AgentID     string `json:"agentId"`
-	AgentName   string `json:"agentName"`
-	Cwd         string `json:"cwd"`
-	CreatedAt   int64  `json:"createdAt"`
-	UpdatedAt   int64  `json:"updatedAt"`
-	Pinned      bool   `json:"pinned,omitempty"`
-	Archived    bool   `json:"archived,omitempty"`
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	TitleLocked    bool   `json:"titleLocked,omitempty"`
+	AgentID        string `json:"agentId"`
+	AgentName      string `json:"agentName"`
+	Cwd            string `json:"cwd"`
+	Worktree       bool   `json:"worktree,omitempty"`
+	WorktreeRepo   string `json:"worktreeRepo,omitempty"`
+	WorktreeBranch string `json:"worktreeBranch,omitempty"`
+	CreatedAt      int64  `json:"createdAt"`
+	UpdatedAt      int64  `json:"updatedAt"`
+	Pinned         bool   `json:"pinned,omitempty"`
+	Archived       bool   `json:"archived,omitempty"`
 	// AcpSessionID is the agent's own session id, to resume with session/load.
 	AcpSessionID string `json:"acpSessionId,omitempty"`
 	// ModelConfigID/ModelValue remember the model picked for this conversation.
@@ -235,6 +238,15 @@ type GitInfo struct {
 	IsRepo   bool     `json:"isRepo"`
 	Branch   string   `json:"branch"`
 	Branches []string `json:"branches"`
+}
+
+// WorktreeStatus reports whether a conversation's linked git worktree still
+// exists on disk and has uncommitted changes.
+type WorktreeStatus struct {
+	Exists       bool   `json:"exists"`
+	Dirty        bool   `json:"dirty"`
+	ChangedCount int    `json:"changedCount"`
+	Branch       string `json:"branch"`
 }
 
 // Block is one piece of a user's message (ACP ContentBlock).

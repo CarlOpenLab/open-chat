@@ -144,6 +144,27 @@ func (a *API) Create(agentID, cwd string) (Meta, error) {
 	return m, nil
 }
 
+// CreateWorktree creates an isolated git worktree branch for repoDir and starts
+// a new conversation rooted in that worktree.
+func (a *API) CreateWorktree(ctx context.Context, agentID, repoDir, baseBranch, branchName string) (Meta, error) {
+	m, err := a.h.createWithWorktree(context.WithoutCancel(ctx), agentID, repoDir, baseBranch, branchName)
+	if err != nil {
+		return Meta{}, err
+	}
+	go func() { _, _ = a.h.connect(context.Background(), m.ID) }()
+	return m, nil
+}
+
+// WorktreeStatus reports the disk existence and dirty state of a worktree conversation.
+func (a *API) WorktreeStatus(ctx context.Context, id string) (WorktreeStatus, error) {
+	return a.h.worktreeStatus(context.WithoutCancel(ctx), id)
+}
+
+// RemoveWorktree removes the linked git worktree (and optionally its branch) for a conversation.
+func (a *API) RemoveWorktree(ctx context.Context, id string, force, deleteBranch bool) error {
+	return a.h.removeWorktree(context.WithoutCancel(ctx), id, force, deleteBranch)
+}
+
 // Open returns a conversation's transcript and live state.
 func (a *API) Open(id string) (Conversation, error) {
 	m, ok := a.h.store.meta(id)

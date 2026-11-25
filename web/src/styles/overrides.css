@@ -115,7 +115,13 @@
   padding: 0 !important;
 }
 
-/* FolderPicker mono input */
+/* FolderPicker mono input & unified Antdv Input focus polish */
+.ant-input-affix-wrapper > input.ant-input:focus,
+.ant-input-affix-wrapper > input.ant-input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 .oc-folder-path-row .ant-input-affix-wrapper {
   font-family: var(--mono);
   font-size: 12.5px;

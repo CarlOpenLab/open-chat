@@ -532,7 +532,8 @@ export async function select(id: string | null) {
     localStorage.removeItem("oc.active");
   }
   if (id && !store.transcripts[id]) await load(id);
-  const cwd = id ? store.metas[id]?.cwd : "";
+  const m = id ? store.metas[id] : null;
+  const cwd = m ? m.worktreeRepo || m.cwd : "";
   if (cwd) store.currentCwd = cwd;
 }
 
@@ -612,13 +613,22 @@ function isPiAgent(agentId: string): boolean {
   return id === "pi" || id === "omp" || id.includes("oh-my-pi");
 }
 
+export interface WorktreeLaunchOptions {
+  enabled: boolean;
+  baseBranch?: string;
+  branchName?: string;
+}
+
 export async function start(
   agentId: string,
   cwd: string,
   blocks: Block[],
   initialModel?: { configId: string; value: string } | null,
+  worktree?: WorktreeLaunchOptions | null,
 ) {
-  const meta = await api.create(agentId, cwd);
+  const meta = worktree?.enabled
+    ? await api.createWorktree(agentId, cwd, worktree.baseBranch ?? "", worktree.branchName ?? "")
+    : await api.create(agentId, cwd);
   store.metas[meta.id] = meta;
   store.transcripts[meta.id] = emptyTranscript();
   store.lives[meta.id] = { ...idleLive(), status: "connecting" };
@@ -730,6 +740,9 @@ export const respond = (id: string, requestId: string, optionId: string) => api.
 export const setMode = (id: string, modeId: string) => api.setMode(id, modeId);
 export const setConfig = (id: string, configId: string, value: string | boolean) => api.setConfig(id, configId, value);
 export const connect = (id: string) => api.connect(id);
+export const worktreeStatus = (id: string) => api.worktreeStatus(id);
+export const removeWorktree = (id: string, force = false, deleteBranch = false) =>
+  api.removeWorktree(id, force, deleteBranch);
 
 export async function rename(id: string, title: string) {
   store.metas[id] = await api.rename(id, title);
