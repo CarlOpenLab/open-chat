@@ -22,6 +22,7 @@
   --active: rgba(15, 23, 42, 0.085);
   --border: rgba(15, 23, 42, 0.08);
   --border-strong: rgba(15, 23, 42, 0.13);
+  --tool-line: rgba(15, 23, 42, 0.3);
   --text: #111318;
   --text-2: #4b5563;
   --text-3: #7c8596;
@@ -62,6 +63,7 @@
   --active: rgba(255, 255, 255, 0.1);
   --border: rgba(255, 255, 255, 0.085);
   --border-strong: rgba(255, 255, 255, 0.15);
+  --tool-line: rgba(255, 255, 255, 0.32);
   --text: #f1f4f9;
   --text-2: #9ca3b5;
   --text-3: #687083;

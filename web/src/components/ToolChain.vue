@@ -188,7 +188,7 @@ function toggle(id: string) {
         </span>
         <span
           v-if="idx < calls.length - 1"
-          class="flex-1 w-0 min-h-1 mt-[2px] -mb-[2px] border-0 border-l border-dashed border-ink-3"
+          class="flex-1 w-0 min-h-1 mt-[2px] -mb-[2px] border-0 border-l border-dashed border-line-tool"
         />
       </div>
 

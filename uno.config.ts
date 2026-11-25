@@ -21,6 +21,7 @@ export default defineConfig({
       line: {
         DEFAULT: "var(--border)",
         strong: "var(--border-strong)",
+        tool: "var(--tool-line)",
       },
       ink: {
         DEFAULT: "var(--text)",
