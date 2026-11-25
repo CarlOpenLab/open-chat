@@ -14,8 +14,8 @@
  *
  * stdout carries protocol frames only — logs go to stderr.
  */
-import { existsSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { basename, delimiter, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   AcpAgentAdapter,
@@ -239,6 +239,20 @@ async function withStderrContext(error: unknown, stderrTail: string[]): Promise<
   throw error;
 }
 
+function isPackageRunner(command: string): boolean {
+  const base = basename(command).toLowerCase().replace(/\.(cmd|exe|bat|ps1)$/, "");
+  return base === "npx" || base === "npm" || base === "pnpm" || base === "yarn" || base === "bunx";
+}
+
+function isExistingDir(dir: string): boolean {
+  if (!dir) return false;
+  try {
+    return statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 async function adapterFor(agent: AgentLaunch, cwd: string): Promise<{
   key: string;
   adapter: AcpAgentAdapter;
@@ -257,15 +271,23 @@ async function adapterFor(agent: AgentLaunch, cwd: string): Promise<{
   if ("CODEBUDDY_INTERNET_ENVIRONMENT" in cleanEnv && cleanEnv.CODEBUDDY_INTERNET_ENVIRONMENT === "") {
     (cleanEnv as Record<string, string | undefined>).CODEBUDDY_INTERNET_ENVIRONMENT = undefined;
   }
+  // Prevent pnpm/npm INIT_CWD from leaking open-chat's launch directory into child agents.
+  (cleanEnv as Record<string, string | undefined>).INIT_CWD = undefined;
   // Avoid nested Claude Code rejection when open-chat is launched from inside Claude Code.
   if ("CLAUDECODE" in process.env) delete process.env.CLAUDECODE;
   const resolved = resolveLaunch(agent, cleanEnv);
+  // Native CLI agents (CodeBuddy, Qoder, Oh My Pi, DSH, custom binaries) bind
+  // process.cwd() / $PWD at startup for project config, watchers, and default
+  // tool paths. Package runners (npx/pnpm/npm/yarn/bunx) must stay out of the
+  // project cwd so npm/npx doesn't read devEngines there and fail with
+  // EBADDEVENGINES; they still receive cwd via createSession({ cwd }).
+  const spawnCwd = !isPackageRunner(resolved.command) && isExistingDir(cwd) ? cwd : undefined;
+  if (spawnCwd && process.platform !== "win32") {
+    cleanEnv.PWD = spawnCwd;
+  }
   const adapter = new AcpAgentAdapter(
     agent.id,
-    // Don't spawn in the conversation cwd: npm/npx reads devEngines there and
-    // fails with EBADDEVENGINES if the project pins a different node version.
-    // The session cwd is still passed via createSession({ cwd }).
-    { command: resolved.command, args: resolved.args, env: cleanEnv },
+    { command: resolved.command, args: resolved.args, env: cleanEnv, ...(spawnCwd ? { cwd: spawnCwd } : {}) },
     {
       clientInfo: { name: "open-chat", version: "0.1.0" },
       initializeTimeoutMs: 120_000,

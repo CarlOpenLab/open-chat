@@ -5,7 +5,10 @@ import {
   CodeOutlined,
   CopyOutlined,
   ExportOutlined,
+  FileTextOutlined,
+  FolderOpenOutlined,
   FolderOutlined,
+  LinkOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -242,6 +245,101 @@ async function openExternally() {
   }
 }
 
+type FileCtxAction = "copyPath" | "copyName" | "reveal" | "openExternal" | "refresh";
+const fileCtx = ref<{ open: boolean; x: number; y: number; relPath: string; isDir: boolean }>({
+  open: false,
+  x: 0,
+  y: 0,
+  relPath: "",
+  isDir: false,
+});
+
+function closeFileCtx() {
+  if (fileCtx.value.open) fileCtx.value.open = false;
+}
+
+/** Look up a tree key (a full relative path) in the unfiltered tree. */
+function findWorkspaceNode(relPath: string): WorkspaceNode | null {
+  let list: WorkspaceNode[] | undefined = tree.value;
+  let found: WorkspaceNode | undefined;
+  for (const seg of relPath.split("/").filter(Boolean)) {
+    found = list?.find((n) => n.path === seg || n.title === seg);
+    if (!found) return null;
+    list = found.children;
+  }
+  return found ?? null;
+}
+
+function onTreeContextMenu(e: MouseEvent) {
+  if (e.shiftKey) return;
+  const target = e.target as HTMLElement | null;
+  const row = target?.closest<HTMLElement>(".ant-tree-treenode, [role='treeitem']");
+  const pathEl =
+    target?.closest<HTMLElement>("[data-ws-path]") ??
+    row?.querySelector<HTMLElement>("[data-ws-path]");
+  const relPath = pathEl?.dataset.wsPath;
+  if (!relPath) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const isDir = pathEl.dataset.wsDir === "1" || Boolean(findWorkspaceNode(relPath)?.children);
+  const actionCount = 3 + (inApp ? 1 : 0) + (isDir ? 0 : 1);
+  fileCtx.value = {
+    open: true,
+    x: Math.min(e.clientX, window.innerWidth - 160 - 8),
+    y: Math.min(e.clientY, window.innerHeight - (actionCount * 32 + 20) - 8),
+    relPath,
+    isDir,
+  };
+}
+
+function onFileCtxKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") closeFileCtx();
+}
+
+async function onFileCtxAction(action: FileCtxAction) {
+  const relPath = fileCtx.value.relPath;
+  closeFileCtx();
+  if (!relPath) return;
+
+  if (action === "copyPath" || action === "copyName") {
+    const text = action === "copyPath" ? relPath : relPath.split("/").pop() || relPath;
+    try {
+      await navigator.clipboard.writeText(text);
+      message.success(action === "copyPath" ? "已复制相对路径" : "已复制文件名");
+    } catch {
+      message.error("复制失败");
+    }
+    return;
+  }
+
+  if (action === "reveal") {
+    const base = props.cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+    const abs = base ? `${base}/${relPath}` : relPath;
+    try {
+      await api.reveal(abs);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : String(e));
+    }
+    return;
+  }
+
+  if (action === "openExternal") {
+    try {
+      if (inApp) {
+        await api.openLink(relPath, props.cwd);
+      } else {
+        const info = await api.workspaceFileInfo(props.cwd, relPath);
+        if (info.url) window.open(info.url, "_blank", "noopener");
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : String(e));
+    }
+    return;
+  }
+
+  void refreshFiles();
+}
+
 function renderPreviewTitle(file: { title?: VNodeChild; path: string[] }) {
   const name = file.path[file.path.length - 1] || (typeof file.title === "string" ? file.title : "");
   const showSourceActions =
@@ -411,26 +509,27 @@ function filterNodes(nodes: WorkspaceNode[], q: string): WorkspaceNode[] {
   return out;
 }
 
-function decorateTreeNodes(nodes: WorkspaceNode[]): FolderTreeData[] {
+function decorateTreeNodes(nodes: WorkspaceNode[], parentPath = ""): FolderTreeData[] {
   return nodes.map((n) => {
     const isDir = Array.isArray(n.children);
+    const relPath = parentPath ? `${parentPath}/${n.path}` : n.path;
     const status = n.gitStatus;
-    const title: VNodeChild = status
-      ? h(
-          "span",
-          {
-            class: ["ws-tree-label", `is-git-${status.toLowerCase()}`],
-          },
-          [
-            h("span", { class: "ws-tree-name" }, n.title),
-            !isDir ? h("span", { class: "ws-tree-git-tag" }, status) : null,
-          ],
-        )
-      : n.title;
+    const title: VNodeChild = h(
+      "span",
+      {
+        class: status ? ["ws-tree-label", `is-git-${status.toLowerCase()}`] : "ws-tree-label",
+        "data-ws-path": relPath,
+        "data-ws-dir": isDir ? "1" : undefined,
+      },
+      [
+        h("span", { class: "ws-tree-name" }, n.title),
+        status && !isDir ? h("span", { class: "ws-tree-git-tag" }, status) : null,
+      ],
+    );
     return {
       title,
       path: n.path,
-      children: n.children ? decorateTreeNodes(n.children) : undefined,
+      children: n.children ? decorateTreeNodes(n.children, relPath) : undefined,
     };
   });
 }
@@ -508,6 +607,7 @@ watch(
   ([open, cwd, tab], prev) => {
     const cwdChanged = prev && prev[1] !== cwd;
     if (cwdChanged) {
+      closeFileCtx();
       clearEditorState();
       selectedFile.value = [];
       expandedPaths.value = [];
@@ -559,12 +659,18 @@ function onWindowResize() {
 
 onMounted(() => {
   window.addEventListener("resize", onWindowResize);
+  window.addEventListener("pointerdown", closeFileCtx);
+  window.addEventListener("blur", closeFileCtx);
+  window.addEventListener("keydown", onFileCtxKeydown);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", onWindowResize);
   window.removeEventListener("pointermove", onResizeMove);
   window.removeEventListener("pointerup", onResizeEnd);
+  window.removeEventListener("pointerdown", closeFileCtx);
+  window.removeEventListener("blur", closeFileCtx);
+  window.removeEventListener("keydown", onFileCtxKeydown);
 });
 
 async function refreshFiles() {
@@ -705,6 +811,7 @@ async function refreshFiles() {
             :preview-title="renderPreviewTitle"
             :preview-render="renderPreview"
             @selected-file-change="onSelectedFileChange"
+            @contextmenu="onTreeContextMenu"
           />
         </div>
       </div>
@@ -718,5 +825,59 @@ async function refreshFiles() {
         />
       </div>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="fileCtx.open"
+        class="fixed z-[2100] min-w-[148px] p-[5px] rounded-[11px] bg-surface-strong glass border border-solid border-line-strong shadow-pop flex flex-col gap-[2px] select-none"
+        :style="{ left: `${fileCtx.x}px`, top: `${fileCtx.y}px` }"
+        @pointerdown.stop
+        @contextmenu.prevent.stop
+      >
+        <button
+          type="button"
+          class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
+          @click="onFileCtxAction('copyPath')"
+        >
+          <LinkOutlined class="text-[13px] text-ink-3" />
+          <span>复制相对路径</span>
+        </button>
+        <button
+          type="button"
+          class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
+          @click="onFileCtxAction('copyName')"
+        >
+          <FileTextOutlined class="text-[13px] text-ink-3" />
+          <span>复制文件名</span>
+        </button>
+        <button
+          v-if="inApp"
+          type="button"
+          class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
+          @click="onFileCtxAction('reveal')"
+        >
+          <FolderOpenOutlined class="text-[13px] text-ink-3" />
+          <span>在访达中显示</span>
+        </button>
+        <button
+          v-if="!fileCtx.isDir"
+          type="button"
+          class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
+          @click="onFileCtxAction('openExternal')"
+        >
+          <ExportOutlined class="text-[13px] text-ink-3" />
+          <span>{{ inApp ? "用默认程序打开" : "在新标签页打开" }}</span>
+        </button>
+        <div class="h-[1px] bg-line my-[3px] mx-[6px]" />
+        <button
+          type="button"
+          class="w-full border-0 bg-transparent text-ink text-[12.5px] text-left px-[10px] py-[6px] rounded-[7px] cursor-pointer inline-flex items-center gap-2 transition-colors duration-120 hover:bg-hover"
+          @click="onFileCtxAction('refresh')"
+        >
+          <ReloadOutlined class="text-[13px] text-ink-3" />
+          <span>刷新目录</span>
+        </button>
+      </div>
+    </Teleport>
   </aside>
 </template>
