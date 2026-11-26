@@ -573,7 +573,7 @@ function toggleCmdEditor(id: string) {
                 <span class="w-6 h-6 rounded-[7px] bg-modal border border-solid border-line inline-flex items-center justify-center flex-none">
                   <ProviderIcon :id="r.id" :name="r.agent" :size="15" />
                 </span>
-                <span class="text-[13px] fw-550 text-ink">{{ r.agent }}</span>
+                <span class="text-[13px] fw-550 text-ink min-w-0 max-w-[200px] truncate">{{ r.agent }}</span>
                 <Tag v-if="r.channel" :bordered="false" class="m-0 text-[10.5px] leading-[18px] font-mono">
                   {{ channelText(r.channel) }}
                 </Tag>
