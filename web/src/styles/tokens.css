@@ -89,3 +89,40 @@
   --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   --shadow-pop: 0 20px 52px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
+
+/* Pure solid background overrides (no ambient gradient or backdrop blur) */
+:root[data-theme="light"][data-bg="solid"] {
+  --bg: #ffffff;
+  --bg-sidebar: #f7f7f8;
+  --surface: #ffffff;
+  --surface-2: #f7f7f8;
+  --surface-strong: #ffffff;
+  --modal-bg: #ffffff;
+  --glass-blur: none;
+  --glass-blur-sm: none;
+  --glass-rim: none;
+  --user-bubble: #f3f4f6;
+  --code-bg: #f7f7f8;
+  --term-bg: #ffffff;
+  --shadow-composer: 0 2px 12px rgba(15, 23, 42, 0.05), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.04);
+  --shadow-pop: 0 10px 30px rgba(15, 23, 42, 0.1), 0 1px 4px rgba(15, 23, 42, 0.05);
+}
+
+:root[data-theme="dark"][data-bg="solid"] {
+  --bg: #111215;
+  --bg-sidebar: #16181d;
+  --surface: #181a20;
+  --surface-2: #14161b;
+  --surface-strong: #1e2128;
+  --modal-bg: #181a20;
+  --glass-blur: none;
+  --glass-blur-sm: none;
+  --glass-rim: none;
+  --user-bubble: #1e2128;
+  --code-bg: #16181d;
+  --term-bg: #111215;
+  --shadow-composer: 0 6px 24px rgba(0, 0, 0, 0.36);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.22);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.55);
+}

@@ -8,8 +8,9 @@ type Event = map[string]any
 
 // Settings are the user's preferences, stored in settings.json.
 type Settings struct {
-	Theme          string                   `json:"theme"`          // system | light | dark
-	SendKey        string                   `json:"sendKey"`        // enter | modEnter
+	Theme           string                   `json:"theme"`                     // system | light | dark
+	ThemeBackground string                   `json:"themeBackground,omitempty"` // acrylic | solid
+	SendKey         string                   `json:"sendKey"`                   // enter | modEnter
 	AutoAllow      bool                     `json:"autoAllow"`      // answer permission requests with "allow once"
 	NotifyNeedYou  bool                     `json:"notifyNeedYou"`  // notify when an agent waits for user confirmation
 	NotifyTurnDone bool                     `json:"notifyTurnDone"` // notify when a conversation turn finishes

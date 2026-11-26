@@ -19,6 +19,7 @@ export interface CustomAgent {
 
 export interface Settings {
   theme: "system" | "light" | "dark";
+  themeBackground?: "acrylic" | "solid";
   sendKey: "enter" | "modEnter";
   autoAllow: boolean;
   notifyNeedYou: boolean;

@@ -6,7 +6,7 @@ const font =
   '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "PingFang SC", "Hiragino Sans GB", "Segoe UI", "Microsoft YaHei", sans-serif';
 export const mono = '"SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace';
 
-export function antdThemeFor(dark: boolean) {
+export function antdThemeFor(dark: boolean, solid = false) {
   return {
     algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
     token: {
@@ -15,10 +15,22 @@ export function antdThemeFor(dark: boolean) {
       colorSuccess: dark ? "#34d399" : "#16a34a",
       colorWarning: dark ? "#fbbf24" : "#d97706",
       colorError: dark ? "#f87171" : "#dc2626",
-      colorBgBase: dark ? "#0e1016" : "#f4f6fa",
+      colorBgBase: solid ? (dark ? "#111215" : "#ffffff") : dark ? "#0e1016" : "#f4f6fa",
       colorBgLayout: "transparent",
-      colorBgContainer: dark ? "rgba(24, 27, 36, 0.72)" : "rgba(255, 255, 255, 0.76)",
-      colorBgElevated: dark ? "rgba(26, 30, 40, 0.84)" : "rgba(255, 255, 255, 0.86)",
+      colorBgContainer: solid
+        ? dark
+          ? "#181a20"
+          : "#ffffff"
+        : dark
+          ? "rgba(24, 27, 36, 0.72)"
+          : "rgba(255, 255, 255, 0.76)",
+      colorBgElevated: solid
+        ? dark
+          ? "#1e2128"
+          : "#ffffff"
+        : dark
+          ? "rgba(26, 30, 40, 0.84)"
+          : "rgba(255, 255, 255, 0.86)",
       colorBorder: dark ? "rgba(255, 255, 255, 0.11)" : "rgba(15, 23, 42, 0.09)",
       colorBorderSecondary: dark ? "rgba(255, 255, 255, 0.07)" : "rgba(15, 23, 42, 0.06)",
       colorText: dark ? "#f1f4f9" : "#111318",

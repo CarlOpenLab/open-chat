@@ -38,14 +38,30 @@ watch(
       local.value = JSON.parse(JSON.stringify(store.settings)) as Settings;
       local.value.customAgents = local.value.customAgents ?? [];
       local.value.recentDirs = local.value.recentDirs ?? [];
+      local.value.themeBackground = local.value.themeBackground === "solid" ? "solid" : "acrylic";
+      store.themePreview = null;
       editingCmd.value = {};
       void refreshAgents();
       if (tab.value === "updates" && !updateReport.value) {
         void inspectUpdates();
       }
+    } else if (!open) {
+      store.themePreview = null;
     }
   },
 );
+
+function pickThemeMode(mode: Settings["theme"]) {
+  if (!local.value) return;
+  local.value.theme = mode;
+  store.themePreview = { ...(store.themePreview ?? {}), theme: mode };
+}
+
+function pickThemeBackground(bg: "acrylic" | "solid") {
+  if (!local.value) return;
+  local.value.themeBackground = bg;
+  store.themePreview = { ...(store.themePreview ?? {}), themeBackground: bg };
+}
 
 watch(tab, (next) => {
   if (props.open && next === "updates" && !updateReport.value && !inspectingUpdates.value) {
@@ -334,6 +350,7 @@ async function save() {
   saving.value = true;
   try {
     await saveSettings(local.value);
+    store.themePreview = null;
     message.success("已保存");
     emit("update:open", false);
   } catch (e) {
@@ -674,6 +691,209 @@ function toggleCmdEditor(id: string) {
               <div v-for="(w, idx) in updateReport.warnings" :key="idx">{{ w }}</div>
             </div>
           </div>
+        </div>
+      </Tabs.TabPane>
+
+      <Tabs.TabPane key="appearance" tab="主题">
+        <div v-if="local" class="flex flex-col gap-5 max-h-[min(54dvh,420px)] overflow-y-auto py-1 pr-[2px]">
+          <section class="flex flex-col gap-2.5">
+            <div>
+              <div class="text-[13px] fw-550 text-ink">外观模式</div>
+              <div class="text-[11.5px] text-ink-3 mt-[1px]">切换浅色、深色或跟随系统外观，点击可实时预览</div>
+            </div>
+            <div class="grid grid-cols-3 gap-2.5" role="radiogroup" aria-label="外观模式">
+              <button
+                type="button"
+                class="group flex flex-col gap-2 p-2.5 rounded-[11px] border border-solid text-left cursor-pointer transition-all duration-150 ease-oc"
+                :class="
+                  local.theme === 'system'
+                    ? 'border-ink-solid bg-active shadow-card'
+                    : 'border-line bg-hover hover:border-line-strong'
+                "
+                @click="pickThemeMode('system')"
+              >
+                <div class="h-[54px] w-full rounded-[7px] overflow-hidden border border-solid border-line flex">
+                  <div class="w-1/2 h-full bg-[#f4f6fa] p-1.5 flex flex-col gap-1">
+                    <span class="w-7 h-1.5 rounded-full bg-[#14161c]/20" />
+                    <span class="w-10 h-1.5 rounded-full bg-[#14161c]/12" />
+                    <span class="mt-auto w-full h-3 rounded-[4px] bg-white border border-solid border-[#0f172a]/10" />
+                  </div>
+                  <div class="w-1/2 h-full bg-[#111215] p-1.5 flex flex-col gap-1">
+                    <span class="w-7 h-1.5 rounded-full bg-white/25" />
+                    <span class="w-10 h-1.5 rounded-full bg-white/14" />
+                    <span class="mt-auto w-full h-3 rounded-[4px] bg-[#1e2128] border border-solid border-white/10" />
+                  </div>
+                </div>
+                <div class="flex items-center justify-between gap-1 px-0.5">
+                  <span class="text-[12.5px] fw-540 text-ink">跟随系统</span>
+                  <span
+                    class="w-3.5 h-3.5 rounded-full border border-solid inline-grid place-items-center flex-none transition-colors"
+                    :class="local.theme === 'system' ? 'bg-ink-solid border-ink-solid text-ink-inv' : 'border-line-strong bg-transparent'"
+                  >
+                    <svg v-if="local.theme === 'system'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="w-2 h-2">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                class="group flex flex-col gap-2 p-2.5 rounded-[11px] border border-solid text-left cursor-pointer transition-all duration-150 ease-oc"
+                :class="
+                  local.theme === 'light'
+                    ? 'border-ink-solid bg-active shadow-card'
+                    : 'border-line bg-hover hover:border-line-strong'
+                "
+                @click="pickThemeMode('light')"
+              >
+                <div class="h-[54px] w-full rounded-[7px] overflow-hidden border border-solid border-[#0f172a]/10 bg-[#f7f7f8] flex">
+                  <div class="w-[30%] h-full bg-[#eef0f3] border-0 border-r border-solid border-[#0f172a]/8 p-1.5 flex flex-col gap-1">
+                    <span class="w-full h-1.5 rounded-full bg-[#14161c]/18" />
+                    <span class="w-3/4 h-1.5 rounded-full bg-[#14161c]/10" />
+                  </div>
+                  <div class="flex-1 h-full bg-white p-1.5 flex flex-col gap-1">
+                    <span class="w-10 h-1.5 rounded-full bg-[#14161c]/22" />
+                    <span class="w-14 h-1.5 rounded-full bg-[#14161c]/10" />
+                    <span class="mt-auto w-full h-3 rounded-[4px] bg-[#f7f7f8] border border-solid border-[#0f172a]/8" />
+                  </div>
+                </div>
+                <div class="flex items-center justify-between gap-1 px-0.5">
+                  <span class="text-[12.5px] fw-540 text-ink">浅色</span>
+                  <span
+                    class="w-3.5 h-3.5 rounded-full border border-solid inline-grid place-items-center flex-none transition-colors"
+                    :class="local.theme === 'light' ? 'bg-ink-solid border-ink-solid text-ink-inv' : 'border-line-strong bg-transparent'"
+                  >
+                    <svg v-if="local.theme === 'light'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="w-2 h-2">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                class="group flex flex-col gap-2 p-2.5 rounded-[11px] border border-solid text-left cursor-pointer transition-all duration-150 ease-oc"
+                :class="
+                  local.theme === 'dark'
+                    ? 'border-ink-solid bg-active shadow-card'
+                    : 'border-line bg-hover hover:border-line-strong'
+                "
+                @click="pickThemeMode('dark')"
+              >
+                <div class="h-[54px] w-full rounded-[7px] overflow-hidden border border-solid border-white/10 bg-[#111215] flex">
+                  <div class="w-[30%] h-full bg-[#16181d] border-0 border-r border-solid border-white/8 p-1.5 flex flex-col gap-1">
+                    <span class="w-full h-1.5 rounded-full bg-white/22" />
+                    <span class="w-3/4 h-1.5 rounded-full bg-white/12" />
+                  </div>
+                  <div class="flex-1 h-full bg-[#111215] p-1.5 flex flex-col gap-1">
+                    <span class="w-10 h-1.5 rounded-full bg-white/28" />
+                    <span class="w-14 h-1.5 rounded-full bg-white/12" />
+                    <span class="mt-auto w-full h-3 rounded-[4px] bg-[#1e2128] border border-solid border-white/10" />
+                  </div>
+                </div>
+                <div class="flex items-center justify-between gap-1 px-0.5">
+                  <span class="text-[12.5px] fw-540 text-ink">深色</span>
+                  <span
+                    class="w-3.5 h-3.5 rounded-full border border-solid inline-grid place-items-center flex-none transition-colors"
+                    :class="local.theme === 'dark' ? 'bg-ink-solid border-ink-solid text-ink-inv' : 'border-line-strong bg-transparent'"
+                  >
+                    <svg v-if="local.theme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="w-2 h-2">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </span>
+                </div>
+              </button>
+            </div>
+          </section>
+
+          <section class="flex flex-col gap-2.5 pt-4 border-0 border-t border-solid border-line">
+            <div>
+              <div class="text-[13px] fw-550 text-ink">背景风格</div>
+              <div class="text-[11.5px] text-ink-3 mt-[1px]">不习惯弥散光晕和毛玻璃时，可切换为纯净纯色背景</div>
+            </div>
+            <div class="grid grid-cols-2 gap-3" role="radiogroup" aria-label="背景风格">
+              <button
+                type="button"
+                class="flex flex-col gap-2 p-2.5 rounded-[11px] border border-solid text-left cursor-pointer transition-all duration-150 ease-oc"
+                :class="
+                  local.themeBackground !== 'solid'
+                    ? 'border-ink-solid bg-active shadow-card'
+                    : 'border-line bg-hover hover:border-line-strong'
+                "
+                @click="pickThemeBackground('acrylic')"
+              >
+                <div class="relative h-[66px] w-full rounded-[8px] overflow-hidden border border-solid border-line bg-bg flex">
+                  <span class="absolute w-16 h-16 rounded-full blur-[16px] -top-4 -left-2 bg-[#7db3ff]/55" />
+                  <span class="absolute w-16 h-16 rounded-full blur-[16px] -bottom-5 right-0 bg-[#baa8ff]/45" />
+                  <div class="relative z-1 w-[32%] h-full bg-sidebar border-0 border-r border-solid border-line p-2 flex flex-col gap-1.5">
+                    <span class="w-full h-1.5 rounded-full bg-ink/20" />
+                    <span class="w-2/3 h-1.5 rounded-full bg-ink/12" />
+                  </div>
+                  <div class="relative z-1 flex-1 h-full p-2 flex flex-col justify-between">
+                    <div class="flex flex-col gap-1">
+                      <span class="w-16 h-1.5 rounded-full bg-ink/24" />
+                      <span class="w-24 h-1.5 rounded-full bg-ink/12" />
+                    </div>
+                    <span class="w-full h-4 rounded-[5px] bg-surface-strong border border-solid border-line-strong" />
+                  </div>
+                </div>
+                <div class="flex items-center justify-between gap-2 px-0.5">
+                  <div class="min-w-0">
+                    <div class="text-[12.5px] fw-550 text-ink">弥散渐变</div>
+                    <div class="text-[11px] text-ink-3 mt-[1px]">柔和光晕与亚克力毛玻璃质感</div>
+                  </div>
+                  <span
+                    class="w-3.5 h-3.5 rounded-full border border-solid inline-grid place-items-center flex-none transition-colors"
+                    :class="local.themeBackground !== 'solid' ? 'bg-ink-solid border-ink-solid text-ink-inv' : 'border-line-strong bg-transparent'"
+                  >
+                    <svg v-if="local.themeBackground !== 'solid'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="w-2 h-2">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                class="flex flex-col gap-2 p-2.5 rounded-[11px] border border-solid text-left cursor-pointer transition-all duration-150 ease-oc"
+                :class="
+                  local.themeBackground === 'solid'
+                    ? 'border-ink-solid bg-active shadow-card'
+                    : 'border-line bg-hover hover:border-line-strong'
+                "
+                @click="pickThemeBackground('solid')"
+              >
+                <div class="h-[66px] w-full rounded-[8px] overflow-hidden border border-solid border-line bg-modal flex">
+                  <div class="w-[32%] h-full bg-hover border-0 border-r border-solid border-line p-2 flex flex-col gap-1.5">
+                    <span class="w-full h-1.5 rounded-full bg-ink/20" />
+                    <span class="w-2/3 h-1.5 rounded-full bg-ink/12" />
+                  </div>
+                  <div class="flex-1 h-full bg-modal p-2 flex flex-col justify-between">
+                    <div class="flex flex-col gap-1">
+                      <span class="w-16 h-1.5 rounded-full bg-ink/24" />
+                      <span class="w-24 h-1.5 rounded-full bg-ink/12" />
+                    </div>
+                    <span class="w-full h-4 rounded-[5px] bg-hover border border-solid border-line-strong" />
+                  </div>
+                </div>
+                <div class="flex items-center justify-between gap-2 px-0.5">
+                  <div class="min-w-0">
+                    <div class="text-[12.5px] fw-550 text-ink">纯净纯色</div>
+                    <div class="text-[11px] text-ink-3 mt-[1px]">无渐变光晕与模糊，简洁专注</div>
+                  </div>
+                  <span
+                    class="w-3.5 h-3.5 rounded-full border border-solid inline-grid place-items-center flex-none transition-colors"
+                    :class="local.themeBackground === 'solid' ? 'bg-ink-solid border-ink-solid text-ink-inv' : 'border-line-strong bg-transparent'"
+                  >
+                    <svg v-if="local.themeBackground === 'solid'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="w-2 h-2">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </span>
+                </div>
+              </button>
+            </div>
+          </section>
         </div>
       </Tabs.TabPane>
 

@@ -9,10 +9,10 @@ import NewChat from "./components/NewChat.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import WorkspacePanel from "./components/WorkspacePanel.vue";
 import { api, inApp } from "./api";
-import { activeWorkspaceCwd, init, isDark, newConversation, openWorkspaceFile, store } from "./store";
+import { activeWorkspaceCwd, init, isDark, newConversation, openWorkspaceFile, store, themeBackground } from "./store";
 import { antdThemeFor } from "./theme";
 
-const theme = computed(() => antdThemeFor(isDark.value));
+const theme = computed(() => antdThemeFor(isDark.value, themeBackground.value === "solid"));
 const textAreaConfig = { changeOnComposing: true };
 
 const mod = navigator.platform.includes("Mac") ? (e: KeyboardEvent) => e.metaKey : (e: KeyboardEvent) => e.ctrlKey;
@@ -152,7 +152,7 @@ onBeforeUnmount(() => {
         <AntApp>
           <div class="flex h-100dvh overflow-hidden relative bg-bg" @contextmenu="onContextMenu">
             <!-- Subtle Beacon-style ambient light layer refracted through acrylic panels -->
-            <div class="fixed inset-0 pointer-events-none overflow-hidden z-0" aria-hidden="true">
+            <div v-if="themeBackground !== 'solid'" class="fixed inset-0 pointer-events-none overflow-hidden z-0" aria-hidden="true">
               <span
                 class="absolute rounded-full blur-[95px] will-change-transform w-[560px] h-[560px] -top-[180px] -left-[100px]"
                 :class="isDark ? 'bg-[rgba(56,139,253,0.14)]' : 'bg-[rgba(125,179,255,0.32)]'"

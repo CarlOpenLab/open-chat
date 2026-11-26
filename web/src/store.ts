@@ -65,6 +65,8 @@ export const store = reactive({
   probeErrors: {} as Record<string, string>,
   agentUpdateProgress: null as AgentUpdateProgress | null,
   agentUpdateProgressById: {} as Record<string, AgentUpdateProgress>,
+  /** Live preview override while editing theme settings before saving. */
+  themePreview: null as { theme?: Settings["theme"]; themeBackground?: "acrylic" | "solid" } | null,
 });
 
 function captureModels(agentId: string | undefined, configOptions: ConfigOption[] | undefined) {
@@ -241,15 +243,27 @@ const systemDark = ref(media.matches);
 media.addEventListener("change", (e) => (systemDark.value = e.matches));
 
 export const isDark = computed(() => {
-  const t = store.settings?.theme ?? "system";
+  const t = store.themePreview?.theme ?? store.settings?.theme ?? "system";
   return t === "dark" || (t === "system" && systemDark.value);
 });
+
+export const themeBackground = computed<"acrylic" | "solid">(() =>
+  (store.themePreview?.themeBackground ?? store.settings?.themeBackground) === "solid" ? "solid" : "acrylic",
+);
 
 watch(
   isDark,
   (dark) => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
     document.documentElement.style.colorScheme = dark ? "dark" : "light";
+  },
+  { immediate: true },
+);
+
+watch(
+  themeBackground,
+  (bg) => {
+    document.documentElement.dataset.bg = bg;
   },
   { immediate: true },
 );
