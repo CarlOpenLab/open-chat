@@ -629,26 +629,7 @@ async function changeDir(path: string) {
               <span>{{ meta.agentName }}</span>
             </span>
 
-            <Tooltip
-              v-if="meta.worktree"
-              :title="`Worktree：${meta.worktreeBranch || 'detached'}（点击管理、合入 ${meta.worktreeBase || '主分支'} 或清理）\n目录：${meta.cwd}${meta.worktreeRepo ? `\n源仓库：${meta.worktreeRepo}` : ''}`"
-              :mouse-enter-delay="0.4"
-            >
-              <button
-                type="button"
-                class="oc-cwd-chip inline-flex items-center gap-[5px] h-[22px] px-2 rounded-full border border-solid border-line bg-hover text-[11px] text-ink-2 max-w-[240px] min-w-0 flex-[0_1_auto] cursor-pointer font-mono transition-colors duration-140 hover:bg-active hover:text-ink hover:border-line-strong no-drag"
-                @click="openWtPanel"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="w-[12px] h-[12px] text-ok flex-none">
-                  <path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5" />
-                  <circle cx="13" cy="12" r="2" />
-                  <path d="M18 19c-2.8 0-5-2.2-5-5v8" />
-                  <circle cx="20" cy="19" r="2" />
-                </svg>
-                <span class="oc-cwd-text truncate">{{ meta.worktreeBranch || shortCwd }}</span>
-              </button>
-            </Tooltip>
-            <Tooltip v-else :title="`在文件夹中显示：${meta.cwd}`" :mouse-enter-delay="0.4">
+            <Tooltip v-if="!meta.worktree" :title="`在文件夹中显示：${meta.cwd}`" :mouse-enter-delay="0.4">
               <button
                 class="oc-cwd-chip inline-flex items-center gap-[5px] h-[22px] px-[7px] rounded-[6px] border-0 bg-transparent text-[11px] text-ink-3 max-w-[240px] min-w-0 flex-[0_1_auto] cursor-pointer font-mono transition-colors duration-140 hover:bg-hover hover:text-ink-2 no-drag"
                 @click="reveal"
@@ -843,7 +824,39 @@ async function changeDir(path: string) {
             @jump-turn="jumpToTurn"
             @cwd="folderOpen = true"
             @manage="store.settingsOpen = true"
-          />
+          >
+            <template #bar-extra>
+              <Tooltip
+                v-if="meta.worktree"
+                :title="`隔离 Worktree：${meta.worktreeBranch || 'detached'}（点击管理、合入 ${meta.worktreeBase || '主分支'} 或清理）`"
+                :mouse-enter-delay="0.35"
+              >
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid rounded-[7px] bg-surface-strong text-ink fw-560 border-line-strong shadow-card text-[11.5px] cursor-pointer flex-[0_1_auto] min-w-0 max-w-[180px] transition-all duration-140 ease-oc hover:bg-active"
+                  @click="openWtPanel"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.85"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    class="w-[12.5px] h-[12.5px] flex-none text-ok"
+                  >
+                    <path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5" />
+                    <circle cx="13" cy="12" r="2" />
+                    <path d="M18 19c-2.8 0-5-2.2-5-5v8" />
+                    <circle cx="20" cy="19" r="2" />
+                  </svg>
+                  <span class="truncate">
+                    Worktree<span v-if="meta.worktreeBranch" class="font-mono text-ink-2"> · {{ meta.worktreeBranch }}</span>
+                  </span>
+                </button>
+              </Tooltip>
+            </template>
+          </Composer>
         </div>
       </div>
 
