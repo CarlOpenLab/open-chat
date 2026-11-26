@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.10
+
+- 主题与外观：设置新增「主题」标签页，支持纯色背景模式，优化深浅色 Switch 配色。
+- Agent：新增 OpenCode ACP agent 支持。
+- Worktree：优化基准分支选择、分支新建与删除确认，状态提示移入输入栏，修复 Checkbox 配色与空会话问题。
+- 连接体验：新对话连接中的提示改为纯文字，去掉前面的 loading icon。
+- 发布：Release 工作流在 GitHub API 5xx 时自动重试，并支持手动重建指定标签。
+
 ## 0.0.9
 
 - Git Worktree 隔离：新对话输入框底部栏支持一键开启 Worktree 隔离，通过 Popover 选择自动分支、自定义分支名或复用已有 Worktree，并自动按 `.worktreeinclude` 同步本地忽略文件；对话顶栏胶囊可查看未提交变更，支持压缩合入（Squash）或保留提交合入主分支，并可一键清理 Worktree 与分支。

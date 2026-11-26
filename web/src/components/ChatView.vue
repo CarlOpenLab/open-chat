@@ -691,15 +691,19 @@ async function changeDir(path: string) {
 
       <div class="flex-1 min-h-0 relative flex flex-col">
         <div
-          v-if="loadingHistory"
+          v-if="loadingHistory || (live.status === 'connecting' && !turns.length)"
           class="absolute inset-0 z-5 flex items-center justify-center px-5 pointer-events-none"
         >
           <div
+            v-if="loadingHistory"
             class="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-surface glass-sm border border-solid border-line shadow-card text-[12.5px] text-ink-2 animate-oc-bubble-in"
           >
             <span class="w-3 h-3 rounded-full border-[1.5px] border-solid border-line-strong border-t-ink-solid animate-oc-spin" />
             <span>正在加载对话记录…</span>
           </div>
+          <span v-else class="text-[12.5px] text-ink-3 shimmer-text animate-oc-bubble-in">
+            正在与 {{ meta.agentName }} 建立连接
+          </span>
         </div>
 
         <MessageScroller
