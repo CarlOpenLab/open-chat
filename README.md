@@ -2,7 +2,7 @@
   <img src="docs/logo.svg" width="84" height="84" alt="open-chat logo" />
   <h1>open-chat</h1>
   <p><strong>One window for every coding agent on your machine.</strong></p>
-  <p>A local-first desktop &amp; web workbench that speaks <a href="https://agentclientprotocol.com">ACP</a> natively —<br/>Claude Code, Codex, CodeBuddy, Qoder, Pi, Oh My Pi and any custom agent.</p>
+  <p>A local-first desktop &amp; web workbench that speaks <a href="https://agentclientprotocol.com">ACP</a> natively —<br/>Claude Code, Codex, OpenCode, CodeBuddy, Qoder, Pi, Oh My Pi and any custom agent.</p>
   <p>
     <a href="https://github.com/CarlOpenLab/open-chat/releases/latest"><img src="https://img.shields.io/github/v/release/CarlOpenLab/open-chat?include_prereleases&label=version" alt="Release" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/CarlOpenLab/open-chat" alt="MIT License" /></a>
@@ -21,7 +21,7 @@
 
 ## Highlights
 
-- **Multi-agent, one entry point** — connect Claude Code, Codex, CodeBuddy, Qoder, Pi, Oh My Pi or any custom ACP agent; every session is tied to a working directory, with slash commands, model & thinking-level pickers and image attachments built in.
+- **Multi-agent, one entry point** — connect Claude Code, Codex, OpenCode, CodeBuddy, Qoder, Pi, Oh My Pi or any custom ACP agent; every session is tied to a working directory, with slash commands, model & thinking-level pickers and image attachments built in.
 - **Permission approvals as first-class citizens** — tool authorization floats right above the composer: Allow on the right, Deny on the left, hard to mis-hit. Switch between confirm-each / auto-approve / full access at any time; the mode syncs live to the agent via ACP.
 - **A visible, resumable turn** — thinking, execution plans, tool calls, diffs and terminal output stream into one transcript. Conversations persist locally and resume via `session/load`; if a resume fails it says so instead of pretending.
 - **Zero environment fuss** — the Node sidecar is bundled into the installer and the frontend is embedded in the binary. PATH is read from your login shell at launch, so `node`, `claude` and `codex` are found even when launched from the Dock.

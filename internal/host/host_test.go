@@ -71,12 +71,19 @@ func TestSidecarAgentCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	var agentIDs []string
+	var openCode AgentInfo
 	for _, agent := range NewAPI(h).Agents() {
 		agentIDs = append(agentIDs, agent.ID)
+		if agent.ID == "opencode" {
+			openCode = agent
+		}
 	}
-	want := []string{"claude-code", "codex", "codebuddy", "qoder", "oh-my-pi", "pi", "dsh"}
+	want := []string{"claude-code", "codex", "opencode", "codebuddy", "qoder", "oh-my-pi", "pi", "dsh"}
 	if !slices.Equal(agentIDs, want) {
 		t.Fatalf("agent IDs = %v, want %v", agentIDs, want)
+	}
+	if openCode.Command != "opencode" || openCode.Probe != "opencode" || !slices.Equal(openCode.Args, []string{"acp"}) {
+		t.Fatalf("OpenCode launch = %q %q (probe %q), want opencode acp", openCode.Command, openCode.Args, openCode.Probe)
 	}
 }
 

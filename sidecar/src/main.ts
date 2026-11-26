@@ -91,6 +91,15 @@ export function catalog(): AgentPreset[] {
       homepage: "https://github.com/openai/codex",
     },
     {
+      id: "opencode",
+      name: "OpenCode",
+      description: "OpenCode CLI，原生 ACP（opencode acp）",
+      command: "opencode",
+      args: ["acp"],
+      probe: "opencode",
+      homepage: "https://opencode.ai",
+    },
+    {
       id: "codebuddy",
       name: "CodeBuddy",
       description: "腾讯 CodeBuddy Code，原生 ACP（codebuddy --acp）",

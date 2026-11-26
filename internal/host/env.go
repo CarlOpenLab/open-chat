@@ -69,6 +69,7 @@ func loginEnv() []string {
 	home, _ := os.UserHomeDir()
 	extra := []string{
 		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, ".opencode", "bin"),
 		filepath.Join(home, ".local", "share", "mise", "shims"),
 		filepath.Join(home, ".bun", "bin"),
 		filepath.Join(home, ".volta", "bin"),
