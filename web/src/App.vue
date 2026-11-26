@@ -7,8 +7,9 @@ import AppSidebar from "./components/AppSidebar.vue";
 import ChatView from "./components/ChatView.vue";
 import NewChat from "./components/NewChat.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
+import WorkspacePanel from "./components/WorkspacePanel.vue";
 import { api, inApp } from "./api";
-import { activeMeta, init, isDark, newConversation, openWorkspaceFile, store } from "./store";
+import { activeWorkspaceCwd, init, isDark, newConversation, openWorkspaceFile, store } from "./store";
 import { antdThemeFor } from "./theme";
 
 const theme = computed(() => antdThemeFor(isDark.value));
@@ -31,7 +32,7 @@ function onKey(e: KeyboardEvent) {
     store.sidebarCollapsed = !store.sidebarCollapsed;
   } else if (key === "j") {
     e.preventDefault();
-    if (store.activeId) store.workspaceOpen = !store.workspaceOpen;
+    store.workspaceOpen = !store.workspaceOpen;
   } else if (key === ",") {
     e.preventDefault();
     store.settingsOpen = true;
@@ -115,7 +116,7 @@ function onLinkClick(e: MouseEvent) {
   const anchor = e.target instanceof Element ? e.target.closest("a[href]") : null;
   const href = anchor?.getAttribute("href") ?? "";
   if (!href || href.startsWith("#")) return;
-  const cwd = activeMeta.value?.cwd ?? "";
+  const cwd = activeWorkspaceCwd.value;
   if (cwd && openWorkspaceFile(href, cwd)) {
     e.preventDefault();
     e.stopPropagation();
@@ -191,9 +192,16 @@ onBeforeUnmount(() => {
               >
                 <AppSidebar />
               </div>
-              <main class="flex-1 min-w-0 flex flex-col relative z-1 bg-transparent">
-                <ChatView v-if="store.activeId && store.metas[store.activeId]" />
-                <NewChat v-else />
+              <main class="flex-1 min-w-0 flex relative z-1 bg-transparent">
+                <div class="flex-1 min-w-0 flex flex-col h-full min-h-0">
+                  <ChatView v-if="store.activeId && store.metas[store.activeId]" />
+                  <NewChat v-else />
+                </div>
+                <WorkspacePanel
+                  :open="store.workspaceOpen"
+                  :cwd="activeWorkspaceCwd"
+                  @close="store.workspaceOpen = false"
+                />
               </main>
               <SettingsDialog v-model:open="store.settingsOpen" />
             </template>

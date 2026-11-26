@@ -39,9 +39,11 @@ export const store = reactive({
   activeId: null as string | null,
   /** Working directory currently shown in the UI; new conversations start here. */
   currentCwd: localStorage.getItem("oc.cwd") || "",
+  /** Optional one-shot agent hint when opening NewChat from an existing conversation. */
+  preferredAgentId: "" as string,
   loading: {} as Record<string, boolean>,
   sidebarCollapsed: localStorage.getItem("oc.sidebar") === "0",
-  workspaceOpen: false,
+  workspaceOpen: localStorage.getItem("oc.workspaceOpen") === "1",
   workspaceTab: (localStorage.getItem("oc.workspaceTab") === "terminal" ? "terminal" : "files") as "files" | "terminal",
   workspaceWidth: Math.min(820, Math.max(340, Number(localStorage.getItem("oc.workspaceWidth")) || 480)),
   /** Pending file to open and highlight in the WorkspacePanel file tree. */
@@ -100,36 +102,9 @@ watch(
   () => store.sidebarCollapsed,
   (v) => localStorage.setItem("oc.sidebar", v ? "0" : "1"),
 );
-const workspaceOpenById: Record<string, boolean> = (() => {
-  try {
-    const raw = JSON.parse(localStorage.getItem("oc.workspaceOpenById") || "{}") as Record<string, unknown>;
-    const out: Record<string, boolean> = {};
-    for (const [k, v] of Object.entries(raw)) {
-      if (v === true) out[k] = true;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-})();
-
-function saveWorkspaceOpenMap() {
-  try {
-    localStorage.setItem("oc.workspaceOpenById", JSON.stringify(workspaceOpenById));
-  } catch {
-    /* ignore quota errors */
-  }
-}
-
 watch(
   () => store.workspaceOpen,
-  (v) => {
-    const id = store.activeId;
-    if (!id) return;
-    if (v) workspaceOpenById[id] = true;
-    else delete workspaceOpenById[id];
-    saveWorkspaceOpenMap();
-  },
+  (v) => localStorage.setItem("oc.workspaceOpen", v ? "1" : "0"),
 );
 watch(
   () => store.workspaceTab,
@@ -233,7 +208,7 @@ let workspaceRevealSeq = 0;
 
 /** Opens a file inside the current workspace in the right-hand WorkspacePanel file tree. */
 export function openWorkspaceFile(target: string, cwd?: string): boolean {
-  const base = cwd ?? activeMeta.value?.cwd ?? "";
+  const base = cwd ?? activeWorkspaceCwd.value;
   const rel = resolveWorkspaceRelPath(target, base);
   if (!rel) return false;
   const segments = rel.split("/").filter(Boolean);
@@ -282,6 +257,9 @@ watch(
 // -------------------------------------------------------------- selectors
 
 export const activeMeta = computed(() => (store.activeId ? store.metas[store.activeId] ?? null : null));
+export const activeWorkspaceCwd = computed(
+  () => activeMeta.value?.cwd || store.currentCwd || store.settings?.recentDirs?.[0] || store.boot?.home || "",
+);
 export const activeLive = computed(() => (store.activeId ? store.lives[store.activeId] ?? idleLive() : idleLive()));
 export const activeTranscript = computed(() => (store.activeId ? store.transcripts[store.activeId] ?? null : null));
 
@@ -370,15 +348,10 @@ function onPush(p: Push) {
       delete store.queues[p.conversationId];
       delete store.drafts[p.conversationId];
       delete store.draftAttachments[p.conversationId];
-      if (workspaceOpenById[p.conversationId]) {
-        delete workspaceOpenById[p.conversationId];
-        saveWorkspaceOpenMap();
-      }
       steerPending.delete(p.conversationId);
       manualStop.delete(p.conversationId);
       if (store.activeId === p.conversationId) {
         store.activeId = null;
-        store.workspaceOpen = false;
       }
       return;
     case "focus":
@@ -524,7 +497,6 @@ async function load(id: string) {
 
 export async function select(id: string | null) {
   store.activeId = id;
-  store.workspaceOpen = id ? Boolean(workspaceOpenById[id]) : false;
   if (id) {
     localStorage.setItem("oc.active", id);
     if (store.turnOutcome[id] === "unseen") store.turnOutcome[id] = "done";
@@ -538,6 +510,12 @@ export async function select(id: string | null) {
 }
 
 export function newConversation() {
+  void select(null);
+}
+
+export function newConversationInDir(dir: string, agentId?: string) {
+  if (dir) store.currentCwd = dir;
+  if (agentId) store.preferredAgentId = agentId;
   void select(null);
 }
 
@@ -749,6 +727,8 @@ export const mergeWorktree = (id: string, strategy: "merge" | "squash", commitMs
   api.mergeWorktree(id, strategy, commitMsg, cleanup);
 export const removeWorktree = (id: string, force = false, deleteBranch = false) =>
   api.removeWorktree(id, force, deleteBranch);
+export const removeWorktreeByPath = (wtPath: string, deleteBranch = true) =>
+  api.removeWorktreeByPath(wtPath, deleteBranch);
 
 export async function rename(id: string, title: string) {
   store.metas[id] = await api.rename(id, title);

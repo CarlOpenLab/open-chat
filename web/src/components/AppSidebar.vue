@@ -12,11 +12,11 @@ import {
   PushpinFilled,
   PushpinOutlined,
 } from "@antdv-next/icons";
-import { Dropdown, Input, Modal, Tooltip, message } from "antdv-next";
+import { Checkbox, Dropdown, Input, Modal, Tooltip, message } from "antdv-next";
 import { Icon, addCollection, type IconifyJSON } from "@iconify/vue";
 import rawLucide from "@iconify-json/lucide/icons.json";
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { isArchived, isDark, isMac, newConversation, pin, remove, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
+import { isArchived, isDark, isMac, newConversation, pin, remove, removeWorktree, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
 import type { Meta } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
 
@@ -29,6 +29,8 @@ const renaming = ref<Meta | null>(null);
 const newTitle = ref("");
 const renameInput = ref<{ focus: () => void } | null>(null);
 const toDelete = ref<Meta | null>(null);
+const deleteWithWorktree = ref(true);
+const deleteBusy = ref(false);
 const showArchived = ref(false);
 
 // Multi-select state for batch archive / delete
@@ -37,6 +39,7 @@ const selectedIds = ref<Set<string>>(new Set());
 const lastSelectedId = ref<string | null>(null);
 const batchArchiveOpen = ref(false);
 const batchDeleteOpen = ref(false);
+const batchDeleteWithWorktree = ref(true);
 const batchBusy = ref(false);
 
 const convCtx = ref<{ open: boolean; x: number; y: number; meta: Meta | null }>({
@@ -228,6 +231,9 @@ const someVisibleSelected = computed(
 const selectedMetasPreview = computed(() =>
   filtered.value.filter((m) => selectedIds.value.has(m.id)).slice(0, 3),
 );
+const selectedWorktreeCount = computed(() =>
+  filtered.value.filter((m) => selectedIds.value.has(m.id) && m.worktree).length,
+);
 
 function toggleSelectAll() {
   if (allVisibleSelected.value) {
@@ -414,12 +420,30 @@ async function confirmRename() {
   }
 }
 
+watch(toDelete, (m) => {
+  if (m) deleteWithWorktree.value = Boolean(m.worktree);
+});
+
+watch(batchDeleteOpen, (open) => {
+  if (open) batchDeleteWithWorktree.value = selectedWorktreeCount.value > 0;
+});
+
 async function confirmDelete() {
   const m = toDelete.value;
-  toDelete.value = null;
-  if (!m) return;
-  await remove(m.id);
-  message.success("已删除");
+  if (!m || deleteBusy.value) return;
+  deleteBusy.value = true;
+  try {
+    if (m.worktree && deleteWithWorktree.value) {
+      await removeWorktree(m.id, true, true);
+    }
+    toDelete.value = null;
+    await remove(m.id);
+    message.success("已删除");
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    deleteBusy.value = false;
+  }
 }
 
 async function confirmBatchArchive() {
@@ -451,11 +475,19 @@ async function confirmBatchArchive() {
 
 async function confirmBatchDelete() {
   const ids = [...visibleSelectedIds.value];
+  const removeWts = batchDeleteWithWorktree.value;
   batchDeleteOpen.value = false;
   if (!ids.length || batchBusy.value) return;
   batchBusy.value = true;
   try {
-    const results = await Promise.allSettled(ids.map((id) => remove(id)));
+    const results = await Promise.allSettled(
+      ids.map(async (id) => {
+        if (removeWts && store.metas[id]?.worktree) {
+          await removeWorktree(id, true, true);
+        }
+        await remove(id);
+      }),
+    );
     const okCount = results.filter((r) => r.status === "fulfilled").length;
     const failCount = results.length - okCount;
     exitSelectMode();
@@ -869,12 +901,28 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
       ok-text="删除"
       ok-type="danger"
       cancel-text="取消"
+      :confirm-loading="deleteBusy"
       @ok="confirmDelete"
       @cancel="toDelete = null"
     >
-      <p class="text-ink-2 m-0">
-        「{{ toDelete?.title }}」的记录会从本机删除，无法恢复。agent 那边的会话不受影响。
-      </p>
+      <div class="flex flex-col gap-2.5">
+        <p class="text-ink-2 m-0">
+          「{{ toDelete?.title }}」的记录会从本机删除，无法恢复。agent 那边的会话不受影响。
+        </p>
+        <div v-if="toDelete?.worktree" class="flex flex-col gap-2 pt-2 border-0 border-t border-solid border-line">
+          <Checkbox v-model:checked="deleteWithWorktree">
+            <span class="text-[12.5px] text-ink">同时删除关联的 Worktree 目录与临时分支</span>
+          </Checkbox>
+          <div v-if="deleteWithWorktree" class="pl-6 flex flex-col gap-1">
+            <div class="px-2 py-1.5 rounded-[7px] bg-surface-2 border border-solid border-line font-mono text-[11px] text-ink-2 break-all leading-[1.45]">
+              {{ toDelete.cwd }}
+            </div>
+            <div class="text-[11px] text-warn leading-[1.4]">
+              若该目录内存在未提交的代码改动，删除后将永久丢失。
+            </div>
+          </div>
+        </div>
+      </div>
     </Modal>
     <Modal
       :open="batchArchiveOpen"
@@ -909,7 +957,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
       @ok="confirmBatchDelete"
       @cancel="batchDeleteOpen = false"
     >
-      <div class="flex flex-col gap-2">
+      <div class="flex flex-col gap-2.5">
         <p class="text-ink-2 m-0">
           这些对话的记录会从本机永久删除，无法恢复。agent 那边的会话不受影响。
         </p>
@@ -917,6 +965,11 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
           <li v-for="m in selectedMetasPreview" :key="m.id" class="truncate">{{ m.title || '新对话' }}</li>
           <li v-if="selectedCount > selectedMetasPreview.length" class="list-none -ml-4 text-ink-3">等共 {{ selectedCount }} 个对话</li>
         </ul>
+        <div v-if="selectedWorktreeCount > 0" class="pt-2 border-0 border-t border-solid border-line">
+          <Checkbox v-model:checked="batchDeleteWithWorktree">
+            <span class="text-[12.5px] text-ink">同时删除关联的 {{ selectedWorktreeCount }} 个 Worktree 目录与临时分支</span>
+          </Checkbox>
+        </div>
       </div>
     </Modal>
 

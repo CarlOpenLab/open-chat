@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { MenuUnfoldOutlined } from "@antdv-next/icons";
-import { Input, Popover, Switch, Tooltip, message } from "antdv-next";
+import { DeleteOutlined, FolderOpenOutlined, MenuUnfoldOutlined, WarningOutlined } from "@antdv-next/icons";
+import { Checkbox, Input, Modal, Popover, Select, Switch, Tooltip, message } from "antdv-next";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { isMac, listWorktrees, refreshAgents, start, store } from "../store";
+import { isMac, listWorktrees, refreshAgents, removeWorktreeByPath, start, store } from "../store";
 import type { Block, WorktreeInfo } from "../types";
 import Composer from "./Composer.vue";
 import FolderPicker from "./FolderPicker.vue";
 import WindowControls from "./WindowControls.vue";
-
 const selected = ref<string>("");
 const chosenModel = ref<{ configId: string; value: string } | null>(null);
 const cwd = ref<string>("");
@@ -18,10 +17,29 @@ const busy = ref(false);
 // Execution environment: optional isolated Git Worktree configured in the bar Popover
 const isGitRepo = ref(false);
 const gitBaseBranch = ref("");
+const gitBranches = ref<string[]>([]);
+const worktreeBaseBranch = ref("");
 const worktreeEnabled = ref(false);
 const worktreeBranchMode = ref<"auto" | "custom">("auto");
 const worktreeBranch = ref("");
 const worktreeExistingPath = ref("");
+
+const effectiveWorktreeBase = computed({
+  get: () => worktreeBaseBranch.value || gitBaseBranch.value || "",
+  set: (v: string) => {
+    worktreeBaseBranch.value = v || "";
+  },
+});
+
+const baseBranchOptions = computed(() => {
+  const set = new Set<string>(gitBranches.value);
+  if (gitBaseBranch.value) set.add(gitBaseBranch.value);
+  if (worktreeBaseBranch.value) set.add(worktreeBaseBranch.value);
+  return Array.from(set).map((b) => ({
+    label: b === gitBaseBranch.value ? `${b}（当前）` : b,
+    value: b,
+  }));
+});
 const existingWorktrees = ref<WorktreeInfo[]>([]);
 const loadingWorktrees = ref(false);
 const wtPopoverOpen = ref(false);
@@ -32,9 +50,14 @@ watch(selected, (id) => {
   chosenModel.value = cached?.currentValue != null ? { configId: cached.id, value: String(cached.currentValue) } : null;
 });
 
+watch(cwd, (p) => {
+  if (p && p !== store.currentCwd) store.currentCwd = p;
+});
+
 onMounted(() => {
   void refreshAgents();
-  const preferred = store.settings?.defaultAgent ?? "";
+  const preferred = store.preferredAgentId || store.settings?.defaultAgent || "";
+  if (store.preferredAgentId) store.preferredAgentId = "";
   const available = store.agents.filter((a) => a.available && !a.disabled);
   selected.value = available.find((a) => a.id === preferred)?.id ?? available[0]?.id ?? store.agents[0]?.id ?? "";
   cwd.value = store.currentCwd || store.settings?.recentDirs?.[0] || store.boot?.home || "";
@@ -57,11 +80,15 @@ async function loadExistingWorktrees() {
 
 watch(
   () => [isGitRepo.value, cwd.value] as const,
-  ([repo]) => {
+  ([repo], [, prevCwd]) => {
+    if (cwd.value !== prevCwd) {
+      worktreeBaseBranch.value = "";
+    }
     if (!repo) {
       worktreeEnabled.value = false;
       worktreeBranchMode.value = "auto";
       worktreeBranch.value = "";
+      worktreeBaseBranch.value = "";
       worktreeExistingPath.value = "";
       existingWorktrees.value = [];
       wtPopoverOpen.value = false;
@@ -117,6 +144,37 @@ function selectExistingWorktree(wt: WorktreeInfo) {
   wtPopoverOpen.value = false;
 }
 
+const deletingWt = ref<WorktreeInfo | null>(null);
+const deleteWtBranch = ref(true);
+const deleteWtBusy = ref(false);
+
+function confirmDeleteExistingWorktree(wt: WorktreeInfo) {
+  wtPopoverOpen.value = false;
+  deletingWt.value = wt;
+  deleteWtBranch.value = Boolean(wt.branch && wt.branch !== "HEAD");
+}
+
+async function doDeleteExistingWorktree() {
+  const wt = deletingWt.value;
+  if (!wt || deleteWtBusy.value) return;
+  deleteWtBusy.value = true;
+  const label = wt.branch || wt.path.split("/").filter(Boolean).pop() || wt.path;
+  try {
+    await removeWorktreeByPath(wt.path, deleteWtBranch.value);
+    if (worktreeExistingPath.value === wt.path) {
+      worktreeExistingPath.value = "";
+      worktreeBranch.value = "";
+    }
+    deletingWt.value = null;
+    message.success(`已删除 Worktree ${label}`);
+    await loadExistingWorktrees();
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  } finally {
+    deleteWtBusy.value = false;
+  }
+}
+
 const worktreeButtonLabel = computed(() => {
   if (!worktreeEnabled.value) return "Worktree";
   if (worktreeExistingPath.value) {
@@ -157,7 +215,7 @@ async function send(blocks: Block[]) {
       worktreeEnabled.value
         ? {
             enabled: true,
-            baseBranch: gitBaseBranch.value,
+            baseBranch: effectiveWorktreeBase.value,
             branchName: worktreeBranchMode.value === "custom" ? worktreeBranch.value.trim() : "",
             existingPath: worktreeExistingPath.value || undefined,
           }
@@ -187,6 +245,7 @@ const emptyLive = {
 const pickDir = (p: string) => {
   cwd.value = p;
   store.currentCwd = p;
+  worktreeBaseBranch.value = "";
   worktreeBranchMode.value = "auto";
   worktreeBranch.value = "";
   worktreeExistingPath.value = "";
@@ -209,6 +268,27 @@ const noAgent = computed(() => agents.value.length === 0);
         </button>
       </Tooltip>
       <div class="drag flex-1 h-full" />
+      <Tooltip :title="`工作区面板 (${isMac ? '⌘' : 'Ctrl'} J)`" :mouse-enter-delay="0.4">
+        <button
+          class="icon-btn text-[14px] no-drag"
+          :class="{ 'text-ink': store.workspaceOpen }"
+          aria-label="切换工作区面板"
+          @click="store.workspaceOpen = !store.workspaceOpen"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.85"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="w-[15px] h-[15px] block"
+          >
+            <rect width="18" height="18" x="3" y="3" rx="2" />
+            <path d="M15 3v18" />
+          </svg>
+        </button>
+      </Tooltip>
       <WindowControls />
     </header>
 
@@ -236,6 +316,7 @@ const noAgent = computed(() => agents.value.length === 0);
             : '请在右下角选择一个已安装的 ACP 供应商…'
         "
         @git-branch="(b) => (gitBaseBranch = b)"
+        @git-branches="(list) => (gitBranches = list)"
         @is-git-repo="(v) => (isGitRepo = v)"
         @send="send"
         @manage="store.settingsOpen = true"
@@ -282,8 +363,22 @@ const noAgent = computed(() => agents.value.length === 0);
                     />
                   </div>
 
-                  <div class="text-[11px] text-ink-3 -mt-1.5 leading-[1.45]">
-                    基于 <code class="font-mono text-ink-2">{{ gitBaseBranch || "HEAD" }}</code> 在独立目录运行，不干扰主工作区。
+                  <div class="flex flex-col gap-1.5">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-[11.5px] text-ink-2 flex-none">基准分支</span>
+                      <Select
+                        v-model:value="effectiveWorktreeBase"
+                        size="small"
+                        show-search
+                        :options="baseBranchOptions"
+                        :disabled="Boolean(worktreeExistingPath)"
+                        placeholder="选择基准分支"
+                        class="w-[168px] font-mono text-[11.5px]"
+                      />
+                    </div>
+                    <div class="text-[11px] text-ink-3 leading-[1.45]">
+                      {{ worktreeExistingPath ? '当前正在复用已有 Worktree，切换新建模式后可调整基准分支。' : '在独立目录切出新分支，不会切换主仓库当前分支。' }}
+                    </div>
                   </div>
 
                   <div class="flex flex-col gap-1">
@@ -357,28 +452,42 @@ const noAgent = computed(() => agents.value.length === 0);
                   <template v-if="existingWorktrees.length > 0">
                     <div class="h-[1px] bg-line -mx-1" />
                     <div class="flex flex-col gap-1">
-                      <div class="px-1 text-[10.5px] text-ink-3">复用已有 Worktree</div>
-                      <div class="flex flex-col gap-0.5 max-h-[128px] overflow-y-auto">
-                        <button
+                      <div class="px-1 text-[10.5px] text-ink-3">已有 Worktree</div>
+                      <div class="flex flex-col gap-0.5 max-h-[140px] overflow-y-auto">
+                        <div
                           v-for="wt in existingWorktrees"
                           :key="wt.path"
-                          type="button"
-                          class="w-full flex items-center justify-between gap-2 px-2 py-[5px] rounded-[7px] border border-solid text-left cursor-pointer transition-colors duration-120"
+                          class="group/wt flex items-center gap-1 rounded-[7px] border border-solid transition-colors duration-120"
                           :class="
                             worktreeEnabled && worktreeExistingPath === wt.path
                               ? 'bg-active border-line-strong text-ink'
                               : 'bg-transparent border-transparent text-ink-2 hover:bg-hover hover:text-ink'
                           "
-                          @click="selectExistingWorktree(wt)"
                         >
-                          <span class="text-[11.5px] font-mono truncate min-w-0">{{ wt.branch || "HEAD" }}</span>
-                          <span
-                            class="text-[10.5px] flex-none"
-                            :class="wt.dirty ? 'text-warn' : 'text-ink-3'"
+                          <button
+                            type="button"
+                            class="flex-1 min-w-0 flex items-center justify-between gap-2 px-2 py-[5px] border-0 bg-transparent text-left text-inherit cursor-pointer"
+                            @click="selectExistingWorktree(wt)"
                           >
-                            {{ wt.dirty ? `${wt.changedCount} 处改动` : "干净" }}
-                          </span>
-                        </button>
+                            <span class="text-[11.5px] font-mono truncate min-w-0">{{ wt.branch || "HEAD" }}</span>
+                            <span
+                              class="text-[10.5px] flex-none"
+                              :class="wt.dirty ? 'text-warn' : 'text-ink-3'"
+                            >
+                              {{ wt.dirty ? `${wt.changedCount} 处改动` : "干净" }}
+                            </span>
+                          </button>
+                          <Tooltip title="删除此 Worktree" :mouse-enter-delay="0.35">
+                            <button
+                              type="button"
+                              class="inline-grid place-items-center w-6 h-6 mr-1 border-0 rounded-[5px] bg-transparent text-ink-3 opacity-60 cursor-pointer flex-none transition-all duration-120 hover:opacity-100 hover:bg-err-soft hover:text-err"
+                              aria-label="删除 Worktree"
+                              @click.stop="confirmDeleteExistingWorktree(wt)"
+                            >
+                              <DeleteOutlined class="text-[11.5px]" />
+                            </button>
+                          </Tooltip>
+                        </div>
                       </div>
                     </div>
                   </template>
@@ -455,5 +564,46 @@ const noAgent = computed(() => agents.value.length === 0);
     </div>
 
     <FolderPicker v-model:open="folderOpen" :path="cwd" @pick="pickDir" />
+
+    <Modal
+      :open="Boolean(deletingWt)"
+      title="确认删除 Worktree？"
+      :width="430"
+      centered
+      ok-text="确认删除"
+      ok-type="danger"
+      cancel-text="取消"
+      :confirm-loading="deleteWtBusy"
+      @ok="doDeleteExistingWorktree"
+      @cancel="deletingWt = null"
+    >
+      <div v-if="deletingWt" class="flex flex-col gap-3 pt-1">
+        <div class="flex flex-col gap-1.5">
+          <div class="text-[12px] text-ink-2">将永久删除以下本地隔离目录：</div>
+          <div class="flex items-start gap-2 px-2.5 py-2 rounded-[8px] bg-surface-2 border border-solid border-line font-mono text-[11.5px] text-ink break-all leading-[1.5]">
+            <FolderOpenOutlined class="flex-none text-ink-3 mt-[2px] text-[12.5px]" />
+            <span>{{ deletingWt.path }}</span>
+          </div>
+          <div class="text-[11.5px] text-ink-3 leading-[1.45]">
+            不会修改原仓库中的文件。
+          </div>
+        </div>
+
+        <div
+          v-if="deletingWt.dirty"
+          class="flex items-start gap-2 rounded-[9px] px-3 py-2.5 bg-warn-soft border border-solid border-[color-mix(in_srgb,var(--warn)_30%,transparent)] text-warn"
+        >
+          <WarningOutlined class="flex-none mt-[2px] text-[13.5px]" />
+          <div class="flex flex-col gap-0.5 text-[12px] leading-[1.45]">
+            <span class="fw-560">检测到 {{ deletingWt.changedCount }} 处未提交的代码改动</span>
+            <span class="text-[11.5px] opacity-90">删除目录后这些未提交的代码将永久丢失，无法通过 Git 恢复。</span>
+          </div>
+        </div>
+
+        <Checkbox v-if="deletingWt.branch && deletingWt.branch !== 'HEAD'" v-model:checked="deleteWtBranch">
+          <span class="text-[12px] text-ink-2 font-mono">同时删除分支 {{ deletingWt.branch }}</span>
+        </Checkbox>
+      </div>
+    </Modal>
   </div>
 </template>

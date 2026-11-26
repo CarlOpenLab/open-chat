@@ -111,3 +111,28 @@ func TestWorktreeLifecycleAndInclude(t *testing.T) {
 		t.Fatalf("expected worktree dir to be cleaned up after merge: %s", m.Cwd)
 	}
 }
+
+func TestRemoveWorktreeByPath(t *testing.T) {
+	h, repoDir := setupTestGitRepo(t)
+	ctx := context.Background()
+
+	// Create a worktree, delete the conversation directly (leaving an orphan), then remove by path.
+	m, err := h.createWithWorktree(ctx, "codebuddy", repoDir, "main", "wt/orphan-demo")
+	if err != nil {
+		t.Fatalf("createWithWorktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(m.Cwd, "temp.txt"), []byte("discard me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.remove(m.ID)
+	if err := h.removeWorktreeByPath(ctx, m.Cwd, true); err != nil {
+		t.Fatalf("removeWorktreeByPath failed: %v", err)
+	}
+	if isDir(m.Cwd) {
+		t.Fatalf("expected orphan worktree dir removed: %s", m.Cwd)
+	}
+	list, err := h.listWorktrees(ctx, repoDir)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("expected 0 worktrees left, got %+v err=%v", list, err)
+	}
+}

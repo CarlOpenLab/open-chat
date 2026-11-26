@@ -3,7 +3,7 @@ import { Sender } from "@antdv-next/x";
 import type { SenderPasteInfo, SenderProps, SenderRef } from "@antdv-next/x";
 type SkillType = NonNullable<SenderProps["skill"]>;
 type SlotConfigType = NonNullable<SenderProps["slotConfig"]>[number];
-import { Dropdown, Tooltip, message } from "antdv-next";
+import { Dropdown, Input, Popover, Tooltip, message } from "antdv-next";
 import { computed, h, nextTick, ref, watch } from "vue";
 import { api } from "../api";
 import { resolvePermissionTarget, saveSettings, store, type PermissionMode, type QueuedMessage } from "../store";
@@ -62,6 +62,7 @@ const emit = defineEmits<{
   "update:agentId": [id: string];
   "update:cwd": [path: string];
   "git-branch": [branch: string];
+  "git-branches": [branches: string[]];
   "is-git-repo": [isRepo: boolean];
   send: [blocks: Block[]];
   enqueue: [blocks: Block[]];
@@ -93,6 +94,11 @@ const dragging = ref(false);
 const gitInfo = ref<GitInfo | null>(null);
 const gitFallbackRepo = ref(false);
 const switchingBranch = ref(false);
+const branchPopoverOpen = ref(false);
+const creatingBranch = ref(false);
+const newBranchName = ref("");
+const newBranchBusy = ref(false);
+const newBranchInputRef = ref<{ focus?: () => void; input?: HTMLInputElement } | null>(null);
 const composing = ref(false);
 let lastCompositionEndAt = 0;
 let dragDepth = 0;
@@ -335,13 +341,56 @@ async function refreshGit(dir: string) {
 }
 
 watch(
-  () => [isGitRepo.value, gitInfo.value?.branch ?? ""] as const,
-  ([repo, branch]) => {
+  () => [isGitRepo.value, gitInfo.value?.branch ?? "", branches.value] as const,
+  ([repo, branch, list]) => {
     emit("is-git-repo", repo);
     emit("git-branch", repo ? branch : "");
+    emit("git-branches", repo ? [...list] : []);
   },
   { immediate: true },
 );
+
+function onBranchPopoverOpenChange(open: boolean) {
+  branchPopoverOpen.value = open;
+  if (open) {
+    if (props.cwd) void refreshGit(props.cwd);
+  } else {
+    creatingBranch.value = false;
+    newBranchName.value = "";
+  }
+}
+
+function startCreateBranch() {
+  creatingBranch.value = true;
+  newBranchName.value = "";
+  void nextTick(() => {
+    const el = newBranchInputRef.value?.input;
+    if (el) {
+      el.focus();
+    } else {
+      newBranchInputRef.value?.focus?.();
+    }
+  });
+}
+
+async function submitCreateBranch() {
+  const name = newBranchName.value.trim();
+  if (!props.cwd || !name || newBranchBusy.value) return;
+  newBranchBusy.value = true;
+  try {
+    const res = await api.gitCreateBranch(props.cwd, name);
+    gitInfo.value = res;
+    gitCache.set(props.cwd, { info: res, fallback: false });
+    creatingBranch.value = false;
+    newBranchName.value = "";
+    branchPopoverOpen.value = false;
+    message.success(`已新建并切换到分支 ${res.branch || name}`);
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "新建分支失败");
+  } finally {
+    newBranchBusy.value = false;
+  }
+}
 
 async function switchBranch(branch: string) {
   if (!props.cwd || !branch || branch === currentBranch.value || switchingBranch.value) return;
@@ -349,6 +398,8 @@ async function switchBranch(branch: string) {
   try {
     const res = await api.gitCheckout(props.cwd, branch);
     gitInfo.value = res;
+    gitCache.set(props.cwd, { info: res, fallback: false });
+    branchPopoverOpen.value = false;
     message.success(`已切换到分支 ${res.branch || branch}`);
   } catch (e) {
     message.error(e instanceof Error ? e.message : "切换分支失败");
@@ -356,33 +407,6 @@ async function switchBranch(branch: string) {
     switchingBranch.value = false;
   }
 }
-
-const branchMenu = computed(() => {
-  const list = branches.value;
-  if (!list.length) {
-    return {
-      items: [
-        {
-          key: "__empty__",
-          disabled: true,
-          label: h("span", { class: "branch-empty" }, gitFallbackRepo.value ? "重启服务后可切换分支" : "暂无本地分支"),
-        },
-      ],
-    };
-  }
-  return {
-    items: list.map((b) => ({
-      key: b,
-      label: h("div", { class: ["branch-opt", { active: b === currentBranch.value }] }, [
-        h("span", { class: "branch-opt-name mono" }, b),
-        b === currentBranch.value ? checkSvg() : null,
-      ]),
-    })),
-    onClick: ({ key }: { key: string }) => {
-      if (key && key !== "__empty__") void switchBranch(key);
-    },
-  };
-});
 
 const senderRef = ref<SenderRef | null>(null);
 const localSkills = ref<SkillInfo[]>([]);
@@ -1262,20 +1286,93 @@ defineExpose({ addFiles });
 
       <template v-if="isGitRepo">
         <span class="w-[1px] h-3 bg-line-strong mx-[2px]" />
-        <Dropdown
-          :menu="branchMenu"
-          :trigger="['click']"
+        <Popover
+          :open="branchPopoverOpen"
+          trigger="click"
           placement="bottomLeft"
-          root-class="branch-dropdown"
-          @open-change="(open: boolean) => { if (open && cwd) void refreshGit(cwd); }"
+          :arrow="false"
+          @open-change="onBranchPopoverOpenChange"
         >
+          <template #content>
+            <div class="w-[236px] flex flex-col gap-2">
+              <div v-if="branches.length" class="flex flex-col gap-0.5 max-h-[200px] overflow-y-auto">
+                <button
+                  v-for="b in branches"
+                  :key="b"
+                  type="button"
+                  class="w-full flex items-center justify-between gap-2 px-2 py-[5px] rounded-[7px] border-0 text-left text-[12px] cursor-pointer transition-colors duration-120"
+                  :class="b === currentBranch ? 'bg-active text-ink fw-540' : 'bg-transparent text-ink-2 hover:bg-hover hover:text-ink'"
+                  :disabled="switchingBranch"
+                  @click="switchBranch(b)"
+                >
+                  <span class="font-mono truncate min-w-0">{{ b }}</span>
+                  <svg
+                    v-if="b === currentBranch"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    class="w-[13px] h-[13px] text-ok flex-none"
+                  >
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                </button>
+              </div>
+              <div v-else class="px-2 py-1.5 text-[11.5px] text-ink-3">
+                {{ gitFallbackRepo ? '重启服务后可切换分支' : '暂无本地分支' }}
+              </div>
+
+              <div class="h-[1px] bg-line -mx-1" />
+
+              <div v-if="creatingBranch" class="flex flex-col gap-1.5">
+                <div class="text-[11px] text-ink-3 px-0.5 truncate">
+                  基于 <code class="font-mono text-ink-2">{{ currentBranch }}</code> 新建分支
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <Input
+                    ref="newBranchInputRef"
+                    v-model:value="newBranchName"
+                    size="small"
+                    class="font-mono text-[11.5px] flex-1"
+                    placeholder="例如 feat/auth"
+                    :disabled="newBranchBusy"
+                    @press-enter="submitCreateBranch"
+                    @keydown.esc.stop="creatingBranch = false"
+                  />
+                  <button
+                    type="button"
+                    class="h-6 px-2.5 rounded-[6px] border-0 bg-ink-solid text-ink-inv text-[11.5px] fw-520 cursor-pointer flex-none transition-opacity duration-120 hover:not-disabled:opacity-88 disabled:opacity-45 disabled:cursor-not-allowed"
+                    :disabled="newBranchBusy || !newBranchName.trim()"
+                    @click="submitCreateBranch"
+                  >
+                    {{ newBranchBusy ? '创建中' : '创建' }}
+                  </button>
+                </div>
+              </div>
+              <button
+                v-else
+                type="button"
+                class="w-full flex items-center gap-1.5 px-2 py-[5px] rounded-[7px] border-0 bg-transparent text-ink-2 text-[12px] cursor-pointer transition-colors duration-120 hover:bg-hover hover:text-ink"
+                @click="startCreateBranch"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[13px] h-[13px] flex-none">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                <span>新建分支</span>
+              </button>
+            </div>
+          </template>
+
           <Tooltip
-            :title="worktreeMode ? `切换 Worktree 基准分支（当前：${currentBranch}）` : `切换 Git 分支（当前：${currentBranch}）`"
+            :title="`切换或新建 Git 分支（当前：${currentBranch}）`"
             :mouse-enter-delay="0.35"
           >
             <button
               class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-ink-2 text-[11.5px] cursor-pointer flex-[0_1_auto] min-w-0 max-w-[140px] transition-colors duration-140 hover:bg-surface-2 hover:border-line hover:text-ink disabled:opacity-60 disabled:cursor-wait"
-              :disabled="switchingBranch"
+              :disabled="switchingBranch || newBranchBusy"
             >
               <!-- Lucide GitBranch -->
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
@@ -1290,10 +1387,10 @@ defineExpose({ addFiles });
               </svg>
             </button>
           </Tooltip>
-        </Dropdown>
+        </Popover>
       </template>
 
-      <slot name="bar-extra" :is-git-repo="isGitRepo" :current-branch="currentBranch" />
+      <slot name="bar-extra" :is-git-repo="isGitRepo" :current-branch="currentBranch" :branches="branches" />
     </div>
 
     <input ref="inputFiles" type="file" multiple hidden @change="(e) => addFiles((e.target as HTMLInputElement).files!)" />

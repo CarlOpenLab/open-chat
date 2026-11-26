@@ -127,6 +127,34 @@
   font-size: 12.5px;
 }
 
+/* Harmonize Antdv Checkbox with monochrome ink palette (light & dark) */
+.ant-checkbox-wrapper {
+  align-items: center;
+  color: var(--text);
+}
+.ant-checkbox .ant-checkbox-inner {
+  border-radius: 4.5px !important;
+  border-width: 1.5px;
+  border-color: var(--border-strong);
+  background-color: transparent;
+  transition: background-color 0.14s var(--ease), border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
+}
+.ant-checkbox-wrapper:hover .ant-checkbox:not(.ant-checkbox-disabled) .ant-checkbox-inner,
+.ant-checkbox:not(.ant-checkbox-disabled):hover .ant-checkbox-inner {
+  border-color: var(--ink) !important;
+}
+.ant-checkbox-checked .ant-checkbox-inner,
+.ant-checkbox-wrapper:hover .ant-checkbox-checked:not(.ant-checkbox-disabled) .ant-checkbox-inner {
+  background-color: var(--ink) !important;
+  border-color: var(--ink) !important;
+}
+.ant-checkbox-checked .ant-checkbox-inner::after {
+  border-color: var(--ink-inv) !important;
+}
+.ant-checkbox-indeterminate .ant-checkbox-inner::after {
+  background-color: var(--ink) !important;
+}
+
 /* App sidebar collapse transition */
 .oc-sidebar-slot > .oc-sidebar {
   opacity: 1;

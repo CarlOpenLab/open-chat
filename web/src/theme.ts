@@ -47,6 +47,12 @@ export function antdThemeFor(dark: boolean) {
         dangerShadow: "none",
         primaryColor: dark ? "#0e1016" : "#ffffff",
       },
+      Checkbox: {
+        borderRadiusSM: 4,
+        colorWhite: dark ? "#0b0d13" : "#ffffff",
+        colorBorder: dark ? "rgba(255, 255, 255, 0.24)" : "rgba(15, 23, 42, 0.24)",
+        colorBgContainer: "transparent",
+      },
       Select: { optionSelectedFontWeight: 520 },
       Input: {
         hoverBorderColor: dark ? "rgba(255, 255, 255, 0.22)" : "rgba(15, 23, 42, 0.22)",

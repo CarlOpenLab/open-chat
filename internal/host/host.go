@@ -952,6 +952,27 @@ func (h *Host) gitCheckout(ctx context.Context, path, branch string) (GitInfo, e
 	return h.gitInfo(ctx, dir)
 }
 
+func (h *Host) gitCreateBranch(ctx context.Context, path, branch string) (GitInfo, error) {
+	dir := expandHome(strings.TrimSpace(path))
+	if dir == "" || !isDir(dir) {
+		return GitInfo{}, errors.New("工作目录不存在")
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" || strings.HasPrefix(branch, "-") {
+		return GitInfo{}, errors.New("无效的分支名")
+	}
+	if _, err := h.runGit(ctx, dir, "check-ref-format", "--branch", branch); err != nil {
+		return GitInfo{}, fmt.Errorf("分支名格式无效：%s", branch)
+	}
+	if _, err := h.runGit(ctx, dir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+		return GitInfo{}, fmt.Errorf("分支 %s 已存在", branch)
+	}
+	if _, err := h.runGit(ctx, dir, "checkout", "-b", branch); err != nil {
+		return GitInfo{}, fmt.Errorf("新建分支失败：%s", err.Error())
+	}
+	return h.gitInfo(ctx, dir)
+}
+
 func logf(format string, args ...any) { log.Printf("open-chat: "+format, args...) }
 
 var _ = runtime.GOOS

@@ -185,6 +185,11 @@ func (a *API) RemoveWorktree(ctx context.Context, id string, force, deleteBranch
 	return a.h.removeWorktree(context.WithoutCancel(ctx), id, force, deleteBranch)
 }
 
+// RemoveWorktreeByPath removes any linked git worktree directly by its directory path.
+func (a *API) RemoveWorktreeByPath(ctx context.Context, wtPath string, deleteBranch bool) error {
+	return a.h.removeWorktreeByPath(context.WithoutCancel(ctx), wtPath, deleteBranch)
+}
+
 // Open returns a conversation's transcript and live state.
 func (a *API) Open(id string) (Conversation, error) {
 	m, ok := a.h.store.meta(id)
@@ -348,6 +353,11 @@ func (a *API) GitInfo(ctx context.Context, path string) (GitInfo, error) {
 // GitCheckout switches the git repository at path to branch and returns updated info.
 func (a *API) GitCheckout(ctx context.Context, path, branch string) (GitInfo, error) {
 	return a.h.gitCheckout(ctx, path, branch)
+}
+
+// GitCreateBranch creates a new local branch at HEAD in path, checks it out, and returns updated info.
+func (a *API) GitCreateBranch(ctx context.Context, path, branch string) (GitInfo, error) {
+	return a.h.gitCreateBranch(ctx, path, branch)
 }
 
 // PickFolder shows the system's folder dialog; "" when canceled or unavailable.

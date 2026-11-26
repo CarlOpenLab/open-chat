@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { Tooltip, message } from "antdv-next";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { ILink, ILinkProvider } from "@xterm/xterm";
 import { api, inApp } from "../api";
 import { isDark, onTermExit, onTermOut, openWorkspaceFile } from "../store";
@@ -17,13 +17,14 @@ const props = defineProps<{
 interface TabItem {
   id: string;
   cwd: string;
+  shell?: string;
   title: string;
   exited: boolean;
   exitCode?: number;
 }
 
 const tabs = ref<TabItem[]>([]);
-const activeByCwd = ref<Record<string, string>>({});
+const activeId = ref("");
 const creating = ref(false);
 
 const stageRef = ref<HTMLElement | null>(null);
@@ -46,13 +47,12 @@ let lastStageH = 0;
 let offOut: (() => void) | null = null;
 let offExit: (() => void) | null = null;
 
-const cwdTabs = computed(() => tabs.value.filter((t) => t.cwd === props.cwd));
-const activeId = computed({
-  get: () => activeByCwd.value[props.cwd] ?? cwdTabs.value[0]?.id ?? "",
-  set: (id: string) => {
-    activeByCwd.value = { ...activeByCwd.value, [props.cwd]: id };
-  },
-});
+function folderLabel(cwd: string, fallback: string): string {
+  const clean = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!clean) return fallback;
+  const last = clean.split("/").filter(Boolean).pop();
+  return last || clean;
+}
 
 function termTheme(dark: boolean) {
   if (dark) {
@@ -416,11 +416,14 @@ async function createTerminal() {
   if (creating.value) return;
   creating.value = true;
   try {
-    const info = await api.termCreate(props.cwd, 80, 24);
-    const n = (seqByCwd[props.cwd] ?? 0) + 1;
-    seqByCwd[props.cwd] = n;
-    const label = `${info.shell || "shell"} ${n}`;
-    tabs.value = [...tabs.value, { id: info.id, cwd: props.cwd, title: label, exited: false }];
+    const targetCwd = props.cwd;
+    const info = await api.termCreate(targetCwd, 80, 24);
+    const dir = info.cwd || targetCwd;
+    const base = folderLabel(dir, info.shell || "shell");
+    const n = (seqByCwd[dir] ?? 0) + 1;
+    seqByCwd[dir] = n;
+    const label = n === 1 ? base : `${base} ${n}`;
+    tabs.value = [...tabs.value, { id: info.id, cwd: dir, shell: info.shell, title: label, exited: false }];
     activeId.value = info.id;
     await nextTick();
     ensureMounted(info.id);
@@ -436,7 +439,7 @@ async function createTerminal() {
 }
 
 async function closeTerminal(id: string) {
-  const target = tabs.value.find((t) => t.id === id);
+  const idx = tabs.value.findIndex((t) => t.id === id);
   tabs.value = tabs.value.filter((t) => t.id !== id);
   const inst = instances.get(id);
   if (inst) {
@@ -450,9 +453,9 @@ async function closeTerminal(id: string) {
   lastWriteAt.delete(id);
   inputQueues.delete(id);
   inputScheduled.delete(id);
-  if (target && activeByCwd.value[target.cwd] === id) {
-    const next = tabs.value.find((t) => t.cwd === target.cwd);
-    activeByCwd.value = { ...activeByCwd.value, [target.cwd]: next?.id ?? "" };
+  if (activeId.value === id) {
+    const next = tabs.value[Math.min(idx, tabs.value.length - 1)];
+    activeId.value = next?.id ?? "";
   }
   await api.termClose(id).catch(() => {});
   if (activeId.value) {
@@ -478,10 +481,10 @@ function selectTab(id: string) {
 }
 
 watch(
-  () => [props.visible, props.cwd] as const,
-  async ([vis]) => {
+  () => props.visible,
+  async (vis) => {
     if (!vis) return;
-    if (cwdTabs.value.length === 0) {
+    if (tabs.value.length === 0) {
       await createTerminal();
       return;
     }
@@ -545,7 +548,7 @@ defineExpose({ createTerminal });
     <div class="flex-none flex items-center gap-[6px] px-2 py-[6px] border-0 border-b border-solid border-line bg-surface-2">
       <div class="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto">
         <button
-          v-for="tab in cwdTabs"
+          v-for="tab in tabs"
           :key="tab.id"
           type="button"
           class="inline-flex items-center gap-[6px] h-6 pl-2 pr-[7px] rounded-[6px] border border-solid text-[11.5px] cursor-pointer flex-none transition-colors duration-120"
@@ -554,6 +557,7 @@ defineExpose({ createTerminal });
               ? 'bg-surface-strong border-line text-ink'
               : 'border-transparent bg-transparent text-ink-3 hover:bg-hover hover:text-ink-2'
           "
+          :title="tab.shell ? `${tab.cwd} (${tab.shell})` : tab.cwd"
           @click="selectTab(tab.id)"
         >
           <span
@@ -598,12 +602,12 @@ defineExpose({ createTerminal });
       <div
         v-for="tab in tabs"
         :key="tab.id"
-        v-show="tab.cwd === props.cwd && tab.id === activeId"
+        v-show="tab.id === activeId"
         :ref="(el) => setMountRef(tab.id, el)"
         class="oc-term-mount w-full h-full"
       />
-      <div v-if="cwdTabs.length === 0 && !creating" class="absolute inset-0 flex flex-col items-center justify-center gap-[10px] text-[12.5px]">
-        <span class="text-ink-3">当前项目还没有打开终端</span>
+      <div v-if="tabs.length === 0 && !creating" class="absolute inset-0 flex flex-col items-center justify-center gap-[10px] text-[12.5px]">
+        <span class="text-ink-3">还没有打开终端</span>
         <button
           type="button"
           class="inline-flex items-center gap-[5px] h-7 px-3 rounded-[8px] border border-solid border-line-strong bg-surface text-ink text-[12px] cursor-pointer transition-colors duration-120 hover:bg-surface-strong"

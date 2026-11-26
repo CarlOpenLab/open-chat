@@ -390,6 +390,49 @@ func (h *Host) parsePorcelainFiles(ctx context.Context, dir string) []WorktreeFi
 	return files
 }
 
+
+func (h *Host) worktreeMergeBase(ctx context.Context, wtDir, baseBranch string) string {
+	base := strings.TrimSpace(baseBranch)
+	if base == "" {
+		return "HEAD"
+	}
+	if mb, err := h.runGit(ctx, wtDir, "merge-base", base, "HEAD"); err == nil && mb != "" {
+		return mb
+	}
+	return base
+}
+
+func (h *Host) parseDiffNameStatus(ctx context.Context, dir, baseRef string) []WorktreeFileChange {
+	out, err := h.runGit(ctx, dir, "diff", "--name-status", baseRef)
+	if err != nil || out == "" {
+		return []WorktreeFileChange{}
+	}
+	files := []WorktreeFileChange{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) < 2 {
+			continue
+		}
+		code := parts[0]
+		p := parts[len(parts)-1]
+		st := "M"
+		switch {
+		case strings.HasPrefix(code, "A"):
+			st = "A"
+		case strings.HasPrefix(code, "D"):
+			st = "D"
+		case strings.HasPrefix(code, "R"):
+			st = "R"
+		}
+		files = append(files, WorktreeFileChange{Path: p, Status: st})
+	}
+	return files
+}
+
 func (h *Host) worktreeStatus(ctx context.Context, id string) (WorktreeStatus, error) {
 	m, ok := h.store.meta(id)
 	if !ok {
@@ -414,7 +457,7 @@ func (h *Host) worktreeStatus(ctx context.Context, id string) (WorktreeStatus, e
 	if cur, err := h.runGit(ctx, m.Cwd, "symbolic-ref", "--short", "HEAD"); err == nil && cur != "" {
 		branch = cur
 	}
-	files := h.parsePorcelainFiles(ctx, m.Cwd)
+	uncommitted := h.parsePorcelainFiles(ctx, m.Cwd)
 	ahead := 0
 	if baseBranch != "" {
 		if cntStr, err := h.runGit(ctx, m.Cwd, "rev-list", "--count", baseBranch+"..HEAD"); err == nil {
@@ -423,9 +466,28 @@ func (h *Host) worktreeStatus(ctx context.Context, id string) (WorktreeStatus, e
 			}
 		}
 	}
+	// Combine committed changes (relative to merge-base) and uncommitted/untracked files
+	// so the user always sees every file that will be applied to the main repo.
+	seen := map[string]int{}
+	files := []WorktreeFileChange{}
+	if baseBranch != "" {
+		mb := h.worktreeMergeBase(ctx, m.Cwd, baseBranch)
+		for _, f := range h.parseDiffNameStatus(ctx, m.Cwd, mb) {
+			seen[f.Path] = len(files)
+			files = append(files, f)
+		}
+	}
+	for _, f := range uncommitted {
+		if idx, exists := seen[f.Path]; exists {
+			files[idx] = f
+		} else {
+			seen[f.Path] = len(files)
+			files = append(files, f)
+		}
+	}
 	return WorktreeStatus{
 		Exists:       true,
-		Dirty:        len(files) > 0,
+		Dirty:        len(uncommitted) > 0,
 		ChangedCount: len(files),
 		AheadCount:   ahead,
 		Branch:       branch,
@@ -434,26 +496,58 @@ func (h *Host) worktreeStatus(ctx context.Context, id string) (WorktreeStatus, e
 	}, nil
 }
 
+func sameOrSubPath(target, base string) bool {
+	cTarget := filepath.Clean(target)
+	cBase := filepath.Clean(base)
+	if r, err := filepath.EvalSymlinks(cTarget); err == nil {
+		cTarget = r
+	}
+	if r, err := filepath.EvalSymlinks(cBase); err == nil {
+		cBase = r
+	}
+	if cTarget == cBase {
+		return true
+	}
+	return strings.HasPrefix(cTarget, cBase+string(os.PathSeparator))
+}
+
 func (h *Host) closeConversationHandles(id, cwd string) {
+	idsToClose := map[string]bool{}
+	if id != "" {
+		idsToClose[id] = true
+	}
+	if cwd != "" {
+		for _, m := range h.store.list() {
+			if m.Worktree && sameOrSubPath(m.Cwd, cwd) {
+				idsToClose[m.ID] = true
+			}
+		}
+	}
+	var liveIDs []string
 	h.liveMu.Lock()
-	_, wasLive := h.lives[id]
-	delete(h.lives, id)
+	for cid := range idsToClose {
+		if _, wasLive := h.lives[cid]; wasLive {
+			delete(h.lives, cid)
+			liveIDs = append(liveIDs, cid)
+		}
+	}
 	h.liveMu.Unlock()
-	if wasLive {
+	if len(liveIDs) > 0 {
 		if sc, err := h.sidecar(); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = sc.call(ctx, "close", map[string]any{"key": id}, nil)
-			cancel()
+			for _, cid := range liveIDs {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = sc.call(ctx, "close", map[string]any{"key": cid}, nil)
+				cancel()
+			}
 		}
 	}
 	if cwd == "" {
 		return
 	}
-	cleanCwd := filepath.Clean(cwd)
 	h.termMu.Lock()
 	var toClose []string
 	for tid, term := range h.terms {
-		if filepath.Clean(term.cwd) == cleanCwd {
+		if sameOrSubPath(term.cwd, cwd) {
 			toClose = append(toClose, tid)
 		}
 	}
@@ -462,6 +556,7 @@ func (h *Host) closeConversationHandles(id, cwd string) {
 		_ = h.termClose(tid)
 	}
 }
+
 
 // mergeWorktree merges a worktree conversation's changes back into its base branch
 // in the source repository (supporting "merge" and "squash" strategies), and
@@ -585,54 +680,90 @@ func (h *Host) removeWorktree(ctx context.Context, id string, force, deleteBranc
 			return fmt.Errorf("Worktree 有 %d 处未提交更改，请先提交或勾选强制清理", st.ChangedCount)
 		}
 	}
+	return h.removeWorktreePathInternal(ctx, id, m.Cwd, m.WorktreeRepo, m.WorktreeBranch, force, deleteBranch)
+}
 
-	h.closeConversationHandles(id, m.Cwd)
+// removeWorktreeByPath removes any linked git worktree directly by its path (including
+// orphan worktrees whose conversations were already deleted) and updates any linked chats.
+func (h *Host) removeWorktreeByPath(ctx context.Context, wtPath string, deleteBranch bool) error {
+	wtPath = expandHome(strings.TrimSpace(wtPath))
+	if wtPath == "" {
+		return errors.New("Worktree 路径不能为空")
+	}
+	wtPath = filepath.Clean(wtPath)
+	var repo, branch string
+	if isDir(wtPath) {
+		mainRepo, err := h.resolveMainGitRepo(ctx, wtPath)
+		if err != nil {
+			return err
+		}
+		if sameOrSubPath(mainRepo, wtPath) && sameOrSubPath(wtPath, mainRepo) {
+			return errors.New("不能删除主仓库目录")
+		}
+		repo = mainRepo
+		branch, _ = h.runGit(ctx, wtPath, "symbolic-ref", "--short", "HEAD")
+	}
+	return h.removeWorktreePathInternal(ctx, "", wtPath, repo, branch, true, deleteBranch)
+}
 
-	repo := m.WorktreeRepo
-	if repo == "" && isDir(m.Cwd) {
-		repo, _ = h.resolveMainGitRepo(ctx, m.Cwd)
+func (h *Host) removeWorktreePathInternal(ctx context.Context, primaryID, wtPath, repo, branch string, force, deleteBranch bool) error {
+	h.closeConversationHandles(primaryID, wtPath)
+
+	if repo == "" && isDir(wtPath) {
+		repo, _ = h.resolveMainGitRepo(ctx, wtPath)
+	}
+	if branch == "" && isDir(wtPath) {
+		branch, _ = h.runGit(ctx, wtPath, "symbolic-ref", "--short", "HEAD")
 	}
 
 	if repo != "" && isDir(repo) {
-		if isDir(m.Cwd) {
+		if isDir(wtPath) {
 			args := []string{"worktree", "remove"}
 			if force {
 				args = append(args, "--force")
 			}
-			args = append(args, m.Cwd)
+			args = append(args, wtPath)
 			if _, err := h.runGit(ctx, repo, args...); err != nil {
 				if !force {
 					return fmt.Errorf("移除 Worktree 失败：%w", err)
 				}
-				_ = os.RemoveAll(m.Cwd)
+				if rerr := os.RemoveAll(wtPath); rerr != nil {
+					return fmt.Errorf("删除 Worktree 目录失败：%w", rerr)
+				}
 			}
 		}
 		_, _ = h.runGit(ctx, repo, "worktree", "prune")
-		if deleteBranch && m.WorktreeBranch != "" {
+		if deleteBranch && branch != "" && branch != "HEAD" {
 			flag := "-d"
 			if force {
 				flag = "-D"
 			}
-			_, _ = h.runGit(ctx, repo, "branch", flag, m.WorktreeBranch)
+			_, _ = h.runGit(ctx, repo, "branch", flag, branch)
 		}
-	} else if isDir(m.Cwd) {
-		if err := os.RemoveAll(m.Cwd); err != nil {
+	} else if isDir(wtPath) {
+		if err := os.RemoveAll(wtPath); err != nil {
 			return fmt.Errorf("清理目录失败：%w", err)
 		}
 	}
 
-	// Keep the conversation valid if the user cleaned up the worktree without deleting the chat.
-	if updated, ok := h.store.update(id, func(mm *Meta) {
-		if repo != "" && isDir(repo) {
-			mm.Cwd = repo
+	// Keep all conversations attached to this worktree valid by pointing them back to the source repo.
+	for _, m := range h.store.list() {
+		if m.ID == primaryID || (m.Worktree && sameOrSubPath(m.Cwd, wtPath)) {
+			if updated, ok := h.store.update(m.ID, func(mm *Meta) {
+				if repo != "" && isDir(repo) {
+					mm.Cwd = repo
+				} else if mm.WorktreeRepo != "" && isDir(mm.WorktreeRepo) {
+					mm.Cwd = mm.WorktreeRepo
+				}
+				mm.Worktree = false
+				mm.WorktreeRepo = ""
+				mm.WorktreeBranch = ""
+				mm.WorktreeBase = ""
+			}); ok {
+				h.pushMeta(updated)
+				h.pushLive(m.ID)
+			}
 		}
-		mm.Worktree = false
-		mm.WorktreeRepo = ""
-		mm.WorktreeBranch = ""
-		mm.WorktreeBase = ""
-	}); ok {
-		h.pushMeta(updated)
-		h.pushLive(id)
 	}
 	return nil
 }
