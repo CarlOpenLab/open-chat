@@ -424,9 +424,30 @@ async function migrateLegacyArchives() {
   }
 }
 
+const PUSH_UNSUB_KEY = Symbol.for("open-chat.pushUnsub");
+
+function clearPushSubscription() {
+  const g = globalThis as Record<PropertyKey, unknown>;
+  const prev = g[PUSH_UNSUB_KEY];
+  if (typeof prev === "function") {
+    try {
+      (prev as () => void)();
+    } catch {
+      /* ignore teardown errors */
+    }
+    delete g[PUSH_UNSUB_KEY];
+  }
+}
+
+export function dispose() {
+  clearPushSubscription();
+}
+
 export async function init() {
   initNotifications();
-  subscribe(onPush, () => void reload().catch(() => {}));
+  clearPushSubscription();
+  const unsub = subscribe(onPush, () => void reload().catch(() => {}));
+  (globalThis as Record<PropertyKey, unknown>)[PUSH_UNSUB_KEY] = unsub;
   try {
     await reload();
     await migrateLegacyArchives();
@@ -438,6 +459,12 @@ export async function init() {
   } catch (e) {
     store.bootError = e instanceof Error ? e.message : String(e);
   }
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    clearPushSubscription();
+  });
 }
 
 export async function refreshAgents() {
@@ -612,6 +639,12 @@ export interface WorktreeLaunchOptions {
   existingPath?: string;
 }
 
+const startingIds = new Set<string>();
+
+export function isStarting(id: string | undefined): boolean {
+  return Boolean(id && startingIds.has(id));
+}
+
 export async function start(
   agentId: string,
   cwd: string,
@@ -624,30 +657,42 @@ export async function start(
       ? await api.attachWorktree(agentId, worktree.existingPath)
       : await api.createWorktree(agentId, cwd, worktree.baseBranch ?? "", worktree.branchName ?? "")
     : await api.create(agentId, cwd);
-  store.metas[meta.id] = meta;
-  store.transcripts[meta.id] = emptyTranscript();
-  store.lives[meta.id] = { ...idleLive(), status: "connecting" };
-  await select(meta.id);
-  if (blocks.length || (initialModel?.configId && initialModel.value)) {
-    try {
-      const live = await api.connect(meta.id);
-      if (initialModel?.configId && initialModel.value) {
-        await api.setConfig(meta.id, initialModel.configId, initialModel.value).catch(() => {});
-      }
-      if (!isPiAgent(agentId)) {
-        const target = resolvePermissionTarget(currentPermissionMode(), live);
-        if (target?.kind === "mode") {
-          await api.setMode(meta.id, target.modeId).catch(() => {});
-        } else if (target?.kind === "config") {
-          await api.setConfig(meta.id, target.configId, target.value).catch(() => {});
-        }
-      }
-    } catch {
-      /* fall back to agent defaults if pre-connect fails */
+  startingIds.add(meta.id);
+  try {
+    if (!store.metas[meta.id]) store.metas[meta.id] = meta;
+    if (!store.transcripts[meta.id]) store.transcripts[meta.id] = emptyTranscript();
+    const existingLive = store.lives[meta.id];
+    if (!existingLive || existingLive.status === "idle") {
+      store.lives[meta.id] = { ...idleLive(), status: "connecting" };
     }
+    await select(meta.id);
+    if (blocks.length || (initialModel?.configId && initialModel.value)) {
+      try {
+        const live = await api.connect(meta.id);
+        if (store.lives[meta.id]?.status !== "running") {
+          store.lives[meta.id] = live;
+          captureModels(meta.agentId, live.configOptions);
+        }
+        if (initialModel?.configId && initialModel.value) {
+          await api.setConfig(meta.id, initialModel.configId, initialModel.value).catch(() => {});
+        }
+        if (!isPiAgent(agentId)) {
+          const target = resolvePermissionTarget(currentPermissionMode(), live);
+          if (target?.kind === "mode") {
+            await api.setMode(meta.id, target.modeId).catch(() => {});
+          } else if (target?.kind === "config") {
+            await api.setConfig(meta.id, target.configId, target.value).catch(() => {});
+          }
+        }
+      } catch {
+        /* fall back to agent defaults if pre-connect fails */
+      }
+    }
+    if (blocks.length) await send(meta.id, blocks);
+    return meta;
+  } finally {
+    startingIds.delete(meta.id);
   }
-  if (blocks.length) await send(meta.id, blocks);
-  return meta;
 }
 
 const steerPending = new Set<string>();

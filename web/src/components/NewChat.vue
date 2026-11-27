@@ -197,6 +197,7 @@ const projectTitle = computed(() => {
 });
 
 async function send(blocks: Block[]) {
+  if (busy.value) return;
   if (!current.value) {
     message.warning("先在输入框右下角选择一个 ACP 供应商");
     return;

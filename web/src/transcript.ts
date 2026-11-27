@@ -80,6 +80,7 @@ function applyOne(tr: Transcript, e: HostEvent): void {
   const t = e.t ?? Date.now();
   switch (e.type) {
     case "user_message": {
+      if (e.id && tr.turns.some((turn) => turn.id === e.id)) return;
       const prev = tr.turns[tr.turns.length - 1];
       if (prev && !prev.end) {
         closeThought(prev, t);

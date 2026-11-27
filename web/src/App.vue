@@ -9,7 +9,7 @@ import NewChat from "./components/NewChat.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import WorkspacePanel from "./components/WorkspacePanel.vue";
 import { api, inApp } from "./api";
-import { activeWorkspaceCwd, init, isDark, newConversation, openWorkspaceFile, store, themeBackground } from "./store";
+import { activeWorkspaceCwd, dispose, init, isDark, newConversation, openWorkspaceFile, store, themeBackground } from "./store";
 import { antdThemeFor } from "./theme";
 
 const theme = computed(() => antdThemeFor(isDark.value, themeBackground.value === "solid"));
@@ -142,6 +142,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("click", onLinkClick, true);
   window.removeEventListener("pointerdown", closeCtxMenu);
   window.removeEventListener("blur", closeCtxMenu);
+  dispose();
 });
 </script>
 

@@ -6,7 +6,7 @@ type SlotConfigType = NonNullable<SenderProps["slotConfig"]>[number];
 import { Dropdown, Input, Popover, Tooltip, message } from "antdv-next";
 import { computed, h, nextTick, ref, watch } from "vue";
 import { api } from "../api";
-import { resolvePermissionTarget, saveSettings, store, type PermissionMode, type QueuedMessage } from "../store";
+import { isStarting, resolvePermissionTarget, saveSettings, store, type PermissionMode, type QueuedMessage } from "../store";
 import { userText } from "../transcript";
 import type { Block, ConfigOption, GitInfo, LiveState, PermissionOption, SkillInfo } from "../types";
 import ProviderPicker from "./ProviderPicker.vue";
@@ -197,7 +197,7 @@ watch(
     props.live.configOptions?.length ?? 0,
   ],
   ([convId, status]) => {
-    if (convId && status === "ready") {
+    if (convId && status === "ready" && !isStarting(String(convId))) {
       syncPermissionModeToAgent(effectivePerm.value);
     }
   },

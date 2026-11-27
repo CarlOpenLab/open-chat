@@ -2,20 +2,44 @@ import { onWindowActive, windowActive } from "mygo-runtime";
 import { api, inApp } from "./api";
 import type { Meta, Settings } from "./types";
 
+const WIN_ACTIVE_UNSUB_KEY = Symbol.for("open-chat.winActiveUnsub");
+
 let winFocused = typeof document !== "undefined" ? !document.hidden && document.hasFocus() : true;
 let initialized = false;
+
+function clearWindowActiveSubscription() {
+  const g = globalThis as Record<PropertyKey, unknown>;
+  const prev = g[WIN_ACTIVE_UNSUB_KEY];
+  if (typeof prev === "function") {
+    try {
+      (prev as () => void)();
+    } catch {
+      /* ignore teardown errors */
+    }
+    delete g[WIN_ACTIVE_UNSUB_KEY];
+  }
+}
 
 export function initNotifications() {
   if (initialized || !inApp) return;
   initialized = true;
+  clearWindowActiveSubscription();
   try {
     winFocused = windowActive();
-    onWindowActive((active) => {
+    const unsub = onWindowActive((active) => {
       winFocused = active;
     });
+    (globalThis as Record<PropertyKey, unknown>)[WIN_ACTIVE_UNSUB_KEY] = unsub;
   } catch {
     /* ignore if runtime bridge is unavailable */
   }
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    initialized = false;
+    clearWindowActiveSubscription();
+  });
 }
 
 export function isWindowFocused(): boolean {
