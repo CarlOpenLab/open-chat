@@ -70,7 +70,7 @@ func TestWorktreeLifecycleAndInclude(t *testing.T) {
 	h, repoDir := setupTestGitRepo(t)
 	ctx := context.Background()
 
-	m, err := h.createWithWorktree(ctx, "codebuddy", repoDir, "main", "wt/test-feature")
+	m, err := h.createWithWorktree(ctx, "codebuddy", repoDir, "main", "wt/test-feature", false)
 	if err != nil {
 		t.Fatalf("createWithWorktree failed: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestRemoveWorktreeByPath(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a worktree, delete the conversation directly (leaving an orphan), then remove by path.
-	m, err := h.createWithWorktree(ctx, "codebuddy", repoDir, "main", "wt/orphan-demo")
+	m, err := h.createWithWorktree(ctx, "codebuddy", repoDir, "main", "wt/orphan-demo", false)
 	if err != nil {
 		t.Fatalf("createWithWorktree failed: %v", err)
 	}
@@ -134,5 +134,120 @@ func TestRemoveWorktreeByPath(t *testing.T) {
 	list, err := h.listWorktrees(ctx, repoDir)
 	if err != nil || len(list) != 0 {
 		t.Fatalf("expected 0 worktrees left, got %+v err=%v", list, err)
+	}
+}
+
+func TestWorktreeWithoutNewBranch(t *testing.T) {
+	h, repoDir := setupTestGitRepo(t)
+	ctx := context.Background()
+
+	// Create an unchecked-out local branch.
+	if _, err := h.runGit(ctx, repoDir, "branch", "feat/existing"); err != nil {
+		t.Fatalf("git branch failed: %v", err)
+	}
+
+	// 1. On already-checked-out base ("main"): creates detached HEAD without adding any branch.
+	mDetached, err := h.createWithWorktree(ctx, "codebuddy", repoDir, "main", "", true)
+	if err != nil {
+		t.Fatalf("createWithWorktree detach on main failed: %v", err)
+	}
+	if !mDetached.Worktree || mDetached.WorktreeBranch != "" || mDetached.WorktreeBase != "main" {
+		t.Fatalf("expected detached worktree meta, got %+v", mDetached)
+	}
+
+	// 2. On unchecked-out local branch ("feat/existing"): checks it out directly without creating a new branch.
+	mDirect, err := h.createWithWorktree(ctx, "codebuddy", repoDir, "feat/existing", "", true)
+	if err != nil {
+		t.Fatalf("createWithWorktree detach on feat/existing failed: %v", err)
+	}
+	if !mDirect.Worktree || mDirect.WorktreeBranch != "feat/existing" || mDirect.WorktreeBase != "feat/existing" {
+		t.Fatalf("expected direct branch checkout meta, got %+v", mDirect)
+	}
+
+	// Verify no extra branches were created.
+	info, err := h.gitInfo(ctx, repoDir)
+	if err != nil {
+		t.Fatalf("gitInfo failed: %v", err)
+	}
+	if len(info.Branches) != 2 {
+		t.Fatalf("expected exactly 2 branches (main, feat/existing), got %v", info.Branches)
+	}
+}
+
+func TestWorktreeStatusSingleModifiedFileNotDuplicated(t *testing.T) {
+	h, repoDir := setupTestGitRepo(t)
+	ctx := context.Background()
+
+	m, err := h.createWithWorktree(ctx, "codebuddy", repoDir, "main", "", true)
+	if err != nil {
+		t.Fatalf("createWithWorktree failed: %v", err)
+	}
+	// Modify an existing tracked dotfile without staging (" M .gitignore").
+	if err := os.WriteFile(filepath.Join(m.Cwd, ".gitignore"), []byte(".env.local\n*.log\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := h.worktreeStatus(ctx, m.ID)
+	if err != nil {
+		t.Fatalf("worktreeStatus failed: %v", err)
+	}
+	if !st.Dirty || st.ChangedCount != 1 || len(st.ChangedFiles) != 1 {
+		t.Fatalf("expected exactly 1 changed file, got count=%d files=%+v", st.ChangedCount, st.ChangedFiles)
+	}
+	if st.ChangedFiles[0].Path != ".gitignore" || st.ChangedFiles[0].Status != "M" {
+		t.Fatalf("expected M .gitignore, got %+v", st.ChangedFiles[0])
+	}
+}
+
+func TestGitDeleteBranch(t *testing.T) {
+	h, repoDir := setupTestGitRepo(t)
+	ctx := context.Background()
+
+	// Create a merged branch and delete it normally.
+	if _, err := h.runGit(ctx, repoDir, "branch", "feat/merged"); err != nil {
+		t.Fatalf("git branch failed: %v", err)
+	}
+	info, err := h.gitDeleteBranch(ctx, repoDir, "feat/merged", false)
+	if err != nil {
+		t.Fatalf("delete merged branch failed: %v", err)
+	}
+	for _, b := range info.Branches {
+		if b == "feat/merged" {
+			t.Fatalf("expected feat/merged to be deleted, still in %v", info.Branches)
+		}
+	}
+
+	// Deleting the currently checked-out branch must fail.
+	if _, err := h.gitDeleteBranch(ctx, repoDir, "main", false); err == nil {
+		t.Fatalf("expected error deleting current branch main")
+	}
+
+	// Create an unmerged branch: safe delete fails, force delete succeeds.
+	if _, err := h.gitCreateBranch(ctx, repoDir, "feat/unmerged"); err != nil {
+		t.Fatalf("gitCreateBranch failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "extra.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.runGit(ctx, repoDir, "add", "extra.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.runGit(ctx, repoDir, "commit", "-m", "unmerged work"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.gitCheckout(ctx, repoDir, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.gitDeleteBranch(ctx, repoDir, "feat/unmerged", false); err == nil {
+		t.Fatalf("expected safe delete of unmerged branch to fail")
+	}
+	info, err = h.gitDeleteBranch(ctx, repoDir, "feat/unmerged", true)
+	if err != nil {
+		t.Fatalf("force delete of unmerged branch failed: %v", err)
+	}
+	for _, b := range info.Branches {
+		if b == "feat/unmerged" {
+			t.Fatalf("expected feat/unmerged to be force-deleted, still in %v", info.Branches)
+		}
 	}
 }

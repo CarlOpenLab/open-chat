@@ -39,6 +39,7 @@ watch(
       local.value.customAgents = local.value.customAgents ?? [];
       local.value.recentDirs = local.value.recentDirs ?? [];
       local.value.themeBackground = local.value.themeBackground === "solid" ? "solid" : "acrylic";
+      local.value.conversationGroupBy = local.value.conversationGroupBy === "project" ? "project" : "time";
       store.themePreview = null;
       editingCmd.value = {};
       void refreshAgents();
@@ -899,6 +900,39 @@ function toggleCmdEditor(id: string) {
 
       <Tabs.TabPane key="general" tab="偏好">
         <div v-if="local" class="flex flex-col gap-2 max-h-[min(54dvh,420px)] overflow-y-auto py-[2px] pr-[2px]">
+          <section class="flex items-center gap-[14px] py-[10px] border-0 border-b border-solid border-line last-of-type:border-b-0">
+            <div class="flex-1 min-w-0">
+              <div class="text-[13px] fw-530">会话分组方式</div>
+              <div class="text-[11.5px] text-ink-3 mt-[1px]">侧栏对话列表按时间分段，或按所属项目目录归类展示</div>
+            </div>
+            <div class="inline-flex items-center gap-[2px] p-[3px] rounded-[9px] bg-hover border border-solid border-line-strong flex-none" role="radiogroup" aria-label="会话分组方式">
+              <button
+                type="button"
+                class="h-[26px] px-[11px] border-0 rounded-[6px] text-[12px] cursor-pointer whitespace-nowrap transition-all duration-160 ease-oc"
+                :class="
+                  local.conversationGroupBy !== 'project'
+                    ? 'bg-ink-solid text-ink-inv fw-580 shadow-[0_1px_4px_rgba(0,0,0,0.24)]'
+                    : 'bg-transparent text-ink-2 font-medium hover:text-ink hover:bg-surface-2'
+                "
+                @click="local.conversationGroupBy = 'time'"
+              >
+                按时间
+              </button>
+              <button
+                type="button"
+                class="h-[26px] px-[11px] border-0 rounded-[6px] text-[12px] cursor-pointer whitespace-nowrap transition-all duration-160 ease-oc"
+                :class="
+                  local.conversationGroupBy === 'project'
+                    ? 'bg-ink-solid text-ink-inv fw-580 shadow-[0_1px_4px_rgba(0,0,0,0.24)]'
+                    : 'bg-transparent text-ink-2 font-medium hover:text-ink hover:bg-surface-2'
+                "
+                @click="local.conversationGroupBy = 'project'"
+              >
+                按项目
+              </button>
+            </div>
+          </section>
+
           <section class="flex items-center gap-[14px] py-[10px] border-0 border-b border-solid border-line last-of-type:border-b-0">
             <div class="flex-1 min-w-0">
               <div class="text-[13px] fw-530">发送快捷键</div>

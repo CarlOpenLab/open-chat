@@ -51,8 +51,8 @@ export const api = {
   probeModels: (agentId: string, cwd: string) => call<ConfigOption[]>("ProbeModels", agentId, cwd),
   refreshModels: (agentId: string, cwd: string) => call<ConfigOption[]>("RefreshModels", agentId, cwd),
   create: (agentId: string, cwd: string) => call<Meta>("Create", agentId, cwd),
-  createWorktree: (agentId: string, repoDir: string, baseBranch = "", branchName = "") =>
-    call<Meta>("CreateWorktree", agentId, repoDir, baseBranch, branchName),
+  createWorktree: (agentId: string, repoDir: string, baseBranch = "", branchName = "", detach = false) =>
+    call<Meta>("CreateWorktree", agentId, repoDir, baseBranch, branchName, detach),
   attachWorktree: (agentId: string, wtPath: string) => call<Meta>("AttachWorktree", agentId, wtPath),
   listWorktrees: (repoDir: string) => call<WorktreeInfo[]>("ListWorktrees", repoDir),
   worktreeStatus: (id: string) => call<WorktreeStatus>("WorktreeStatus", id),
@@ -60,7 +60,7 @@ export const api = {
     call<void>("MergeWorktree", id, strategy, commitMsg, cleanup),
   removeWorktree: (id: string, force = false, deleteBranch = false) =>
     call<void>("RemoveWorktree", id, force, deleteBranch),
-  removeWorktreeByPath: (wtPath: string, deleteBranch = true) =>
+  removeWorktreeByPath: (wtPath: string, deleteBranch = false) =>
     call<void>("RemoveWorktreeByPath", wtPath, deleteBranch),
   open: (id: string) => call<Conversation>("Open", id),
   connect: (id: string) => call<LiveState>("Connect", id),
@@ -79,6 +79,7 @@ export const api = {
   gitInfo: (path: string) => call<GitInfo>("GitInfo", path),
   gitCheckout: (path: string, branch: string) => call<GitInfo>("GitCheckout", path, branch),
   gitCreateBranch: (path: string, branch: string) => call<GitInfo>("GitCreateBranch", path, branch),
+  gitDeleteBranch: (path: string, branch: string, force = false) => call<GitInfo>("GitDeleteBranch", path, branch, force),
   pickFolder: () => call<string>("PickFolder"),
   reveal: (path: string) => call<void>("Reveal", path),
   openLink: (target: string, cwd: string) => call<void>("OpenLink", target, cwd),

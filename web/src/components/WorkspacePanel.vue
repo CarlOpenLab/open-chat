@@ -962,7 +962,7 @@ async function refreshFiles() {
           <button
             type="button"
             class="inline-grid place-items-center w-[26px] h-[26px] border-0 rounded-[7px] bg-transparent text-ink-3 cursor-pointer text-[13px] transition-colors duration-120 hover:not-disabled:bg-hover hover:not-disabled:text-ink disabled:opacity-45 disabled:cursor-not-allowed"
-            :disabled="loadingTree"
+            :disabled="loadingTree || !props.cwd"
             @click="refreshFiles"
           >
             <ReloadOutlined :spin="loadingTree" />
@@ -992,49 +992,58 @@ async function refreshFiles() {
     <div class="flex-1 min-h-0 flex flex-col">
       <!-- Files Tab -->
       <div v-show="store.workspaceTab === 'files'" class="flex-1 min-h-0 flex flex-col">
-        <div class="flex-none flex items-center gap-[6px] py-[6px] pr-2 pl-[10px] border-0 border-b border-solid border-line bg-surface-2">
-          <SearchOutlined class="text-[12px] text-ink-3 flex-none" />
-          <input
-            v-model="filterText"
-            type="text"
-            class="flex-1 min-w-0 border-0 outline-none bg-transparent text-ink text-[12px] leading-[18px] placeholder:text-ink-3 focus-visible:shadow-none"
-            placeholder="过滤文件名…"
-            @keydown.esc="filterText = ''"
-          />
-          <button
-            v-if="filterText"
-            type="button"
-            class="inline-grid place-items-center w-4 h-4 border-0 rounded-full bg-hover text-ink-3 text-[9px] cursor-pointer hover:bg-active hover:text-ink"
-            @click="filterText = ''"
-          >
-            <CloseOutlined />
-          </button>
+        <div
+          v-if="!props.cwd"
+          class="flex-1 flex flex-col items-center justify-center gap-2 text-[12.5px] text-ink-3 p-6 text-center"
+        >
+          <FolderOutlined class="text-[20px] opacity-45" />
+          <span>当前对话未指定工作目录</span>
         </div>
+        <template v-else>
+          <div class="flex-none flex items-center gap-[6px] py-[6px] pr-2 pl-[10px] border-0 border-b border-solid border-line bg-surface-2">
+            <SearchOutlined class="text-[12px] text-ink-3 flex-none" />
+            <input
+              v-model="filterText"
+              type="text"
+              class="flex-1 min-w-0 border-0 outline-none bg-transparent text-ink text-[12px] leading-[18px] placeholder:text-ink-3 focus-visible:shadow-none"
+              placeholder="过滤文件名…"
+              @keydown.esc="filterText = ''"
+            />
+            <button
+              v-if="filterText"
+              type="button"
+              class="inline-grid place-items-center w-4 h-4 border-0 rounded-full bg-hover text-ink-3 text-[9px] cursor-pointer hover:bg-active hover:text-ink"
+              @click="filterText = ''"
+            >
+              <CloseOutlined />
+            </button>
+          </div>
 
-        <div v-if="treeError" class="flex-1 flex flex-col items-center justify-center gap-2 text-[12.5px] text-err p-6 text-center">
-          {{ treeError }}
-        </div>
-        <div v-else-if="loadingTree && tree.length === 0" class="flex-1 flex flex-col items-center justify-center gap-2 text-[12.5px] text-ink-3 p-6 text-center">
-          <Spin size="small" />
-          <span>正在读取项目文件…</span>
-        </div>
-        <div v-else class="flex-1 min-h-0 flex flex-col overflow-hidden">
-          <Folder
-            :selected-file="selectedFile"
-            v-model:expanded-paths="expandedPaths"
-            class="oc-folder"
-            :tree-data="filteredTree"
-            :directory-icons="directoryIcons"
-            :file-content-service="fileContentService"
-            :directory-tree-with="treeWidth"
-            :default-expand-all="Boolean(filterText.trim())"
-            :directory-title="false"
-            :preview-title="renderPreviewTitle"
-            :preview-render="renderPreview"
-            @selected-file-change="onSelectedFileChange"
-            @contextmenu="onTreeContextMenu"
-          />
-        </div>
+          <div v-if="treeError" class="flex-1 flex flex-col items-center justify-center gap-2 text-[12.5px] text-err p-6 text-center">
+            {{ treeError }}
+          </div>
+          <div v-else-if="loadingTree && tree.length === 0" class="flex-1 flex flex-col items-center justify-center gap-2 text-[12.5px] text-ink-3 p-6 text-center">
+            <Spin size="small" />
+            <span>正在读取项目文件…</span>
+          </div>
+          <div v-else class="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <Folder
+              :selected-file="selectedFile"
+              v-model:expanded-paths="expandedPaths"
+              class="oc-folder"
+              :tree-data="filteredTree"
+              :directory-icons="directoryIcons"
+              :file-content-service="fileContentService"
+              :directory-tree-with="treeWidth"
+              :default-expand-all="Boolean(filterText.trim())"
+              :directory-title="false"
+              :preview-title="renderPreviewTitle"
+              :preview-render="renderPreview"
+              @selected-file-change="onSelectedFileChange"
+              @contextmenu="onTreeContextMenu"
+            />
+          </div>
+        </template>
       </div>
 
       <!-- Terminal Tab (kept mounted with v-show so running processes stay alive) -->

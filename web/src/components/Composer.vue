@@ -3,7 +3,8 @@ import { Sender } from "@antdv-next/x";
 import type { SenderPasteInfo, SenderProps, SenderRef } from "@antdv-next/x";
 type SkillType = NonNullable<SenderProps["skill"]>;
 type SlotConfigType = NonNullable<SenderProps["slotConfig"]>[number];
-import { Dropdown, Input, Popover, Tooltip, message } from "antdv-next";
+import { CopyOutlined, DeleteOutlined } from "@antdv-next/icons";
+import { Checkbox, Dropdown, Input, Modal, Popover, Tooltip, message } from "antdv-next";
 import { computed, h, nextTick, ref, watch } from "vue";
 import { api } from "../api";
 import { isStarting, resolvePermissionTarget, saveSettings, store, type PermissionMode, type QueuedMessage } from "../store";
@@ -310,6 +311,45 @@ const effortMenu = computed(() => ({
 const isGitRepo = computed(() => Boolean(gitInfo.value?.isRepo || gitFallbackRepo.value));
 const currentBranch = computed(() => gitInfo.value?.branch || "git");
 const branches = computed(() => gitInfo.value?.branches ?? []);
+const isDetachedHead = computed(() => Boolean(gitInfo.value?.isRepo && gitInfo.value.branch && !branches.value.includes(gitInfo.value.branch)));
+
+const deletingBranch = ref<string | null>(null);
+const deleteBranchForce = ref(false);
+const deleteBranchBusy = ref(false);
+
+async function copyBranchName(name: string) {
+  if (!name) return;
+  try {
+    await navigator.clipboard.writeText(name);
+    message.success(`已复制分支名：${name}`);
+  } catch {
+    message.error("复制失败");
+  }
+}
+
+function confirmDeleteBranch(branch: string) {
+  branchPopoverOpen.value = false;
+  deletingBranch.value = branch;
+  deleteBranchForce.value = false;
+}
+
+async function doDeleteBranch() {
+  const branch = deletingBranch.value;
+  if (!props.cwd || !branch || deleteBranchBusy.value) return;
+  deleteBranchBusy.value = true;
+  try {
+    const res = await api.gitDeleteBranch(props.cwd, branch, deleteBranchForce.value);
+    gitInfo.value = res;
+    gitCache.set(props.cwd, { info: res, fallback: false });
+    deletingBranch.value = null;
+    deleteBranchForce.value = false;
+    message.success(`已删除分支 ${branch}`);
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : "删除分支失败");
+  } finally {
+    deleteBranchBusy.value = false;
+  }
+}
 
 async function refreshGit(dir: string) {
   if (!dir) {
@@ -609,7 +649,7 @@ function nicePath(p: string) {
   return p;
 }
 
-const cwdLabel = computed(() => (props.cwd ? nicePath(props.cwd) : "选择工作目录"));
+const cwdLabel = computed(() => (props.cwd ? nicePath(props.cwd) : "无工作目录"));
 
 function submit(msgFromSender?: string, _slotConfig?: SlotConfigType[], skillFromSender?: SkillType) {
   if (!canSend.value) return;
@@ -1267,22 +1307,41 @@ defineExpose({ addFiles });
 
       <span class="w-[1px] h-3 bg-line-strong mx-[2px]" />
 
-      <button
-        class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-ink-2 text-[11.5px] flex-[0_1_auto] min-w-0 max-w-[210px] transition-colors duration-140"
-        :class="cwdLocked ? 'cursor-default opacity-65' : 'cursor-pointer hover:bg-surface-2 hover:border-line hover:text-ink'"
-        :title="cwdLocked ? '对话开始后不能改工作目录' : cwd"
-        :disabled="cwdLocked"
-        @click="emit('cwd')"
-      >
-        <!-- Lucide Folder -->
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
-          <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
-        </svg>
-        <span class="truncate font-mono">{{ cwdLabel }}</span>
-        <svg v-if="!cwdLocked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[11px] h-[11px] opacity-65 flex-none">
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
+      <div class="group/cwd inline-flex items-center flex-[0_1_auto] min-w-0 max-w-[230px]">
+        <button
+          type="button"
+          class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-[11.5px] flex-[0_1_auto] min-w-0 transition-colors duration-140"
+          :class="[
+            cwd ? 'text-ink-2' : 'text-ink-3',
+            cwdLocked ? 'cursor-default opacity-65' : 'cursor-pointer hover:bg-surface-2 hover:border-line hover:text-ink',
+          ]"
+          :title="cwdLocked ? (cwd ? '对话开始后不能改工作目录' : '当前对话未指定工作目录') : cwd || '点击选择工作目录（可选）'"
+          :disabled="cwdLocked"
+          @click="emit('cwd')"
+        >
+          <!-- Lucide Folder -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
+            <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
+          </svg>
+          <span class="truncate" :class="cwd ? 'font-mono' : ''">{{ cwdLabel }}</span>
+          <svg v-if="!cwdLocked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[11px] h-[11px] opacity-65 flex-none">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+        <Tooltip v-if="cwd && !cwdLocked" title="不使用工作目录" :mouse-enter-delay="0.35">
+          <button
+            type="button"
+            class="inline-grid place-items-center w-[18px] h-[18px] -ml-[2px] border-0 rounded-[5px] bg-transparent text-ink-3 cursor-pointer flex-none opacity-0 transition-all duration-120 group-hover/cwd:opacity-75 hover:!opacity-100 hover:bg-hover hover:text-ink focus-visible:opacity-100"
+            aria-label="不使用工作目录"
+            @click="emit('update:cwd', '')"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[10.5px] h-[10.5px]">
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
+          </button>
+        </Tooltip>
+      </div>
 
       <template v-if="isGitRepo">
         <span class="w-[1px] h-3 bg-line-strong mx-[2px]" />
@@ -1294,31 +1353,67 @@ defineExpose({ addFiles });
           @open-change="onBranchPopoverOpenChange"
         >
           <template #content>
-            <div class="w-[236px] flex flex-col gap-2">
+            <div class="w-[248px] flex flex-col gap-2">
+              <div
+                v-if="isDetachedHead"
+                class="flex items-center justify-between gap-2 px-2 py-1.5 rounded-[7px] bg-surface-2 border border-solid border-line text-[11px] text-ink-3"
+                @contextmenu.prevent="copyBranchName(currentBranch)"
+              >
+                <span class="truncate">
+                  游离 HEAD · <code class="font-mono text-ink-2">{{ currentBranch }}</code>
+                </span>
+                <Tooltip title="复制当前提交哈希" :mouse-enter-delay="0.3">
+                  <button
+                    type="button"
+                    class="inline-grid place-items-center w-5 h-5 border-0 rounded-[5px] bg-transparent text-ink-3 cursor-pointer flex-none transition-colors duration-120 hover:bg-hover hover:text-ink"
+                    aria-label="复制当前提交哈希"
+                    @click="copyBranchName(currentBranch)"
+                  >
+                    <CopyOutlined class="text-[11px]" />
+                  </button>
+                </Tooltip>
+              </div>
               <div v-if="branches.length" class="flex flex-col gap-0.5 max-h-[200px] overflow-y-auto">
-                <button
+                <div
                   v-for="b in branches"
                   :key="b"
-                  type="button"
-                  class="w-full flex items-center justify-between gap-2 px-2 py-[5px] rounded-[7px] border-0 text-left text-[12px] cursor-pointer transition-colors duration-120"
-                  :class="b === currentBranch ? 'bg-active text-ink fw-540' : 'bg-transparent text-ink-2 hover:bg-hover hover:text-ink'"
-                  :disabled="switchingBranch"
-                  @click="switchBranch(b)"
+                  class="group/br flex items-center gap-0.5 rounded-[7px] transition-colors duration-120"
+                  :class="b === currentBranch ? 'bg-active' : 'hover:bg-hover'"
+                  @contextmenu.prevent="copyBranchName(b)"
                 >
-                  <span class="font-mono truncate min-w-0">{{ b }}</span>
-                  <svg
-                    v-if="b === currentBranch"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    class="w-[13px] h-[13px] text-ok flex-none"
+                  <button
+                    type="button"
+                    class="flex-1 min-w-0 flex items-center justify-between gap-2 px-2 py-[5px] rounded-[7px] border-0 bg-transparent text-left text-[12px] cursor-pointer transition-colors duration-120"
+                    :class="b === currentBranch ? 'text-ink fw-540' : 'text-ink-2 group-hover/br:text-ink'"
+                    :title="`${b}（右键复制分支名）`"
+                    :disabled="switchingBranch"
+                    @click="switchBranch(b)"
                   >
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                </button>
+                    <span class="font-mono truncate min-w-0">{{ b }}</span>
+                    <svg
+                      v-if="b === currentBranch"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="w-[13px] h-[13px] text-ok flex-none"
+                    >
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </button>
+                  <Tooltip v-if="b !== currentBranch" title="删除分支" :mouse-enter-delay="0.35">
+                    <button
+                      type="button"
+                      class="inline-grid place-items-center w-6 h-6 mr-0.5 border-0 rounded-[6px] bg-transparent text-ink-3 cursor-pointer flex-none opacity-0 transition-all duration-120 group-hover/br:opacity-75 hover:!opacity-100 hover:bg-err-soft hover:text-err focus-visible:opacity-100"
+                      aria-label="删除分支"
+                      @click.stop="confirmDeleteBranch(b)"
+                    >
+                      <DeleteOutlined class="text-[11px]" />
+                    </button>
+                  </Tooltip>
+                </div>
               </div>
               <div v-else class="px-2 py-1.5 text-[11.5px] text-ink-3">
                 {{ gitFallbackRepo ? '重启服务后可切换分支' : '暂无本地分支' }}
@@ -1367,12 +1462,15 @@ defineExpose({ addFiles });
           </template>
 
           <Tooltip
-            :title="`切换或新建 Git 分支（当前：${currentBranch}）`"
+            :open="branchPopoverOpen ? false : undefined"
+            :title="isDetachedHead ? `游离 HEAD（${currentBranch}），点击切换或新建分支，右键复制` : `切换或新建 Git 分支（当前：${currentBranch}，右键复制）`"
             :mouse-enter-delay="0.35"
           >
             <button
+              type="button"
               class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-ink-2 text-[11.5px] cursor-pointer flex-[0_1_auto] min-w-0 max-w-[140px] transition-colors duration-140 hover:bg-surface-2 hover:border-line hover:text-ink disabled:opacity-60 disabled:cursor-wait"
               :disabled="switchingBranch || newBranchBusy"
+              @contextmenu.prevent="copyBranchName(currentBranch)"
             >
               <!-- Lucide GitBranch -->
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
@@ -1392,6 +1490,49 @@ defineExpose({ addFiles });
 
       <slot name="bar-extra" :is-git-repo="isGitRepo" :current-branch="currentBranch" :branches="branches" />
     </div>
+
+    <Modal
+      :open="Boolean(deletingBranch)"
+      title="删除本地分支"
+      :width="400"
+      centered
+      ok-text="删除"
+      ok-type="primary"
+      :ok-button-props="{ danger: true }"
+      cancel-text="取消"
+      :confirm-loading="deleteBranchBusy"
+      @ok="doDeleteBranch"
+      @cancel="deletingBranch = null"
+    >
+      <div v-if="deletingBranch" class="flex flex-col gap-3 pt-1">
+        <p class="m-0 text-[12.5px] text-ink-2 leading-[1.55]">
+          确定要删除该本地分支吗？该操作不会影响远程仓库中的分支。
+        </p>
+        <div class="rounded-[10px] bg-surface-2 border border-solid border-line overflow-hidden">
+          <div class="px-3 py-2.5 flex items-center justify-between gap-2">
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span class="text-[11px] text-ink-3">分支名</span>
+              <span class="font-mono text-[12px] text-ink break-all">{{ deletingBranch }}</span>
+            </div>
+            <Tooltip title="复制分支名" :mouse-enter-delay="0.3">
+              <button
+                type="button"
+                class="inline-grid place-items-center w-6 h-6 border-0 rounded-[6px] bg-transparent text-ink-3 cursor-pointer flex-none transition-colors duration-120 hover:bg-hover hover:text-ink"
+                aria-label="复制分支名"
+                @click="copyBranchName(deletingBranch)"
+              >
+                <CopyOutlined class="text-[12px]" />
+              </button>
+            </Tooltip>
+          </div>
+          <div class="px-3 py-2.5 border-0 border-t border-solid border-line">
+            <Checkbox v-model:checked="deleteBranchForce">
+              <span class="text-[12px] text-ink-2">强制删除（即使包含未合并提交）</span>
+            </Checkbox>
+          </div>
+        </div>
+      </div>
+    </Modal>
 
     <input ref="inputFiles" type="file" multiple hidden @change="(e) => addFiles((e.target as HTMLInputElement).files!)" />
   </div>

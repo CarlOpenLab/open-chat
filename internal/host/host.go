@@ -368,17 +368,29 @@ func (h *Host) emit(id string, events ...Event) {
 	h.opts.Push(Push{Kind: "events", ConversationID: id, Events: events})
 }
 
+func (h *Host) scratchDir() string {
+	if h.opts.DataDir != "" {
+		dir := filepath.Join(h.opts.DataDir, "scratch")
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			return dir
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return os.TempDir()
+}
+
 func (h *Host) create(agentID, cwd string) (Meta, error) {
 	a, ok := h.agent(agentID)
 	if !ok {
 		return Meta{}, fmt.Errorf("未知的 agent：%s", agentID)
 	}
 	cwd = expandHome(strings.TrimSpace(cwd))
-	if cwd == "" {
-		cwd, _ = os.UserHomeDir()
-	}
-	if st, err := os.Stat(cwd); err != nil || !st.IsDir() {
-		return Meta{}, fmt.Errorf("工作目录不存在：%s", cwd)
+	if cwd != "" {
+		if st, err := os.Stat(cwd); err != nil || !st.IsDir() {
+			return Meta{}, fmt.Errorf("工作目录不存在：%s", cwd)
+		}
 	}
 	t := now()
 	m := Meta{ID: newID(), Title: "新对话", AgentID: a.ID, AgentName: a.Name, Cwd: cwd, CreatedAt: t, UpdatedAt: t, Status: "idle"}
@@ -391,13 +403,15 @@ func (h *Host) create(agentID, cwd string) (Meta, error) {
 func (h *Host) rememberDir(dir, agentID string) {
 	h.settingsMu.Lock()
 	s := h.settings
-	dirs := []string{dir}
-	for _, d := range s.RecentDirs {
-		if d != dir && len(dirs) < 8 {
-			dirs = append(dirs, d)
+	if dir != "" {
+		dirs := []string{dir}
+		for _, d := range s.RecentDirs {
+			if d != "" && d != dir && len(dirs) < 8 {
+				dirs = append(dirs, d)
+			}
 		}
+		s.RecentDirs = dirs
 	}
-	s.RecentDirs = dirs
 	s.DefaultAgent = agentID
 	h.settings = s
 	h.settingsMu.Unlock()
@@ -489,10 +503,14 @@ func (h *Host) open(ctx context.Context, m Meta) (LiveState, string, error) {
 		Modes         *Modes        `json:"modes"`
 		ConfigOptions []any         `json:"configOptions"`
 	}
+	sessionCwd := m.Cwd
+	if sessionCwd == "" || !isDir(sessionCwd) {
+		sessionCwd = h.scratchDir()
+	}
 	params := map[string]any{
 		"key":       m.ID,
 		"agent":     map[string]any{"id": a.ID, "command": a.Command, "args": a.Args, "env": h.effectiveAgentEnv(a)},
-		"cwd":       m.Cwd,
+		"cwd":       sessionCwd,
 		"autoAllow": h.getSettings().AutoAllow,
 	}
 	if m.AcpSessionID != "" {
@@ -578,7 +596,7 @@ func (h *Host) probeAgent(ctx context.Context, agentID, cwd string, refresh bool
 	}
 	cwd = expandHome(strings.TrimSpace(cwd))
 	if cwd == "" || !isDir(cwd) {
-		cwd, _ = os.UserHomeDir()
+		cwd = h.scratchDir()
 	}
 	sc, err := h.sidecar()
 	if err != nil {
@@ -884,7 +902,7 @@ func isDir(p string) bool {
 	return err == nil && st.IsDir()
 }
 
-func (h *Host) runGit(ctx context.Context, dir string, args ...string) (string, error) {
+func (h *Host) runGitRaw(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	gitBin := lookPath(h.environ(), "git")
@@ -906,9 +924,17 @@ func (h *Host) runGit(ctx context.Context, dir string, args ...string) (string, 
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", errors.New(msg)
+		return nil, errors.New(msg)
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return stdout.Bytes(), nil
+}
+
+func (h *Host) runGit(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := h.runGitRaw(ctx, dir, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (h *Host) gitInfo(ctx context.Context, path string) (GitInfo, error) {
@@ -969,6 +995,38 @@ func (h *Host) gitCreateBranch(ctx context.Context, path, branch string) (GitInf
 	}
 	if _, err := h.runGit(ctx, dir, "checkout", "-b", branch); err != nil {
 		return GitInfo{}, fmt.Errorf("新建分支失败：%s", err.Error())
+	}
+	return h.gitInfo(ctx, dir)
+}
+
+func (h *Host) gitDeleteBranch(ctx context.Context, path, branch string, force bool) (GitInfo, error) {
+	dir := expandHome(strings.TrimSpace(path))
+	if dir == "" || !isDir(dir) {
+		return GitInfo{}, errors.New("工作目录不存在")
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" || strings.HasPrefix(branch, "-") {
+		return GitInfo{}, errors.New("无效的分支名")
+	}
+	if _, err := h.runGit(ctx, dir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+		return GitInfo{}, fmt.Errorf("本地分支不存在：%s", branch)
+	}
+	if cur, err := h.runGit(ctx, dir, "symbolic-ref", "--short", "HEAD"); err == nil && cur == branch {
+		return GitInfo{}, fmt.Errorf("不能删除当前所在的分支 %s", branch)
+	}
+	if h.isBranchCheckedOut(ctx, dir, branch) {
+		return GitInfo{}, fmt.Errorf("分支 %s 正被其他工作区检出，无法删除", branch)
+	}
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	if _, err := h.runGit(ctx, dir, "branch", flag, branch); err != nil {
+		msg := err.Error()
+		if !force && strings.Contains(strings.ToLower(msg), "not fully merged") {
+			return GitInfo{}, fmt.Errorf("分支 %s 包含未合并的提交，如需强行删除请勾选「强制删除」", branch)
+		}
+		return GitInfo{}, fmt.Errorf("删除分支失败：%s", msg)
 	}
 	return h.gitInfo(ctx, dir)
 }

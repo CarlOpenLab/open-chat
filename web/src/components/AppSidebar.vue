@@ -3,6 +3,7 @@ import { Conversations } from "@antdv-next/x";
 import type { ConversationItemType } from "@antdv-next/x";
 import {
   ArrowLeftOutlined,
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   InboxOutlined,
@@ -16,7 +17,7 @@ import { Checkbox, Dropdown, Input, Modal, Tooltip, message } from "antdv-next";
 import { Icon, addCollection, type IconifyJSON } from "@iconify/vue";
 import rawLucide from "@iconify-json/lucide/icons.json";
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { isArchived, isDark, isMac, newConversation, pin, remove, removeWorktree, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
+import { isArchived, isDark, isMac, newConversation, newConversationInDir, pin, remove, removeWorktree, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
 import type { Meta } from "../types";
 import ProviderIcon from "./ProviderIcon.vue";
 
@@ -30,6 +31,7 @@ const newTitle = ref("");
 const renameInput = ref<{ focus: () => void } | null>(null);
 const toDelete = ref<Meta | null>(null);
 const deleteWithWorktree = ref(true);
+const deleteWithBranch = ref(false);
 const deleteBusy = ref(false);
 const showArchived = ref(false);
 
@@ -40,6 +42,7 @@ const lastSelectedId = ref<string | null>(null);
 const batchArchiveOpen = ref(false);
 const batchDeleteOpen = ref(false);
 const batchDeleteWithWorktree = ref(true);
+const batchDeleteWithBranch = ref(false);
 const batchBusy = ref(false);
 
 const convCtx = ref<{ open: boolean; x: number; y: number; meta: Meta | null }>({
@@ -97,7 +100,7 @@ function toggleSelectMode() {
 }
 
 function toggleItemSelected(id: string, range = false) {
-  const list = filtered.value;
+  const list = visibleMetas.value;
   const next = new Set(selectedIds.value);
   if (range && lastSelectedId.value) {
     const a = list.findIndex((m) => m.id === lastSelectedId.value);
@@ -134,7 +137,7 @@ function onListClickCapture(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     selecting.value = true;
-    if (e.shiftKey && store.activeId && filtered.value.some((m) => m.id === store.activeId)) {
+    if (e.shiftKey && store.activeId && visibleMetas.value.some((m) => m.id === store.activeId)) {
       lastSelectedId.value = store.activeId;
       toggleItemSelected(id, true);
     } else {
@@ -186,6 +189,58 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onCtxKeydown);
 });
 
+const PINNED_GROUP_KEY = "__pinned__";
+const NO_PROJECT_KEY = "__no_project__";
+const COLLAPSED_PROJECTS_KEY = "oc.collapsedProjects";
+
+const groupMode = computed<"time" | "project">(() =>
+  store.settings?.conversationGroupBy === "project" ? "project" : "time",
+);
+const isProjectMode = computed(() => !showArchived.value && groupMode.value === "project");
+
+const collapsedProjects = ref<Set<string>>((() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COLLAPSED_PROJECTS_KEY) || "[]") as unknown;
+    return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set<string>();
+  }
+})());
+
+function persistCollapsedProjects(next: Set<string>) {
+  collapsedProjects.value = next;
+  try {
+    localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...next]));
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+function normalizeProjectPath(p: string): string {
+  const trimmed = p.trim().replace(/\\/g, "/");
+  if (!trimmed) return "";
+  if (trimmed === "/" || /^[a-zA-Z]:\/?$/.test(trimmed)) {
+    return trimmed.replace(/\/?$/, "/");
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function projectPathOf(m: Meta): string {
+  return normalizeProjectPath(m.worktreeRepo || m.cwd || "");
+}
+
+function projectKeyOf(m: Meta): string {
+  return projectPathOf(m) || NO_PROJECT_KEY;
+}
+
+function formatDisplayPath(p: string): string {
+  const norm = normalizeProjectPath(p);
+  const home = normalizeProjectPath(store.boot?.home ?? "");
+  if (home && norm === home) return "~";
+  if (home && norm.startsWith(`${home}/`)) return `~${norm.slice(home.length)}`;
+  return norm;
+}
+
 const groupRank = (m: Meta) => {
   if (m.pinned) return 0;
   const d = new Date(m.updatedAt);
@@ -203,46 +258,225 @@ const archivedCount = computed(() => sortedMetas.value.filter((m) => isArchived(
 
 const filtered = computed(() => {
   const q = store.search.trim().toLowerCase();
-  return sortedMetas.value
+  const list = sortedMetas.value
     .filter((m) => (showArchived.value ? isArchived(m.id) : !isArchived(m.id)))
-    .filter((m) => !q || m.title.toLowerCase().includes(q) || m.cwd.toLowerCase().includes(q) || m.agentName.toLowerCase().includes(q))
-    .sort((a, b) => groupRank(a) - groupRank(b) || b.updatedAt - a.updatedAt);
+    .filter(
+      (m) =>
+        !q ||
+        m.title.toLowerCase().includes(q) ||
+        m.cwd.toLowerCase().includes(q) ||
+        (m.worktreeRepo ?? "").toLowerCase().includes(q) ||
+        m.agentName.toLowerCase().includes(q),
+    );
+
+  if (showArchived.value) {
+    return list.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  if (groupMode.value === "project") {
+    const latestByProject = new Map<string, number>();
+    for (const m of list) {
+      if (m.pinned) continue;
+      const key = projectKeyOf(m);
+      const prev = latestByProject.get(key) ?? -1;
+      if (m.updatedAt > prev) latestByProject.set(key, m.updatedAt);
+    }
+    return list.sort((a, b) => {
+      if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+      if (a.pinned && b.pinned) return b.updatedAt - a.updatedAt;
+      const pa = projectKeyOf(a);
+      const pb = projectKeyOf(b);
+      if (pa !== pb) {
+        const diff = (latestByProject.get(pb) ?? 0) - (latestByProject.get(pa) ?? 0);
+        if (diff !== 0) return diff;
+        return pa.localeCompare(pb);
+      }
+      return b.updatedAt - a.updatedAt;
+    });
+  }
+
+  return list.sort((a, b) => groupRank(a) - groupRank(b) || b.updatedAt - a.updatedAt);
+});
+
+const projectMetaInfo = computed(() => {
+  const rawPathByKey = new Map<string, string>();
+  for (const m of filtered.value) {
+    const raw = (m.worktreeRepo || m.cwd || "").trim();
+    const key = normalizeProjectPath(raw);
+    if (key && !rawPathByKey.has(key)) {
+      rawPathByKey.set(key, raw);
+    }
+  }
+  const keys = [...rawPathByKey.keys()];
+  const baseCount = new Map<string, number>();
+  for (const k of keys) {
+    const base = shortDir(k);
+    baseCount.set(base, (baseCount.get(base) ?? 0) + 1);
+  }
+  const labelByKey = new Map<string, string>();
+  const twoSegCount = new Map<string, number>();
+  for (const k of keys) {
+    const base = shortDir(k);
+    if ((baseCount.get(base) ?? 0) <= 1) {
+      labelByKey.set(k, base);
+    } else {
+      const segs = formatDisplayPath(k).split("/").filter(Boolean);
+      const two = segs.length >= 2 ? `${segs[segs.length - 2]}/${segs[segs.length - 1]}` : formatDisplayPath(k);
+      twoSegCount.set(two, (twoSegCount.get(two) ?? 0) + 1);
+      labelByKey.set(k, two);
+    }
+  }
+  for (const k of keys) {
+    const lbl = labelByKey.get(k);
+    if (lbl && (twoSegCount.get(lbl) ?? 0) > 1) {
+      labelByKey.set(k, formatDisplayPath(k));
+    }
+  }
+  return { rawPathByKey, labelByKey };
+});
+
+const projectGroupKeys = computed(() => {
+  if (!isProjectMode.value) return [];
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const m of filtered.value) {
+    if (m.pinned) continue;
+    const key = projectKeyOf(m);
+    if (!seen.has(key)) {
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+  return keys;
+});
+
+const expandedProjectKeys = computed(() => {
+  if (!isProjectMode.value) return [];
+  if (store.search.trim()) return projectGroupKeys.value;
+  return projectGroupKeys.value.filter((k) => !collapsedProjects.value.has(k));
+});
+
+function onProjectExpand(nextExpandedKeys: string[]) {
+  if (store.search.trim()) return;
+  const expandedSet = new Set(nextExpandedKeys);
+  const next = new Set(collapsedProjects.value);
+  for (const k of projectGroupKeys.value) {
+    if (expandedSet.has(k)) next.delete(k);
+    else next.add(k);
+  }
+  persistCollapsedProjects(next);
+}
+
+function startNewInProject(groupKey: string) {
+  if (collapsedProjects.value.has(groupKey)) {
+    const next = new Set(collapsedProjects.value);
+    next.delete(groupKey);
+    persistCollapsedProjects(next);
+  }
+  const dir = projectMetaInfo.value.rawPathByKey.get(groupKey) ?? groupKey;
+  newConversationInDir(dir);
+}
+
+function renderProjectGroupLabel(group: string, info: { groupInfo: { data: unknown[] } }) {
+  if (group === PINNED_GROUP_KEY) return "置顶";
+  const isNoProject = group === NO_PROJECT_KEY;
+  const displayName = isNoProject ? "未关联目录" : (projectMetaInfo.value.labelByKey.get(group) ?? shortDir(group));
+  const fullPath = isNoProject ? "未关联工作目录的对话" : formatDisplayPath(group);
+  const count = info.groupInfo.data.length;
+  const canAdd = !isNoProject && !selecting.value;
+
+  return h("div", { class: ["proj-group-head", { "has-add": canAdd }], title: fullPath }, [
+    lucideIcon(isNoProject ? "message-square" : "folder", 12, "proj-group-ic"),
+    h("span", { class: "proj-group-name" }, displayName),
+    h("span", { class: "proj-group-tail" }, [
+      h("span", { class: "proj-group-count font-mono" }, String(count)),
+      canAdd
+        ? h(
+            Tooltip,
+            { title: `在 ${displayName} 中新建对话`, mouseEnterDelay: 0.35 },
+            {
+              default: () =>
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    class: "proj-group-add",
+                    "aria-label": `在 ${displayName} 中新建对话`,
+                    onClick: (e: MouseEvent) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      startNewInProject(group);
+                    },
+                  },
+                  [lucideIcon("plus", 12)],
+                ),
+            },
+          )
+        : null,
+    ]),
+  ]);
+}
+
+const groupableConfig = computed(() => {
+  if (!isProjectMode.value) {
+    return {
+      label: (g: string) => g,
+      collapsible: false as const,
+    };
+  }
+  return {
+    label: renderProjectGroupLabel,
+    collapsible: (g: string) => g !== PINNED_GROUP_KEY,
+    expandedKeys: expandedProjectKeys.value,
+    onExpand: onProjectExpand,
+  };
 });
 
 const items = computed<ConversationItemType[]>(() =>
   filtered.value.map((m) => ({
     key: m.id,
     label: m.title,
-    group: showArchived.value ? "已归档" : groupName(m),
+    group: showArchived.value
+      ? "已归档"
+      : groupMode.value === "project"
+        ? m.pinned
+          ? PINNED_GROUP_KEY
+          : projectKeyOf(m)
+        : groupName(m),
     "data-meta": m,
   })),
 );
 
+const visibleMetas = computed(() => {
+  if (!isProjectMode.value || store.search.trim()) return filtered.value;
+  return filtered.value.filter((m) => m.pinned || !collapsedProjects.value.has(projectKeyOf(m)));
+});
+
 const visibleSelectedIds = computed(() =>
-  filtered.value.filter((m) => selectedIds.value.has(m.id)).map((m) => m.id),
+  visibleMetas.value.filter((m) => selectedIds.value.has(m.id)).map((m) => m.id),
 );
 const selectedCount = computed(() => visibleSelectedIds.value.length);
 const allVisibleSelected = computed(
-  () => filtered.value.length > 0 && selectedCount.value === filtered.value.length,
+  () => visibleMetas.value.length > 0 && selectedCount.value === visibleMetas.value.length,
 );
 const someVisibleSelected = computed(
-  () => selectedCount.value > 0 && selectedCount.value < filtered.value.length,
+  () => selectedCount.value > 0 && selectedCount.value < visibleMetas.value.length,
 );
 const selectedMetasPreview = computed(() =>
-  filtered.value.filter((m) => selectedIds.value.has(m.id)).slice(0, 3),
+  visibleMetas.value.filter((m) => selectedIds.value.has(m.id)).slice(0, 3),
 );
 const selectedWorktreeCount = computed(() =>
-  filtered.value.filter((m) => selectedIds.value.has(m.id) && m.worktree).length,
+  visibleMetas.value.filter((m) => selectedIds.value.has(m.id) && m.worktree).length,
 );
 
 function toggleSelectAll() {
   if (allVisibleSelected.value) {
     const next = new Set(selectedIds.value);
-    for (const m of filtered.value) next.delete(m.id);
+    for (const m of visibleMetas.value) next.delete(m.id);
     selectedIds.value = next;
   } else {
     const next = new Set(selectedIds.value);
-    for (const m of filtered.value) next.add(m.id);
+    for (const m of visibleMetas.value) next.add(m.id);
     selectedIds.value = next;
   }
 }
@@ -250,6 +484,21 @@ function toggleSelectAll() {
 watch(showArchived, () => {
   if (selecting.value) exitSelectMode();
 });
+
+watch(
+  () => store.activeId,
+  (id) => {
+    if (!id || !isProjectMode.value) return;
+    const m = store.metas[id];
+    if (!m || m.pinned) return;
+    const key = projectKeyOf(m);
+    if (collapsedProjects.value.has(key)) {
+      const next = new Set(collapsedProjects.value);
+      next.delete(key);
+      persistCollapsedProjects(next);
+    }
+  },
+);
 
 watch(
   () => filtered.value.length,
@@ -268,9 +517,20 @@ function ago(t: number) {
 }
 
 function shortDir(cwd: string) {
-  const home = store.boot?.home;
-  if (home && cwd === home) return "~";
-  return cwd.split("/").filter(Boolean).pop() || cwd;
+  const norm = normalizeProjectPath(cwd);
+  const home = normalizeProjectPath(store.boot?.home ?? "");
+  if (home && norm === home) return "~";
+  return norm.split("/").filter(Boolean).pop() || norm;
+}
+
+async function copyPath(path: string) {
+  if (!path) return;
+  try {
+    await navigator.clipboard.writeText(path);
+    message.success("已复制目录路径");
+  } catch {
+    message.error("复制失败");
+  }
 }
 
 function statusNodeFor(m: Meta) {
@@ -330,6 +590,8 @@ function labelRender(item: ConversationItemType) {
       )
     : h(ProviderIcon, { id: m.agentId, name: m.agentName, size: 13, class: "conv-logo" });
 
+  const showDirTag = Boolean(m.cwd) && (!isProjectMode.value || Boolean(m.pinned) || Boolean(m.worktree));
+
   return h("div", { class: "conv", "data-conv-id": m.id, "data-selected": checked ? "true" : void 0 }, [
     h("div", { class: "conv-row" }, [
       leading,
@@ -339,8 +601,8 @@ function labelRender(item: ConversationItemType) {
     h("div", { class: "conv-meta" }, [
       h("span", { class: "conv-sub" }, [
         h("span", { class: "conv-agent" }, m.agentName),
-        m.cwd ? h("span", { class: "conv-sep" }, "·") : null,
-        m.cwd
+        showDirTag ? h("span", { class: "conv-sep" }, "·") : null,
+        showDirTag
           ? h(
               "span",
               { class: "conv-dir mono" },
@@ -421,11 +683,17 @@ async function confirmRename() {
 }
 
 watch(toDelete, (m) => {
-  if (m) deleteWithWorktree.value = Boolean(m.worktree);
+  if (m) {
+    deleteWithWorktree.value = Boolean(m.worktree);
+    deleteWithBranch.value = false;
+  }
 });
 
 watch(batchDeleteOpen, (open) => {
-  if (open) batchDeleteWithWorktree.value = selectedWorktreeCount.value > 0;
+  if (open) {
+    batchDeleteWithWorktree.value = selectedWorktreeCount.value > 0;
+    batchDeleteWithBranch.value = false;
+  }
 });
 
 async function confirmDelete() {
@@ -434,7 +702,7 @@ async function confirmDelete() {
   deleteBusy.value = true;
   try {
     if (m.worktree && deleteWithWorktree.value) {
-      await removeWorktree(m.id, true, true);
+      await removeWorktree(m.id, true, deleteWithBranch.value);
     }
     toDelete.value = null;
     await remove(m.id);
@@ -476,6 +744,7 @@ async function confirmBatchArchive() {
 async function confirmBatchDelete() {
   const ids = [...visibleSelectedIds.value];
   const removeWts = batchDeleteWithWorktree.value;
+  const removeBranches = removeWts && batchDeleteWithBranch.value;
   batchDeleteOpen.value = false;
   if (!ids.length || batchBusy.value) return;
   batchBusy.value = true;
@@ -483,7 +752,7 @@ async function confirmBatchDelete() {
     const results = await Promise.allSettled(
       ids.map(async (id) => {
         if (removeWts && store.metas[id]?.worktree) {
-          await removeWorktree(id, true, true);
+          await removeWorktree(id, true, removeBranches);
         }
         await remove(id);
       }),
@@ -696,7 +965,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         </span>
         <span>{{ allVisibleSelected ? '取消全选' : '全选' }}</span>
       </button>
-      <span class="text-[11px] text-ink-3 font-mono">{{ selectedCount }} / {{ filtered.length }}</span>
+      <span class="text-[11px] text-ink-3 font-mono">{{ selectedCount }} / {{ visibleMetas.length }}</span>
       <div class="ml-auto inline-flex items-center gap-[2px]">
         <Tooltip :title="showArchived ? `取消归档 (${selectedCount})` : `归档 (${selectedCount})`" :mouse-enter-delay="0.3">
           <button
@@ -736,9 +1005,9 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         :active-key="selecting ? undefined : (store.activeId ?? undefined)"
         :label-render="labelRender"
         :menu="selecting ? undefined : menuFor"
-        :groupable="{ label: (g: string) => g, collapsible: false }"
+        :groupable="groupableConfig"
         class="oc-convs"
-        :class="{ 'is-selecting': selecting }"
+        :class="{ 'is-selecting': selecting, 'is-project-mode': isProjectMode }"
         @active-change="(key: string) => { if (!selecting) void select(key); }"
       />
       <div v-else class="flex flex-col items-center justify-center gap-2 py-10 px-[14px] text-center">
@@ -896,29 +1165,50 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
     <Modal
       :open="Boolean(toDelete)"
       title="删除这个对话？"
-      :width="380"
+      :width="400"
       centered
       ok-text="删除"
-      ok-type="danger"
+      ok-type="primary"
+      :ok-button-props="{ danger: true }"
       cancel-text="取消"
       :confirm-loading="deleteBusy"
       @ok="confirmDelete"
       @cancel="toDelete = null"
     >
-      <div class="flex flex-col gap-2.5">
-        <p class="text-ink-2 m-0">
+      <div class="flex flex-col gap-3 pt-1">
+        <p class="text-[12.5px] text-ink-2 leading-[1.55] m-0">
           「{{ toDelete?.title }}」的记录会从本机删除，无法恢复。agent 那边的会话不受影响。
         </p>
-        <div v-if="toDelete?.worktree" class="flex flex-col gap-2 pt-2 border-0 border-t border-solid border-line">
+        <div
+          v-if="toDelete?.worktree"
+          class="rounded-[10px] bg-surface-2 border border-solid border-line px-3 py-2.5 flex flex-col gap-2"
+        >
           <Checkbox v-model:checked="deleteWithWorktree">
-            <span class="text-[12.5px] text-ink">同时删除关联的 Worktree 目录与临时分支</span>
+            <span class="text-[12.5px] text-ink">同时删除关联的 Worktree 目录</span>
           </Checkbox>
-          <div v-if="deleteWithWorktree" class="pl-6 flex flex-col gap-1">
-            <div class="px-2 py-1.5 rounded-[7px] bg-surface-2 border border-solid border-line font-mono text-[11px] text-ink-2 break-all leading-[1.45]">
-              {{ toDelete.cwd }}
+          <div v-if="deleteWithWorktree" class="pl-6 flex flex-col gap-1.5">
+            <Checkbox v-if="toDelete.worktreeBranch" v-model:checked="deleteWithBranch">
+              <span class="text-[12px] text-ink-2">
+                同时删除分支 <code class="font-mono text-ink">{{ toDelete.worktreeBranch }}</code>
+              </span>
+            </Checkbox>
+            <div class="flex items-start gap-1.5">
+              <span class="font-mono text-[11px] text-ink-3 break-all leading-[1.45] flex-1">
+                {{ toDelete.cwd }}
+              </span>
+              <Tooltip title="复制目录路径" :mouse-enter-delay="0.3">
+                <button
+                  type="button"
+                  class="inline-grid place-items-center w-5 h-5 border-0 rounded-[5px] bg-transparent text-ink-3 cursor-pointer flex-none transition-colors duration-120 hover:bg-hover hover:text-ink"
+                  aria-label="复制目录路径"
+                  @click="copyPath(toDelete.cwd)"
+                >
+                  <CopyOutlined class="text-[11px]" />
+                </button>
+              </Tooltip>
             </div>
-            <div class="text-[11px] text-warn leading-[1.4]">
-              若该目录内存在未提交的代码改动，删除后将永久丢失。
+            <div class="text-[11px] text-ink-3 leading-[1.4]">
+              若该目录存在未提交的代码改动，删除后将无法恢复。
             </div>
           </div>
         </div>
@@ -948,26 +1238,33 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
     <Modal
       :open="batchDeleteOpen"
       :title="`删除选中的 ${selectedCount} 个对话？`"
-      :width="380"
+      :width="400"
       centered
       ok-text="删除"
-      ok-type="danger"
+      ok-type="primary"
+      :ok-button-props="{ danger: true }"
       cancel-text="取消"
       :confirm-loading="batchBusy"
       @ok="confirmBatchDelete"
       @cancel="batchDeleteOpen = false"
     >
-      <div class="flex flex-col gap-2.5">
-        <p class="text-ink-2 m-0">
+      <div class="flex flex-col gap-3 pt-1">
+        <p class="text-[12.5px] text-ink-2 leading-[1.55] m-0">
           这些对话的记录会从本机永久删除，无法恢复。agent 那边的会话不受影响。
         </p>
         <ul v-if="selectedMetasPreview.length" class="m-0 pl-4 text-[12px] text-ink-3 flex flex-col gap-[3px]">
           <li v-for="m in selectedMetasPreview" :key="m.id" class="truncate">{{ m.title || '新对话' }}</li>
           <li v-if="selectedCount > selectedMetasPreview.length" class="list-none -ml-4 text-ink-3">等共 {{ selectedCount }} 个对话</li>
         </ul>
-        <div v-if="selectedWorktreeCount > 0" class="pt-2 border-0 border-t border-solid border-line">
+        <div
+          v-if="selectedWorktreeCount > 0"
+          class="rounded-[10px] bg-surface-2 border border-solid border-line px-3 py-2.5 flex flex-col gap-1.5"
+        >
           <Checkbox v-model:checked="batchDeleteWithWorktree">
-            <span class="text-[12.5px] text-ink">同时删除关联的 {{ selectedWorktreeCount }} 个 Worktree 目录与临时分支</span>
+            <span class="text-[12.5px] text-ink">同时删除关联的 {{ selectedWorktreeCount }} 个 Worktree 目录</span>
+          </Checkbox>
+          <Checkbox v-if="batchDeleteWithWorktree" v-model:checked="batchDeleteWithBranch" class="pl-6">
+            <span class="text-[12px] text-ink-2">同时删除关联分支</span>
           </Checkbox>
         </div>
       </div>

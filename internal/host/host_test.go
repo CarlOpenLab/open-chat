@@ -1,7 +1,9 @@
 package host
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -175,5 +177,82 @@ func TestCodeBuddyEnvCompatibility(t *testing.T) {
 	gotUnset := hNoRegion.effectiveAgentEnv(AgentInfo{ID: "codebuddy"})
 	if v, ok := gotUnset["CODEBUDDY_INTERNET_ENVIRONMENT"]; !ok || v != "" {
 		t.Fatalf("unset env = %#v, want explicit empty unset signal", gotUnset)
+	}
+}
+
+func TestCreateWithoutWorkingDir(t *testing.T) {
+	dir := t.TempDir()
+	st, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &Host{
+		store:     st,
+		opts:      Options{DataDir: dir, Push: func(Push) {}},
+		envLoaded: true,
+		env:       os.Environ(),
+		presets:   []preset{{ID: "codex", Name: "Codex", Command: "codex", Probe: "codex"}},
+		lives:     map[string]*live{},
+	}
+
+	m, err := h.create("codex", "")
+	if err != nil {
+		t.Fatalf("create with empty cwd failed: %v", err)
+	}
+	if m.Cwd != "" {
+		t.Fatalf("expected empty Cwd, got %q", m.Cwd)
+	}
+	if len(h.settings.RecentDirs) != 0 {
+		t.Fatalf("expected RecentDirs to remain empty, got %v", h.settings.RecentDirs)
+	}
+	if h.settings.DefaultAgent != "codex" {
+		t.Fatalf("expected DefaultAgent=codex, got %q", h.settings.DefaultAgent)
+	}
+
+	scratch := h.scratchDir()
+	wantScratch := filepath.Join(dir, "scratch")
+	if scratch != wantScratch {
+		t.Fatalf("scratchDir = %q, want %q", scratch, wantScratch)
+	}
+	if info, err := os.Stat(scratch); err != nil || !info.IsDir() {
+		t.Fatalf("scratch dir not created: %v", err)
+	}
+}
+
+func TestConversationGroupBySettingPersists(t *testing.T) {
+	dir := t.TempDir()
+	got := loadSettings(dir)
+	if got.ConversationGroupBy != "time" {
+		t.Fatalf("default ConversationGroupBy = %q, want time", got.ConversationGroupBy)
+	}
+
+	h := &Host{
+		opts:     Options{DataDir: dir, Push: func(Push) {}},
+		settings: got,
+		lives:    map[string]*live{},
+	}
+	api := NewAPI(h)
+
+	got.ConversationGroupBy = "project"
+	saved, err := api.SaveSettings(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ConversationGroupBy != "project" {
+		t.Fatalf("saved ConversationGroupBy = %q, want project", saved.ConversationGroupBy)
+	}
+
+	reloaded := loadSettings(dir)
+	if reloaded.ConversationGroupBy != "project" {
+		t.Fatalf("reloaded ConversationGroupBy = %q, want project", reloaded.ConversationGroupBy)
+	}
+
+	reloaded.ConversationGroupBy = "invalid"
+	normalized, err := api.SaveSettings(reloaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.ConversationGroupBy != "time" {
+		t.Fatalf("invalid ConversationGroupBy normalized to %q, want time", normalized.ConversationGroupBy)
 	}
 }

@@ -94,10 +94,9 @@ const parent = computed(() => current.value?.parent ?? "");
     :width="560"
     centered
     title="选择工作目录"
-    :footer="null"
     @cancel="emit('update:open', false)"
   >
-    <p class="m-0 mb-3 text-[12.5px] text-ink-3">Agent 将在这个目录里读写文件与执行命令。</p>
+    <p class="m-0 mb-3 text-[12.5px] text-ink-3">Agent 将在这个目录里读写文件与执行命令，也可以不指定目录直接对话。</p>
 
     <div class="oc-folder-path-row flex gap-[6px]">
       <Input
@@ -138,6 +137,12 @@ const parent = computed(() => current.value?.parent ?? "");
           {{ c.label }}
         </button>
       </template>
+      <span
+        v-if="current?.isRepo"
+        class="ml-1 text-[10.5px] text-ink-3 bg-surface-strong border border-solid border-line rounded-[5px] px-[6px] leading-[18px] font-mono flex-none"
+      >
+        git
+      </span>
       <Input
         v-if="(current?.dirs ?? []).length > 8"
         v-model:value="filter"
@@ -180,14 +185,16 @@ const parent = computed(() => current.value?.parent ?? "");
 
     <div v-if="error" class="mt-2 text-[12px] text-err">{{ error }}</div>
 
-    <div class="flex items-center gap-2 mt-[14px]">
-      <span v-if="current?.isRepo" class="text-[11px] text-ok bg-ok-soft rounded-[5px] px-[7px] py-[1px]">git 仓库</span>
-      <span class="flex-1" />
-      <Button @click="emit('update:open', false)">取消</Button>
-      <Button type="primary" :disabled="!current" @click="choose(current!.path)">
-        <template #icon><CheckOutlined /></template>
-        用这个目录
-      </Button>
-    </div>
+    <template #footer>
+      <div class="flex items-center gap-2">
+        <Button @click="choose('')">不使用工作目录</Button>
+        <span class="flex-1" />
+        <Button @click="emit('update:open', false)">取消</Button>
+        <Button type="primary" :disabled="!current" @click="choose(current!.path)">
+          <template #icon><CheckOutlined /></template>
+          用这个目录
+        </Button>
+      </div>
+    </template>
   </Modal>
 </template>

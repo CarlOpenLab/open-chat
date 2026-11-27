@@ -46,6 +46,7 @@ import { answerText, userText } from "../transcript";
 import type { Block, PermissionOption, WorktreeStatus } from "../types";
 import Composer from "./Composer.vue";
 import FolderPicker from "./FolderPicker.vue";
+import ProviderIcon from "./ProviderIcon.vue";
 import TurnView from "./TurnView.vue";
 import WindowControls from "./WindowControls.vue";
 
@@ -208,6 +209,7 @@ const draft = computed({
 const shortCwd = computed(() => {
   const home = store.boot?.home;
   const p = meta.value.cwd;
+  if (!p) return "";
   if (home && p === home) return "~";
   if (home && p.startsWith(home + "/")) return "~" + p.slice(home.length);
   return p;
@@ -332,6 +334,7 @@ async function retry(blocks: Block[]) {
 }
 
 async function reveal() {
+  if (!meta.value.cwd) return;
   try {
     await api.reveal(meta.value.cwd);
   } catch (e) {
@@ -385,7 +388,7 @@ async function copySessionId() {
     `ACP Session: ${m.acpSessionId || "-"}`,
     `Agent: ${m.agentName} (${m.agentId})`,
     `模型: ${modelVal}`,
-    `目录: ${m.cwd}`,
+    `目录: ${m.cwd || "无"}`,
     `状态: ${live.value.status}`,
   ].join("\n");
   try {
@@ -401,8 +404,8 @@ const menu = computed(() => ({
     { key: "rename", label: "重命名" },
     { key: "pin", label: meta.value.pinned ? "取消置顶" : "置顶" },
     { key: "archive", label: archived.value ? "取消归档" : "归档对话" },
-    { key: "new-same", label: meta.value.worktree ? "在源仓库新建对话" : "在同目录新建对话" },
-    { key: "reveal", label: "在文件夹中显示" },
+    { key: "new-same", label: meta.value.worktree ? "在源仓库新建对话" : meta.value.cwd ? "在同目录新建对话" : "新建同 Agent 对话" },
+    ...(meta.value.cwd ? [{ key: "reveal", label: "在文件夹中显示" }] : []),
     ...(meta.value.worktree ? [{ key: "clean-worktree", label: "清理 Worktree" }] : []),
     { key: "copy-id", label: "复制会话 ID" },
     { type: "divider" as const },
@@ -430,7 +433,7 @@ async function confirmDelete() {
   deleting.value = true;
   deleteWtStatus.value = null;
   deleteRemoveWt.value = Boolean(meta.value.worktree);
-  deleteRemoveBranch.value = Boolean(meta.value.worktree);
+  deleteRemoveBranch.value = false;
   if (!meta.value.worktree) return;
   try {
     deleteWtStatus.value = await worktreeStatus(meta.value.id);
@@ -493,6 +496,16 @@ async function copyWorktreeBranch() {
   }
 }
 
+async function copyWorktreePath(path: string) {
+  if (!path) return;
+  try {
+    await navigator.clipboard.writeText(path);
+    message.success("已复制目录路径");
+  } catch {
+    message.error("复制失败");
+  }
+}
+
 async function revealSourceRepo() {
   const repo = meta.value.worktreeRepo;
   if (!repo) return;
@@ -506,14 +519,14 @@ async function revealSourceRepo() {
 const cleaningWt = ref(false);
 const cleanWtBusy = ref(false);
 const cleanWtStatus = ref<WorktreeStatus | null>(null);
-const cleanWtDeleteBranch = ref(true);
+const cleanWtDeleteBranch = ref(false);
 
 async function openCleanWorktree() {
   if (!meta.value.worktree) return;
   wtPanelOpen.value = false;
   cleaningWt.value = true;
   cleanWtStatus.value = null;
-  cleanWtDeleteBranch.value = true;
+  cleanWtDeleteBranch.value = false;
   try {
     cleanWtStatus.value = await worktreeStatus(meta.value.id);
   } catch {
@@ -605,7 +618,7 @@ async function changeDir(path: string) {
               <span>{{ meta.agentName }}</span>
             </span>
 
-            <Tooltip v-if="!meta.worktree" :title="`在文件夹中显示：${meta.cwd}`" :mouse-enter-delay="0.4">
+            <Tooltip v-if="!meta.worktree && meta.cwd" :title="`在文件夹中显示：${meta.cwd}`" :mouse-enter-delay="0.4">
               <button
                 class="oc-cwd-chip inline-flex items-center gap-[5px] h-[22px] px-[7px] rounded-[6px] border-0 bg-transparent text-[11px] text-ink-3 max-w-[240px] min-w-0 flex-[0_1_auto] cursor-pointer font-mono transition-colors duration-140 hover:bg-hover hover:text-ink-2 no-drag"
                 @click="reveal"
@@ -701,9 +714,24 @@ async function changeDir(path: string) {
             <span class="w-3 h-3 rounded-full border-[1.5px] border-solid border-line-strong border-t-ink-solid animate-oc-spin" />
             <span>正在加载对话记录…</span>
           </div>
-          <span v-else class="text-[12.5px] text-ink-3 shimmer-text animate-oc-bubble-in">
-            正在与 {{ meta.agentName }} 建立连接
-          </span>
+          <div
+            v-else
+            class="flex flex-col items-center gap-3 -mt-6 px-6 py-5 rounded-[16px] bg-surface glass-sm border border-solid border-line shadow-card animate-oc-bubble-in"
+          >
+            <div class="relative w-11 h-11 rounded-[13px] bg-modal border border-solid border-line-strong grid place-items-center text-ink">
+              <ProviderIcon :id="meta.agentId" :name="meta.agentName" :size="22" />
+              <span
+                class="absolute -inset-[4px] rounded-[16px] border border-solid border-line-strong opacity-60 animate-[oc-pulse_1.6s_ease-in-out_infinite]"
+                aria-hidden="true"
+              />
+            </div>
+            <div class="flex flex-col items-center gap-1 text-center">
+              <div class="flex items-center gap-2 text-[13.5px] fw-560 text-ink tracking-[-0.01em]">
+                <span class="shimmer-text">正在与 {{ meta.agentName }} 建立连接</span>
+              </div>
+              <span v-if="shortCwd" class="text-[11.5px] text-ink-3 font-mono max-w-[260px] truncate">{{ shortCwd }}</span>
+            </div>
+          </div>
         </div>
 
         <MessageScroller
@@ -783,6 +811,7 @@ async function changeDir(path: string) {
             @remove-queued="(qid) => removeQueued(meta.id, qid)"
             @jump-turn="jumpToTurn"
             @cwd="folderOpen = true"
+            @update:cwd="changeDir"
             @manage="store.settingsOpen = true"
           >
             <template #bar-extra>
@@ -825,25 +854,33 @@ async function changeDir(path: string) {
       <Modal
         :open="deleting"
         title="删除这个对话？"
-        :width="400"
+        :width="410"
+        centered
         ok-text="删除"
-        ok-type="danger"
+        ok-type="primary"
+        :ok-button-props="{ danger: true }"
         cancel-text="取消"
         :confirm-loading="deleteBusy"
         @ok="doDelete"
         @cancel="deleting = false"
       >
-        <div class="flex flex-col gap-3">
-          <p class="text-ink-2 m-0">「{{ meta.title }}」的记录会从本机删除，无法恢复。</p>
-          <div v-if="meta.worktree && deleteWtStatus?.exists" class="flex flex-col gap-2 pt-2 border-0 border-t border-solid border-line">
+        <div class="flex flex-col gap-3 pt-1">
+          <p class="text-[12.5px] text-ink-2 leading-[1.55] m-0">「{{ meta.title }}」的记录会从本机删除，无法恢复。</p>
+          <div
+            v-if="meta.worktree && deleteWtStatus?.exists"
+            class="rounded-[10px] bg-surface-2 border border-solid border-line px-3 py-2.5 flex flex-col gap-2"
+          >
             <Checkbox v-model:checked="deleteRemoveWt">
               <span class="text-[12.5px] text-ink">同时移除本地 Worktree 目录</span>
             </Checkbox>
-            <div v-if="deleteWtStatus.dirty" class="text-[11.5px] text-warn pl-6">
-              检测到 {{ deleteWtStatus.changedCount }} 处未提交更改，勾选移除将强制丢弃这些改动。
+            <div v-if="deleteRemoveWt && deleteWtStatus.dirty" class="flex items-start gap-1.5 text-[11.5px] text-ink-3 pl-6 leading-[1.45]">
+              <WarningOutlined class="text-warn flex-none mt-[2px] text-[12px]" />
+              <span>存在 {{ deleteWtStatus.changedCount }} 处未提交改动，移除目录后将无法恢复。</span>
             </div>
             <Checkbox v-if="deleteRemoveWt && meta.worktreeBranch" v-model:checked="deleteRemoveBranch" class="pl-6">
-              <span class="text-[12px] text-ink-2 font-mono">同时删除分支 {{ meta.worktreeBranch }}</span>
+              <span class="text-[12px] text-ink-2">
+                同时删除分支 <code class="font-mono text-ink">{{ meta.worktreeBranch }}</code>
+              </span>
             </Checkbox>
           </div>
         </div>
@@ -852,16 +889,29 @@ async function changeDir(path: string) {
       <Modal
         :open="wtPanelOpen"
         title="Worktree 隔离工作区"
-        :width="460"
+        :width="448"
         :footer="null"
         centered
         @cancel="wtPanelOpen = false"
       >
-        <div class="flex flex-col gap-3.5 pt-1">
-          <div class="flex flex-col gap-2 px-3 py-2.5 rounded-[10px] bg-surface-2 border border-solid border-line">
+        <div class="flex flex-col gap-3 pt-1">
+          <div class="flex flex-col gap-2 px-3.5 py-3 rounded-[10px] bg-surface-2 border border-solid border-line">
             <div class="flex items-center justify-between gap-2">
               <div class="flex items-center gap-1.5 min-w-0 font-mono text-[12.5px]">
-                <span class="w-[6px] h-[6px] rounded-full bg-ok flex-none" />
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.85"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  class="w-[13.5px] h-[13.5px] text-ink-3 flex-none"
+                >
+                  <line x1="6" x2="6" y1="3" y2="15" />
+                  <circle cx="18" cy="6" r="3" />
+                  <circle cx="6" cy="18" r="3" />
+                  <path d="M18 9a9 9 0 0 1-9 9" />
+                </svg>
                 <span class="text-ink fw-560 truncate" :title="wtPanelStatus?.branch || meta.worktreeBranch || 'detached'">
                   {{ wtPanelStatus?.branch || meta.worktreeBranch || 'detached' }}
                 </span>
@@ -880,19 +930,20 @@ async function changeDir(path: string) {
               <div class="flex items-center gap-1.5 flex-none text-[11px]">
                 <span
                   v-if="wtPanelStatus?.dirty"
-                  class="px-1.5 py-[1px] rounded-[5px] bg-warn-soft text-warn font-mono"
+                  class="inline-flex items-center gap-1.5 px-2 py-[2px] rounded-full bg-surface-strong border border-solid border-line text-ink-2"
                 >
-                  有未提交改动
+                  <span class="w-[5px] h-[5px] rounded-full bg-warn flex-none" />
+                  <span>未提交改动</span>
                 </span>
                 <span
                   v-else-if="wtPanelStatus && wtPanelStatus.aheadCount > 0"
-                  class="px-1.5 py-[1px] rounded-[5px] bg-hover text-ink-2 font-mono"
+                  class="inline-flex items-center px-2 py-[2px] rounded-full bg-surface-strong border border-solid border-line text-ink-2 font-mono"
                 >
                   +{{ wtPanelStatus.aheadCount }} 提交
                 </span>
                 <span
                   v-else-if="wtPanelStatus"
-                  class="px-1.5 py-[1px] rounded-[5px] bg-ok-soft text-ok font-mono"
+                  class="inline-flex items-center px-2 py-[2px] rounded-full bg-surface-strong border border-solid border-line text-ink-3"
                 >
                   工作区干净
                 </span>
@@ -901,54 +952,61 @@ async function changeDir(path: string) {
             <div class="flex items-center gap-1.5 text-[11px] text-ink-3 min-w-0">
               <FolderOpenOutlined class="flex-none text-[11.5px]" />
               <span class="font-mono truncate flex-1" :title="meta.cwd">{{ shortCwd }}</span>
+              <Tooltip title="复制目录路径" :mouse-enter-delay="0.3">
+                <button
+                  type="button"
+                  class="inline-grid place-items-center w-5 h-5 border-0 rounded-[5px] bg-transparent text-ink-3 cursor-pointer flex-none transition-colors duration-120 hover:bg-hover hover:text-ink"
+                  aria-label="复制目录路径"
+                  @click="copyWorktreePath(meta.cwd)"
+                >
+                  <CopyOutlined class="text-[11px]" />
+                </button>
+              </Tooltip>
               <span v-if="wtPanelStatus?.baseBranch || meta.worktreeBase" class="flex-none font-mono text-ink-3">
-                基于 {{ wtPanelStatus?.baseBranch || meta.worktreeBase }}
+                · 基于 {{ wtPanelStatus?.baseBranch || meta.worktreeBase }}
               </span>
             </div>
           </div>
 
-          <div v-if="wtPanelLoading" class="py-4 text-center text-[12px] text-ink-3">正在检查 Worktree 状态…</div>
+          <div v-if="wtPanelLoading" class="py-5 text-center text-[12px] text-ink-3">正在检查 Worktree 状态…</div>
 
           <template v-else-if="wtPanelStatus">
             <div v-if="wtPanelStatus.changedFiles?.length" class="flex flex-col gap-1.5">
-              <div class="flex items-center justify-between text-[11px] text-ink-3">
-                <span>当前改动（{{ wtPanelStatus.changedFiles.length }} 个文件）</span>
+              <div class="flex items-center justify-between px-0.5 text-[11px] text-ink-3">
+                <span>改动文件（{{ wtPanelStatus.changedFiles.length }}）</span>
                 <span v-if="wtPanelStatus.aheadCount > 0" class="font-mono">含 {{ wtPanelStatus.aheadCount }} 个提交</span>
               </div>
-              <div class="max-h-[180px] overflow-y-auto rounded-[9px] border border-solid border-line bg-surface-2 p-1.5 flex flex-col gap-0.5">
+              <div class="max-h-[180px] overflow-y-auto rounded-[10px] border border-solid border-line bg-surface-2 p-1.5 flex flex-col gap-0.5">
                 <div
                   v-for="f in wtPanelStatus.changedFiles"
                   :key="f.path"
-                  class="flex items-center gap-2 px-2 py-1 rounded-[6px] text-[11.5px] font-mono"
+                  class="flex items-center gap-2 px-2 py-1 rounded-[6px] text-[11.5px] font-mono transition-colors duration-100 hover:bg-hover"
                 >
-                  <span
-                    class="w-3.5 text-center fw-600 flex-none"
-                    :class="f.status === 'D' ? 'text-err' : f.status === 'A' || f.status === '?' ? 'text-ok' : 'text-warn'"
-                  >
+                  <span class="w-[18px] h-[18px] rounded-[5px] bg-hover text-ink-2 text-[10.5px] fw-560 inline-grid place-items-center flex-none">
                     {{ f.status }}
                   </span>
                   <span class="text-ink truncate flex-1" :title="f.path">{{ f.path }}</span>
                 </div>
               </div>
             </div>
-            <div v-else class="py-3 text-center text-[12px] text-ink-3 rounded-[9px] border border-dashed border-line">
+            <div v-else class="py-4 text-center text-[12px] text-ink-3 rounded-[10px] border border-solid border-line bg-surface-2">
               当前 Worktree 暂无文件改动
             </div>
           </template>
 
-          <div class="flex items-center justify-between gap-2 pt-2 border-0 border-t border-solid border-line">
+          <div class="flex items-center justify-between gap-2 pt-2.5 border-0 border-t border-solid border-line">
             <div class="flex items-center gap-1.5">
               <button
                 type="button"
-                class="h-7 px-2.5 rounded-[7px] border border-solid border-line bg-transparent text-ink-2 text-[12px] cursor-pointer transition-colors duration-120 hover:bg-hover hover:text-ink"
+                class="h-7 px-2.5 rounded-[7px] border border-solid border-line bg-surface-2 text-ink-2 text-[12px] cursor-pointer transition-colors duration-120 hover:bg-hover hover:border-line-strong hover:text-ink"
                 @click="reveal"
               >
-                打开副本目录
+                打开目录
               </button>
               <button
                 v-if="meta.worktreeRepo"
                 type="button"
-                class="h-7 px-2.5 rounded-[7px] border border-solid border-line bg-transparent text-ink-2 text-[12px] cursor-pointer transition-colors duration-120 hover:bg-hover hover:text-ink"
+                class="h-7 px-2.5 rounded-[7px] border border-solid border-line bg-surface-2 text-ink-2 text-[12px] cursor-pointer transition-colors duration-120 hover:bg-hover hover:border-line-strong hover:text-ink"
                 @click="revealSourceRepo"
               >
                 打开原仓库
@@ -956,7 +1014,7 @@ async function changeDir(path: string) {
             </div>
             <button
               type="button"
-              class="h-7 px-2.5 rounded-[7px] border-0 bg-transparent text-err text-[12px] fw-520 cursor-pointer transition-colors duration-120 hover:bg-err-soft"
+              class="h-7 px-2.5 rounded-[7px] border border-solid border-transparent bg-transparent text-ink-2 text-[12px] fw-520 cursor-pointer transition-colors duration-120 hover:bg-err-soft hover:text-err"
               @click="openCleanWorktree"
             >
               删除 Worktree
@@ -967,48 +1025,69 @@ async function changeDir(path: string) {
 
       <Modal
         :open="cleaningWt"
-        title="确认删除 Worktree？"
-        :width="430"
+        title="删除 Worktree"
+        :width="420"
         centered
-        ok-text="确认删除"
-        ok-type="danger"
+        ok-text="删除"
+        ok-type="primary"
+        :ok-button-props="{ danger: true }"
         cancel-text="取消"
         :confirm-loading="cleanWtBusy"
         @ok="doCleanWorktree"
         @cancel="cleaningWt = false"
       >
         <div class="flex flex-col gap-3 pt-1">
-          <div class="flex flex-col gap-1.5">
-            <div class="text-[12px] text-ink-2">将永久删除以下本地隔离目录：</div>
-            <div class="flex items-start gap-2 px-2.5 py-2 rounded-[8px] bg-surface-2 border border-solid border-line font-mono text-[11.5px] text-ink break-all leading-[1.5]">
-              <FolderOpenOutlined class="flex-none text-ink-3 mt-[2px] text-[12.5px]" />
-              <span>{{ meta.cwd }}</span>
-            </div>
-            <div class="text-[11.5px] text-ink-3 leading-[1.45]">
-              对话记录会保留并自动切回原仓库，不会修改原仓库中的文件。
-            </div>
-          </div>
+          <p class="m-0 text-[12.5px] text-ink-2 leading-[1.55]">
+            将永久移除该本地隔离目录。对话记录会保留并自动切回原仓库，不会影响原仓库中的文件。
+          </p>
 
-          <div
-            v-if="cleanWtStatus?.dirty"
-            class="flex items-start gap-2 rounded-[9px] px-3 py-2.5 bg-warn-soft border border-solid border-[color-mix(in_srgb,var(--warn)_30%,transparent)] text-warn"
-          >
-            <WarningOutlined class="flex-none mt-[2px] text-[13.5px]" />
-            <div class="flex flex-col gap-0.5 text-[12px] leading-[1.45]">
-              <span class="fw-560">检测到未提交的代码改动</span>
-              <span class="text-[11.5px] opacity-90">该目录下仍有未提交的修改，删除目录后这些代码将永久丢失，无法通过 Git 恢复。</span>
+          <div class="rounded-[10px] bg-surface-2 border border-solid border-line overflow-hidden">
+            <div class="px-3 py-2.5 flex flex-col gap-1">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] text-ink-3">隔离目录</span>
+                <Tooltip title="复制目录路径" :mouse-enter-delay="0.3">
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 h-5 px-1.5 border-0 rounded-[5px] bg-transparent text-[11px] text-ink-3 cursor-pointer flex-none transition-colors duration-120 hover:bg-hover hover:text-ink"
+                    aria-label="复制目录路径"
+                    @click="copyWorktreePath(meta.cwd)"
+                  >
+                    <CopyOutlined class="text-[11px]" />
+                    <span>复制</span>
+                  </button>
+                </Tooltip>
+              </div>
+              <span class="font-mono text-[11.5px] text-ink break-all leading-[1.5]">{{ meta.cwd }}</span>
+            </div>
+
+            <div
+              v-if="cleanWtStatus?.dirty"
+              class="px-3 py-2.5 border-0 border-t border-solid border-line flex items-start gap-2"
+            >
+              <WarningOutlined class="flex-none text-warn mt-[2px] text-[13px]" />
+              <div class="flex flex-col gap-0.5 leading-[1.45]">
+                <span class="text-[12px] fw-540 text-ink">存在未提交的代码改动</span>
+                <span class="text-[11.5px] text-ink-3">删除目录后这些改动将永久丢失，无法通过 Git 恢复。</span>
+              </div>
+            </div>
+
+            <div
+              v-if="meta.worktreeBranch"
+              class="px-3 py-2.5 border-0 border-t border-solid border-line flex flex-col gap-1.5"
+            >
+              <Checkbox v-model:checked="cleanWtDeleteBranch">
+                <span class="text-[12px] text-ink-2">
+                  同时删除分支 <code class="font-mono text-ink">{{ meta.worktreeBranch }}</code>
+                </span>
+              </Checkbox>
+              <div
+                v-if="cleanWtStatus && cleanWtStatus.aheadCount > 0 && cleanWtDeleteBranch"
+                class="pl-6 text-[11px] text-ink-3 leading-[1.45]"
+              >
+                该分支领先基准分支 {{ cleanWtStatus.aheadCount }} 个提交，删除分支后这些提交将一并移除。
+              </div>
             </div>
           </div>
-          <div
-            v-else-if="cleanWtStatus && cleanWtStatus.aheadCount > 0 && cleanWtDeleteBranch"
-            class="text-[11.5px] text-ink-2 bg-surface-2 border border-solid border-line rounded-[8px] px-2.5 py-2 leading-[1.45]"
-          >
-            当前分支领先基准分支 <code class="font-mono text-ink">{{ cleanWtStatus.aheadCount }}</code> 个提交，勾选删除分支后这些提交将一并移除。
-          </div>
-
-          <Checkbox v-if="meta.worktreeBranch" v-model:checked="cleanWtDeleteBranch">
-            <span class="text-[12px] text-ink-2 font-mono">同时删除分支 {{ meta.worktreeBranch }}</span>
-          </Checkbox>
         </div>
       </Modal>
     </div>

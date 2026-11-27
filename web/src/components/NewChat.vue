@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DeleteOutlined, FolderOpenOutlined, MenuUnfoldOutlined, WarningOutlined } from "@antdv-next/icons";
+import { CopyOutlined, DeleteOutlined, MenuUnfoldOutlined, WarningOutlined } from "@antdv-next/icons";
 import { Checkbox, Input, Modal, Popover, Select, Switch, Tooltip, message } from "antdv-next";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { isMac, listWorktrees, refreshAgents, removeWorktreeByPath, start, store } from "../store";
@@ -20,7 +20,7 @@ const gitBaseBranch = ref("");
 const gitBranches = ref<string[]>([]);
 const worktreeBaseBranch = ref("");
 const worktreeEnabled = ref(false);
-const worktreeBranchMode = ref<"auto" | "custom">("auto");
+const worktreeBranchMode = ref<"detach" | "auto" | "custom">("detach");
 const worktreeBranch = ref("");
 const worktreeExistingPath = ref("");
 
@@ -41,7 +41,6 @@ const baseBranchOptions = computed(() => {
   }));
 });
 const existingWorktrees = ref<WorktreeInfo[]>([]);
-const loadingWorktrees = ref(false);
 const wtPopoverOpen = ref(false);
 const wtBranchInputRef = ref<{ focus?: () => void; input?: HTMLInputElement } | null>(null);
 
@@ -51,8 +50,15 @@ watch(selected, (id) => {
 });
 
 watch(cwd, (p) => {
-  if (p && p !== store.currentCwd) store.currentCwd = p;
+  if (p !== store.currentCwd) store.currentCwd = p;
 });
+
+watch(
+  () => store.currentCwd,
+  (p) => {
+    if (p !== cwd.value) cwd.value = p;
+  },
+);
 
 onMounted(() => {
   void refreshAgents();
@@ -60,7 +66,9 @@ onMounted(() => {
   if (store.preferredAgentId) store.preferredAgentId = "";
   const available = store.agents.filter((a) => a.available && !a.disabled);
   selected.value = available.find((a) => a.id === preferred)?.id ?? available[0]?.id ?? store.agents[0]?.id ?? "";
-  cwd.value = store.currentCwd || store.settings?.recentDirs?.[0] || store.boot?.home || "";
+  cwd.value = store.cwdInitialized
+    ? store.currentCwd
+    : store.currentCwd || store.settings?.recentDirs?.[0] || "";
 });
 
 async function loadExistingWorktrees() {
@@ -68,13 +76,10 @@ async function loadExistingWorktrees() {
     existingWorktrees.value = [];
     return;
   }
-  loadingWorktrees.value = true;
   try {
     existingWorktrees.value = (await listWorktrees(cwd.value)) ?? [];
   } catch {
     existingWorktrees.value = [];
-  } finally {
-    loadingWorktrees.value = false;
   }
 }
 
@@ -86,13 +91,13 @@ watch(
     }
     if (!repo) {
       worktreeEnabled.value = false;
-      worktreeBranchMode.value = "auto";
+      worktreeBranchMode.value = "detach";
       worktreeBranch.value = "";
       worktreeBaseBranch.value = "";
       worktreeExistingPath.value = "";
       existingWorktrees.value = [];
       wtPopoverOpen.value = false;
-    } else if (worktreeEnabled.value) {
+    } else {
       void loadExistingWorktrees();
     }
   },
@@ -102,8 +107,6 @@ function setWorktreeMode(enabled: boolean) {
   worktreeEnabled.value = enabled;
   if (!enabled) {
     worktreeExistingPath.value = "";
-  } else {
-    void loadExistingWorktrees();
   }
 }
 
@@ -117,6 +120,14 @@ function onWtPopoverOpenChange(open: boolean) {
 function selectAutoBranch() {
   worktreeEnabled.value = true;
   worktreeBranchMode.value = "auto";
+  worktreeExistingPath.value = "";
+  worktreeBranch.value = "";
+  wtPopoverOpen.value = false;
+}
+
+function selectNoBranch() {
+  worktreeEnabled.value = true;
+  worktreeBranchMode.value = "detach";
   worktreeExistingPath.value = "";
   worktreeBranch.value = "";
   wtPopoverOpen.value = false;
@@ -145,13 +156,23 @@ function selectExistingWorktree(wt: WorktreeInfo) {
 }
 
 const deletingWt = ref<WorktreeInfo | null>(null);
-const deleteWtBranch = ref(true);
+const deleteWtBranch = ref(false);
 const deleteWtBusy = ref(false);
 
 function confirmDeleteExistingWorktree(wt: WorktreeInfo) {
   wtPopoverOpen.value = false;
   deletingWt.value = wt;
-  deleteWtBranch.value = Boolean(wt.branch && wt.branch !== "HEAD");
+  deleteWtBranch.value = false;
+}
+
+async function copyWorktreePath(path: string) {
+  if (!path) return;
+  try {
+    await navigator.clipboard.writeText(path);
+    message.success("已复制目录路径");
+  } catch {
+    message.error("复制失败");
+  }
 }
 
 async function doDeleteExistingWorktree() {
@@ -181,6 +202,9 @@ const worktreeButtonLabel = computed(() => {
     const hit = existingWorktrees.value.find((w) => w.path === worktreeExistingPath.value);
     const name = hit?.branch || worktreeBranch.value;
     return name ? `Worktree · ${name}` : "Worktree";
+  }
+  if (worktreeBranchMode.value === "detach") {
+    return effectiveWorktreeBase.value ? `Worktree · ${effectiveWorktreeBase.value}` : "Worktree · 不建分支";
   }
   if (worktreeBranchMode.value === "custom" && worktreeBranch.value.trim()) {
     return `Worktree · ${worktreeBranch.value.trim()}`;
@@ -218,12 +242,13 @@ async function send(blocks: Block[]) {
             enabled: true,
             baseBranch: effectiveWorktreeBase.value,
             branchName: worktreeBranchMode.value === "custom" ? worktreeBranch.value.trim() : "",
+            detach: worktreeBranchMode.value === "detach",
             existingPath: worktreeExistingPath.value || undefined,
           }
         : null,
     );
     draft.value = "";
-    worktreeBranchMode.value = "auto";
+    worktreeBranchMode.value = "detach";
     worktreeBranch.value = "";
     worktreeExistingPath.value = "";
   } catch (e) {
@@ -247,7 +272,7 @@ const pickDir = (p: string) => {
   cwd.value = p;
   store.currentCwd = p;
   worktreeBaseBranch.value = "";
-  worktreeBranchMode.value = "auto";
+  worktreeBranchMode.value = "detach";
   worktreeBranch.value = "";
   worktreeExistingPath.value = "";
   folderOpen.value = false;
@@ -337,25 +362,33 @@ const noAgent = computed(() => agents.value.length === 0);
               @open-change="onWtPopoverOpenChange"
             >
               <template #content>
-                <div class="w-[268px] flex flex-col gap-2.5">
-                  <div class="flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-1.5 min-w-0">
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.85"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        class="w-[14px] h-[14px] flex-none transition-colors duration-140"
-                        :class="worktreeEnabled ? 'text-ok' : 'text-ink-2'"
+                <div class="w-[292px] flex flex-col gap-3">
+                  <!-- Header: Worktree toggle -->
+                  <div class="flex items-center justify-between gap-2 pb-2 border-0 border-b border-solid border-line">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span
+                        class="w-6 h-6 rounded-[7px] inline-grid place-items-center flex-none transition-colors duration-140"
+                        :class="worktreeEnabled ? 'bg-ok-soft text-ok' : 'bg-hover text-ink-2'"
                       >
-                        <path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5" />
-                        <circle cx="13" cy="12" r="2" />
-                        <path d="M18 19c-2.8 0-5-2.2-5-5v8" />
-                        <circle cx="20" cy="19" r="2" />
-                      </svg>
-                      <span class="text-[12.5px] fw-560 text-ink">Worktree 隔离</span>
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.85"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          class="w-[13.5px] h-[13.5px]"
+                        >
+                          <path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5" />
+                          <circle cx="13" cy="12" r="2" />
+                          <path d="M18 19c-2.8 0-5-2.2-5-5v8" />
+                          <circle cx="20" cy="19" r="2" />
+                        </svg>
+                      </span>
+                      <div class="flex flex-col min-w-0">
+                        <span class="text-[12.5px] fw-580 text-ink leading-[1.25]">Worktree 隔离</span>
+                        <span class="text-[10.5px] text-ink-3 leading-[1.35]">在独立目录运行，不改动主工作区</span>
+                      </div>
                     </div>
                     <Switch
                       size="small"
@@ -364,9 +397,10 @@ const noAgent = computed(() => agents.value.length === 0);
                     />
                   </div>
 
+                  <!-- Base branch selector -->
                   <div class="flex flex-col gap-1.5">
                     <div class="flex items-center justify-between gap-2">
-                      <span class="text-[11.5px] text-ink-2 flex-none">基准分支</span>
+                      <span class="text-[11.5px] fw-500 text-ink-2 flex-none">基准分支</span>
                       <Select
                         v-model:value="effectiveWorktreeBase"
                         size="small"
@@ -374,18 +408,51 @@ const noAgent = computed(() => agents.value.length === 0);
                         :options="baseBranchOptions"
                         :disabled="Boolean(worktreeExistingPath)"
                         placeholder="选择基准分支"
-                        class="w-[168px] font-mono text-[11.5px]"
+                        class="w-[184px] font-mono text-[11.5px]"
                       />
                     </div>
-                    <div class="text-[11px] text-ink-3 leading-[1.45]">
-                      {{ worktreeExistingPath ? '当前正在复用已有 Worktree，切换新建模式后可调整基准分支。' : '在独立目录切出新分支，不会切换主仓库当前分支。' }}
+                    <div v-if="worktreeExistingPath" class="text-[10.5px] text-ink-3 leading-[1.4]">
+                      正在复用已有 Worktree，切换下方创建方式后可调整基准分支。
                     </div>
                   </div>
 
+                  <!-- Branch creation mode -->
                   <div class="flex flex-col gap-1">
+                    <div class="px-0.5 text-[10.5px] fw-500 text-ink-3">分支方式</div>
+
                     <button
                       type="button"
-                      class="w-full flex items-center justify-between gap-2 px-2.5 py-[6px] rounded-[8px] border border-solid text-left cursor-pointer transition-colors duration-120"
+                      class="w-full flex items-center justify-between gap-2.5 px-2.5 py-[7px] rounded-[9px] border border-solid text-left cursor-pointer transition-all duration-120"
+                      :class="
+                        worktreeEnabled && !worktreeExistingPath && worktreeBranchMode === 'detach'
+                          ? 'bg-active border-line-strong text-ink'
+                          : 'bg-transparent border-transparent text-ink-2 hover:bg-hover hover:text-ink'
+                      "
+                      @click="selectNoBranch"
+                    >
+                      <div class="flex flex-col gap-[1px] min-w-0">
+                        <span class="text-[12px] fw-540 leading-[1.3]">不新建分支</span>
+                        <span class="text-[10.5px] text-ink-3 leading-[1.35]">
+                          直接使用基准分支（已检出时自动游离 HEAD）
+                        </span>
+                      </div>
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        class="w-[13px] h-[13px] text-ok flex-none transition-opacity duration-120"
+                        :class="worktreeEnabled && !worktreeExistingPath && worktreeBranchMode === 'detach' ? 'opacity-100' : 'opacity-0'"
+                      >
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="w-full flex items-center justify-between gap-2.5 px-2.5 py-[7px] rounded-[9px] border border-solid text-left cursor-pointer transition-all duration-120"
                       :class="
                         worktreeEnabled && !worktreeExistingPath && worktreeBranchMode === 'auto'
                           ? 'bg-active border-line-strong text-ink'
@@ -393,26 +460,26 @@ const noAgent = computed(() => agents.value.length === 0);
                       "
                       @click="selectAutoBranch"
                     >
-                      <div class="flex flex-col min-w-0">
-                        <span class="text-[12px] fw-520">自动生成分支</span>
-                        <span class="text-[10.5px] font-mono text-ink-3">wt/自动命名</span>
+                      <div class="flex flex-col gap-[1px] min-w-0">
+                        <span class="text-[12px] fw-540 leading-[1.3]">自动生成分支</span>
+                        <span class="text-[10.5px] font-mono text-ink-3 leading-[1.35]">基于基准分支切出 wt/自动命名</span>
                       </div>
                       <svg
-                        v-if="worktreeEnabled && !worktreeExistingPath && worktreeBranchMode === 'auto'"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
-                        stroke-width="2"
+                        stroke-width="2.2"
                         stroke-linecap="round"
                         stroke-linejoin="round"
-                        class="w-[13px] h-[13px] text-ok flex-none"
+                        class="w-[13px] h-[13px] text-ok flex-none transition-opacity duration-120"
+                        :class="worktreeEnabled && !worktreeExistingPath && worktreeBranchMode === 'auto' ? 'opacity-100' : 'opacity-0'"
                       >
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                     </button>
 
                     <div
-                      class="flex flex-col gap-1.5 px-2.5 py-[6px] rounded-[8px] border border-solid transition-colors duration-120"
+                      class="flex flex-col gap-1.5 px-2.5 py-[7px] rounded-[9px] border border-solid transition-all duration-120"
                       :class="
                         worktreeEnabled && !worktreeExistingPath && worktreeBranchMode === 'custom'
                           ? 'bg-active border-line-strong text-ink'
@@ -421,19 +488,27 @@ const noAgent = computed(() => agents.value.length === 0);
                     >
                       <button
                         type="button"
-                        class="w-full flex items-center justify-between gap-2 p-0 border-0 bg-transparent text-left text-inherit cursor-pointer"
+                        class="w-full flex items-center justify-between gap-2.5 p-0 border-0 bg-transparent text-left text-inherit cursor-pointer"
                         @click="selectCustomBranch"
                       >
-                        <span class="text-[12px] fw-520">自定义分支名</span>
+                        <div class="flex flex-col gap-[1px] min-w-0">
+                          <span class="text-[12px] fw-540 leading-[1.3]">自定义分支名</span>
+                          <span
+                            v-if="!(worktreeEnabled && !worktreeExistingPath && worktreeBranchMode === 'custom')"
+                            class="text-[10.5px] text-ink-3 leading-[1.35]"
+                          >
+                            手动指定要切出的新分支名
+                          </span>
+                        </div>
                         <svg
-                          v-if="worktreeEnabled && !worktreeExistingPath && worktreeBranchMode === 'custom'"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
-                          stroke-width="2"
+                          stroke-width="2.2"
                           stroke-linecap="round"
                           stroke-linejoin="round"
-                          class="w-[13px] h-[13px] text-ok flex-none"
+                          class="w-[13px] h-[13px] text-ok flex-none transition-opacity duration-120"
+                          :class="worktreeEnabled && !worktreeExistingPath && worktreeBranchMode === 'custom' ? 'opacity-100' : 'opacity-0'"
                         >
                           <polyline points="20 6 9 17 4 12" />
                         </svg>
@@ -451,14 +526,14 @@ const noAgent = computed(() => agents.value.length === 0);
                   </div>
 
                   <template v-if="existingWorktrees.length > 0">
-                    <div class="h-[1px] bg-line -mx-1" />
+                    <div class="h-[1px] bg-line" />
                     <div class="flex flex-col gap-1">
-                      <div class="px-1 text-[10.5px] text-ink-3">已有 Worktree</div>
+                      <div class="px-0.5 text-[10.5px] fw-500 text-ink-3">已有 Worktree</div>
                       <div class="flex flex-col gap-0.5 max-h-[140px] overflow-y-auto">
                         <div
                           v-for="wt in existingWorktrees"
                           :key="wt.path"
-                          class="group/wt flex items-center gap-1 rounded-[7px] border border-solid transition-colors duration-120"
+                          class="group/wt flex items-center gap-1 rounded-[8px] border border-solid transition-colors duration-120"
                           :class="
                             worktreeEnabled && worktreeExistingPath === wt.path
                               ? 'bg-active border-line-strong text-ink'
@@ -492,9 +567,6 @@ const noAgent = computed(() => agents.value.length === 0);
                       </div>
                     </div>
                   </template>
-                  <div v-else-if="loadingWorktrees" class="text-[11px] text-ink-3 px-1">
-                    正在检查已有 Worktree…
-                  </div>
                 </div>
               </template>
 
@@ -568,42 +640,63 @@ const noAgent = computed(() => agents.value.length === 0);
 
     <Modal
       :open="Boolean(deletingWt)"
-      title="确认删除 Worktree？"
-      :width="430"
+      title="删除 Worktree"
+      :width="420"
       centered
-      ok-text="确认删除"
-      ok-type="danger"
+      ok-text="删除"
+      ok-type="primary"
+      :ok-button-props="{ danger: true }"
       cancel-text="取消"
       :confirm-loading="deleteWtBusy"
       @ok="doDeleteExistingWorktree"
       @cancel="deletingWt = null"
     >
       <div v-if="deletingWt" class="flex flex-col gap-3 pt-1">
-        <div class="flex flex-col gap-1.5">
-          <div class="text-[12px] text-ink-2">将永久删除以下本地隔离目录：</div>
-          <div class="flex items-start gap-2 px-2.5 py-2 rounded-[8px] bg-surface-2 border border-solid border-line font-mono text-[11.5px] text-ink break-all leading-[1.5]">
-            <FolderOpenOutlined class="flex-none text-ink-3 mt-[2px] text-[12.5px]" />
-            <span>{{ deletingWt.path }}</span>
+        <p class="m-0 text-[12.5px] text-ink-2 leading-[1.55]">
+          将永久移除该本地隔离目录，不会影响原仓库中的文件。
+        </p>
+
+        <div class="rounded-[10px] bg-surface-2 border border-solid border-line overflow-hidden">
+          <div class="px-3 py-2.5 flex flex-col gap-1">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[11px] text-ink-3">隔离目录</span>
+              <Tooltip title="复制目录路径" :mouse-enter-delay="0.3">
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 h-5 px-1.5 border-0 rounded-[5px] bg-transparent text-[11px] text-ink-3 cursor-pointer flex-none transition-colors duration-120 hover:bg-hover hover:text-ink"
+                  aria-label="复制目录路径"
+                  @click="copyWorktreePath(deletingWt.path)"
+                >
+                  <CopyOutlined class="text-[11px]" />
+                  <span>复制</span>
+                </button>
+              </Tooltip>
+            </div>
+            <span class="font-mono text-[11.5px] text-ink break-all leading-[1.5]">{{ deletingWt.path }}</span>
           </div>
-          <div class="text-[11.5px] text-ink-3 leading-[1.45]">
-            不会修改原仓库中的文件。
+
+          <div
+            v-if="deletingWt.dirty"
+            class="px-3 py-2.5 border-0 border-t border-solid border-line flex items-start gap-2"
+          >
+            <WarningOutlined class="flex-none text-warn mt-[2px] text-[13px]" />
+            <div class="flex flex-col gap-0.5 leading-[1.45]">
+              <span class="text-[12px] fw-540 text-ink">存在 {{ deletingWt.changedCount }} 处未提交的代码改动</span>
+              <span class="text-[11.5px] text-ink-3">删除目录后这些改动将永久丢失，无法通过 Git 恢复。</span>
+            </div>
+          </div>
+
+          <div
+            v-if="deletingWt.branch && deletingWt.branch !== 'HEAD'"
+            class="px-3 py-2.5 border-0 border-t border-solid border-line"
+          >
+            <Checkbox v-model:checked="deleteWtBranch">
+              <span class="text-[12px] text-ink-2">
+                同时删除分支 <code class="font-mono text-ink">{{ deletingWt.branch }}</code>
+              </span>
+            </Checkbox>
           </div>
         </div>
-
-        <div
-          v-if="deletingWt.dirty"
-          class="flex items-start gap-2 rounded-[9px] px-3 py-2.5 bg-warn-soft border border-solid border-[color-mix(in_srgb,var(--warn)_30%,transparent)] text-warn"
-        >
-          <WarningOutlined class="flex-none mt-[2px] text-[13.5px]" />
-          <div class="flex flex-col gap-0.5 text-[12px] leading-[1.45]">
-            <span class="fw-560">检测到 {{ deletingWt.changedCount }} 处未提交的代码改动</span>
-            <span class="text-[11.5px] opacity-90">删除目录后这些未提交的代码将永久丢失，无法通过 Git 恢复。</span>
-          </div>
-        </div>
-
-        <Checkbox v-if="deletingWt.branch && deletingWt.branch !== 'HEAD'" v-model:checked="deleteWtBranch">
-          <span class="text-[12px] text-ink-2 font-mono">同时删除分支 {{ deletingWt.branch }}</span>
-        </Checkbox>
       </div>
     </Modal>
   </div>
