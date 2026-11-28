@@ -18,6 +18,7 @@ import { Icon, addCollection, type IconifyJSON } from "@iconify/vue";
 import rawLucide from "@iconify-json/lucide/icons.json";
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { botById, isArchived, isDark, isMac, newConversation, newConversationInDir, openBotChat, openBots, pin, remove, removeWorktree, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
+import { stateForLiveStatus } from "../botAvatar";
 import type { Meta } from "../types";
 import BotAvatar from "./BotAvatar.vue";
 import ProviderIcon from "./ProviderIcon.vue";
@@ -403,7 +404,13 @@ function renderProjectGroupLabel(group: string, info: { groupInfo: { data: unkno
     const canAdd = Boolean(bot) && !selecting.value;
 
     return h("div", { class: ["proj-group-head", { "has-add": canAdd }], title: `Bot：${displayName}` }, [
-      h(BotAvatar, { avatar: bot?.avatar, name: displayName, size: 15, class: "rounded-full flex-none" }),
+      h(BotAvatar, {
+        avatar: bot?.avatar,
+        name: displayName,
+        size: 16,
+        state: botAvatarState(botId),
+        class: "rounded-full flex-none",
+      }),
       h("span", { class: "proj-group-name" }, displayName),
       h("span", { class: "proj-group-tail" }, [
         h("span", { class: "proj-group-count font-mono" }, String(count)),
@@ -650,7 +657,13 @@ function renderConvLabel(item: ConversationItemType, inBotGroup = false) {
         checked ? [lucideIcon("check", 11, "conv-check-ic")] : [],
       )
     : !inBotGroup && m.botId
-      ? h(BotAvatar, { avatar: bot?.avatar, name: bot?.name || m.botName || "Bot", size: 15, class: "rounded-full conv-logo" })
+      ? h(BotAvatar, {
+          avatar: bot?.avatar,
+          name: bot?.name || m.botName || "Bot",
+          size: 16,
+          state: stateForLiveStatus(store.lives[m.id]?.status ?? m.status),
+          class: "rounded-full conv-logo",
+        })
       : h(ProviderIcon, { id: m.agentId, name: m.agentName, size: 13, class: "conv-logo" });
 
   const showDirTag = !m.botId && Boolean(m.cwd) && (!isProjectMode.value || Boolean(m.pinned) || Boolean(m.worktree));
@@ -985,6 +998,14 @@ function botLiveBadge(botId: string): "need" | "run" | "unseen" | null {
   return null;
 }
 
+function botAvatarState(botId: string) {
+  const badge = botLiveBadge(botId);
+  if (badge === "need") return "notifying";
+  if (badge === "run") return "working";
+  if (badge === "unseen") return "happy";
+  return "idle";
+}
+
 function toggleBotsExpanded() {
   if (showArchived.value) showArchived.value = false;
   botsExpanded.value = !botsExpanded.value;
@@ -1146,7 +1167,7 @@ async function startBotConversation(botId: string) {
               :key="b.id"
               class="oc-bot-stack-item relative w-[24px] h-[24px] rounded-full border-[1.5px] border-solid border-[var(--bg)] bg-modal inline-flex items-center justify-center flex-none"
             >
-              <BotAvatar :avatar="b.avatar" :name="b.name" :size="21" class="rounded-full" />
+              <BotAvatar :avatar="b.avatar" :name="b.name" :size="21" :state="botAvatarState(b.id)" class="rounded-full" />
               <span
                 v-if="botLiveBadge(b.id)"
                 class="absolute -right-[1px] -bottom-[1px] w-[7px] h-[7px] rounded-full border-[1.5px] border-solid border-[var(--bg)]"
@@ -1285,7 +1306,7 @@ async function startBotConversation(botId: string) {
                   />
                 </span>
                 <div class="relative flex-none ml-[2px]">
-                  <BotAvatar :avatar="b.avatar" :name="b.name" :size="16" class="rounded-full" />
+                  <BotAvatar :avatar="b.avatar" :name="b.name" :size="17" :state="botAvatarState(b.id)" class="rounded-full" />
                   <span
                     v-if="!isBotExpanded(b.id) && botLiveBadge(b.id)"
                     class="absolute -right-[2px] -bottom-[2px] w-[6px] h-[6px] rounded-full border border-solid border-[var(--bg)]"

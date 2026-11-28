@@ -5,6 +5,7 @@ import { ReloadOutlined, WarningOutlined } from "@antdv-next/icons";
 import { Image } from "antdv-next";
 import { computed, h, ref } from "vue";
 import { store } from "../store";
+import { stateForTurn } from "../botAvatar";
 import { answerText, userText, type Turn } from "../transcript";
 import type { Block } from "../types";
 import BotAvatar from "./BotAvatar.vue";
@@ -23,6 +24,7 @@ const props = defineProps<{
   botAvatar?: string;
   live: boolean;
   isLast?: boolean;
+  pendingPerm?: boolean;
   canRetry: boolean;
 }>();
 
@@ -75,7 +77,16 @@ const links = computed(() =>
 const ended = computed(() => Boolean(props.turn.end));
 const streaming = computed(() => props.live && !ended.value);
 const failed = computed(
-  () => props.turn.end && props.turn.end.stopReason !== "end_turn" && props.turn.end.stopReason !== "cancelled",
+  () => Boolean(props.turn.end && props.turn.end.stopReason !== "end_turn" && props.turn.end.stopReason !== "cancelled"),
+);
+const botState = computed(() =>
+  stateForTurn({
+    turn: props.turn,
+    streaming: streaming.value,
+    failed: failed.value,
+    isLast: Boolean(props.isLast),
+    pendingPerm: Boolean(props.pendingPerm),
+  }),
 );
 
 const durationText = computed(() => {
@@ -199,12 +210,22 @@ const actionItems = computed<ActionItemType[]>(() => {
         :content="text || ' '"
       >
         <template #avatar>
+          <BotAvatar
+            v-if="botName"
+            :avatar="botAvatar"
+            :name="botName"
+            :size="32"
+            :state="botState"
+            :animated="streaming"
+            :halo="false"
+            interactive
+          />
           <div
+            v-else
             class="w-8 h-8 rounded-full inline-flex items-center justify-center overflow-hidden flex-none bg-surface glass-sm border border-solid border-line-strong shadow-card text-ink-2"
-            :title="botName || agentName || 'Agent'"
+            :title="agentName || 'Agent'"
           >
-            <BotAvatar v-if="botName" :avatar="botAvatar" :name="botName" :size="26" class="rounded-full" />
-            <ProviderIcon v-else :id="agentId || ''" :name="agentName" :size="17" />
+            <ProviderIcon :id="agentId || ''" :name="agentName" :size="17" />
           </div>
         </template>
 

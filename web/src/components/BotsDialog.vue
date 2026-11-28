@@ -8,16 +8,18 @@ import {
   MessageOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SmileOutlined,
   SyncOutlined,
   UploadOutlined,
 } from "@antdv-next/icons";
-import { Button, Input, Modal, Select, Tooltip, message } from "antdv-next";
+import { Button, Input, Modal, Popover, Select, Tooltip, message } from "antdv-next";
 import { computed, ref, watch } from "vue";
 import { api, inApp } from "../api";
-import { makeBotAvatar, parseDicebearSeed, randomAvatarSeed } from "../botAvatar";
+import { getBotPreset, makeBotAvatar, randomBotAvatar, resolveBotAvatar } from "../botAvatar";
 import { openBotChat, probeModels, refreshAgents, saveSettings, select, store } from "../store";
 import type { Bot, BotFiles, ConfigSelectOption, Meta } from "../types";
 import BotAvatar from "./BotAvatar.vue";
+import BotAvatarPicker from "./BotAvatarPicker.vue";
 import ProviderIcon from "./ProviderIcon.vue";
 
 const props = defineProps<{
@@ -44,7 +46,8 @@ const draft = ref<Bot | null>(null);
 const draftSoul = ref("");
 const draftMemory = ref("");
 const origSnapshot = ref("");
-const avatarSeed = ref("open-chat-bot");
+const avatarPickerOpen = ref(false);
+const previewAvatarRef = ref<InstanceType<typeof BotAvatar> | null>(null);
 const botFiles = ref<BotFiles | null>(null);
 const editDocTab = ref<EditDocTab>("soul");
 const loadingFiles = ref(false);
@@ -128,10 +131,27 @@ watch(
   },
 );
 
+const draftAvatarSummary = computed(() => {
+  if (!draft.value) return "";
+  const resolved = resolveBotAvatar(draft.value.avatar, draft.value.name || "Bot");
+  if (resolved.kind === "image") return "自定义图片";
+  if (resolved.kind === "text") return `表情 ${resolved.text}`;
+  const preset = getBotPreset(resolved.spec);
+  return preset ? `${preset.name.zh} · ${preset.desc.zh}` : "Aora Bot 角色";
+});
+
 function rollAvatar() {
   if (!draft.value) return;
-  avatarSeed.value = randomAvatarSeed();
-  draft.value.avatar = makeBotAvatar(avatarSeed.value);
+  const resolved = resolveBotAvatar(draft.value.avatar, draft.value.name || "Bot");
+  const currentChar = resolved.kind === "aora" ? resolved.spec.character : undefined;
+  draft.value.avatar = randomBotAvatar(currentChar);
+  previewAvatarRef.value?.bounce(0.85);
+}
+
+function onSelectAoraAvatar(nextAvatar: string) {
+  if (!draft.value) return;
+  draft.value.avatar = nextAvatar;
+  previewAvatarRef.value?.bounce(0.75);
 }
 
 async function onBotAvatarPick(e: Event) {
@@ -253,7 +273,6 @@ async function openRun(m: Meta) {
 }
 
 function startCreate(fromList = false) {
-  const seed = randomAvatarSeed();
   const agentId = pickDefaultAgentId();
   if (fromList) {
     openedAsCreate.value = false;
@@ -261,11 +280,11 @@ function startCreate(fromList = false) {
   }
   creating.value = true;
   selectedId.value = null;
-  avatarSeed.value = seed;
+  avatarPickerOpen.value = false;
   draft.value = {
     id: "",
     name: "",
-    avatar: makeBotAvatar(seed),
+    avatar: randomBotAvatar(),
     agentId,
     modelConfigId: "",
     modelValue: "",
@@ -284,8 +303,8 @@ function startCreate(fromList = false) {
 async function selectBot(bot: Bot, initialTab: EditDocTab = "soul") {
   creating.value = false;
   selectedId.value = bot.id;
+  avatarPickerOpen.value = false;
   draft.value = JSON.parse(JSON.stringify(bot)) as Bot;
-  avatarSeed.value = parseDicebearSeed(bot.avatar) || bot.name || randomAvatarSeed();
   botFiles.value = null;
   draftSoul.value = "";
   draftMemory.value = "";
@@ -484,7 +503,13 @@ async function revealBotDir() {
             @click="selectBot(b)"
           >
             <div class="relative flex-none">
-              <BotAvatar :avatar="b.avatar" :name="b.name" :size="28" class="rounded-full" />
+              <BotAvatar
+                :avatar="b.avatar"
+                :name="b.name"
+                :size="28"
+                :state="activeRunOf(b.id) ? 'working' : 'idle'"
+                class="rounded-full"
+              />
               <span
                 v-if="activeRunOf(b.id)"
                 class="absolute -right-0.5 -bottom-0.5 w-2.5 h-2.5 rounded-full bg-ok border-2 border-solid border-modal"
@@ -594,28 +619,41 @@ async function revealBotDir() {
           <!-- Avatar + Name -->
           <div class="flex items-center gap-4">
             <div class="relative flex-none">
-              <Tooltip title="点击上传本地头像">
-                <button
-                  type="button"
-                  class="group/av relative w-[62px] h-[62px] rounded-full border border-solid border-line-strong bg-hover shadow-card inline-flex items-center justify-center cursor-pointer overflow-hidden transition-all p-0"
-                  @click="avatarInputRef?.click()"
-                >
-                  <BotAvatar :avatar="draft.avatar" :name="draft.name || 'Bot'" :size="62" class="rounded-full" />
-                  <span class="absolute inset-0 bg-[var(--avatar-mask)] text-[var(--avatar-mask-ink)] text-[14px] opacity-0 group-hover/av:opacity-100 transition-opacity duration-150 grid place-items-center">
-                    <UploadOutlined />
-                  </span>
-                </button>
-              </Tooltip>
-              <Tooltip title="随机换一个头像">
-                <button
-                  type="button"
-                  class="absolute -right-0.5 -bottom-0.5 w-6 h-6 rounded-full border border-solid border-line-strong bg-modal shadow-card text-ink-2 inline-grid place-items-center cursor-pointer text-[11px] transition-all hover:bg-hover hover:text-ink active:scale-95"
-                  aria-label="随机换一个头像"
-                  @click="rollAvatar"
-                >
-                  <SyncOutlined />
-                </button>
-              </Tooltip>
+              <Popover
+                v-model:open="avatarPickerOpen"
+                trigger="click"
+                placement="bottomLeft"
+                :arrow="false"
+              >
+                <template #content>
+                  <BotAvatarPicker
+                    :avatar="draft.avatar"
+                    :name="draft.name || 'Bot'"
+                    @select="onSelectAoraAvatar"
+                    @upload="
+                      avatarPickerOpen = false;
+                      avatarInputRef?.click();
+                    "
+                  />
+                </template>
+                <Tooltip title="点击定制角色外观（71 角色 / 配色 / 脸型 / 画风）" :mouse-enter-delay="0.35">
+                  <button
+                    type="button"
+                    class="relative w-[64px] h-[64px] rounded-full border-0 bg-transparent inline-flex items-center justify-center cursor-pointer overflow-visible transition-transform duration-150 p-0 hover:scale-[1.03]"
+                    aria-label="定制 Bot 头像"
+                  >
+                    <BotAvatar
+                      ref="previewAvatarRef"
+                      :avatar="draft.avatar"
+                      :name="draft.name || 'Bot'"
+                      :size="64"
+                      :state="creating ? 'happy' : 'idle'"
+                      animated
+                      interactive
+                    />
+                  </button>
+                </Tooltip>
+              </Popover>
             </div>
 
             <div class="flex-1 min-w-0 flex flex-col gap-1.5">
@@ -627,6 +665,34 @@ async function revealBotDir() {
                 placeholder="给 Bot 起个名字，如：bug排查、代码审查…"
                 class="!text-[14px] fw-560"
               />
+              <div class="flex items-center gap-2 text-[11px] text-ink-3 min-w-0">
+                <span class="truncate flex-1 min-w-0">{{ draftAvatarSummary }}</span>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 h-[22px] px-1.5 rounded-[6px] border-0 bg-transparent text-[11px] text-ink-2 cursor-pointer flex-none transition-colors hover:bg-hover hover:text-ink active:scale-95"
+                  aria-label="随机换一个角色"
+                  @click="rollAvatar"
+                >
+                  <SyncOutlined class="text-[11px]" />
+                  <span>随机</span>
+                </button>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 h-[22px] px-1.5 rounded-[6px] border-0 bg-transparent text-[11px] text-ink-2 cursor-pointer flex-none transition-colors hover:bg-hover hover:text-ink"
+                  @click="avatarPickerOpen = !avatarPickerOpen"
+                >
+                  <SmileOutlined class="text-[11px]" />
+                  <span>定制</span>
+                </button>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 h-[22px] px-1.5 rounded-[6px] border-0 bg-transparent text-[11px] text-ink-2 cursor-pointer flex-none transition-colors hover:bg-hover hover:text-ink"
+                  @click="avatarInputRef?.click()"
+                >
+                  <UploadOutlined class="text-[11px]" />
+                  <span>上传</span>
+                </button>
+              </div>
             </div>
           </div>
 

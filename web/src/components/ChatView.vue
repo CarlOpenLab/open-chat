@@ -45,6 +45,7 @@ import {
   worktreeStatus,
 } from "../store";
 import { answerText, userText } from "../transcript";
+import { getBotPreset, resolveBotAvatar, stateForLiveStatus } from "../botAvatar";
 import type { Block, PermissionOption, WorktreeStatus } from "../types";
 import BotAvatar from "./BotAvatar.vue";
 import Composer from "./Composer.vue";
@@ -59,6 +60,14 @@ const transcript = computed(() => activeTranscript.value);
 const activeBot = computed(() => botById(meta.value.botId));
 const botDisplayName = computed(() => activeBot.value?.name || meta.value.botName || "Bot");
 const botAvatar = computed(() => activeBot.value?.avatar || "");
+const botPresetDesc = computed(() => {
+  if (!meta.value.botId) return "";
+  const resolved = resolveBotAvatar(botAvatar.value, botDisplayName.value);
+  if (resolved.kind !== "aora") return "";
+  const preset = getBotPreset(resolved.spec);
+  return preset ? `${preset.name.zh} · ${preset.desc.zh}` : "";
+});
+const headerBotState = computed(() => stateForLiveStatus(live.value.status, pendingPerms.value.length > 0));
 
 const scroller = ref<MessageScrollerRef | null>(null);
 const following = ref(true);
@@ -648,7 +657,7 @@ async function changeDir(path: string) {
                 class="inline-flex items-center gap-[5px] h-[22px] pl-1 pr-2 rounded-full bg-hover border border-solid border-line text-[11px] fw-530 text-ink-2 flex-none cursor-pointer transition-colors duration-140 hover:bg-active hover:text-ink no-drag"
                 @click="openBotSettings"
               >
-                <BotAvatar :avatar="botAvatar" :name="botDisplayName" :size="15" class="rounded-full" />
+                <BotAvatar :avatar="botAvatar" :name="botDisplayName" :size="16" :state="headerBotState" class="rounded-full" />
                 <span class="max-w-[110px] truncate">{{ botDisplayName }}</span>
               </button>
             </Tooltip>
@@ -753,9 +762,21 @@ async function changeDir(path: string) {
             v-else
             class="flex flex-col items-center gap-3 -mt-6 px-6 py-5 rounded-[16px] bg-surface glass-sm border border-solid border-line shadow-card animate-oc-bubble-in"
           >
-            <div class="relative w-11 h-11 rounded-[13px] bg-modal border border-solid border-line-strong grid place-items-center text-ink overflow-hidden">
-              <BotAvatar v-if="meta.botId" :avatar="botAvatar" :name="botDisplayName" :size="30" class="rounded-full" />
-              <ProviderIcon v-else :id="meta.agentId" :name="meta.agentName" :size="22" />
+            <BotAvatar
+              v-if="meta.botId"
+              :avatar="botAvatar"
+              :name="botDisplayName"
+              :size="48"
+              :halo="false"
+              state="loading"
+              animated
+              interactive
+            />
+            <div
+              v-else
+              class="relative w-12 h-12 rounded-[14px] bg-modal border border-solid border-line-strong grid place-items-center text-ink overflow-hidden"
+            >
+              <ProviderIcon :id="meta.agentId" :name="meta.agentName" :size="22" />
               <span
                 class="absolute -inset-[4px] rounded-[16px] border border-solid border-line-strong opacity-60 animate-[oc-pulse_1.6s_ease-in-out_infinite]"
                 aria-hidden="true"
@@ -766,6 +787,31 @@ async function changeDir(path: string) {
                 <span class="shimmer-text">正在与 {{ meta.botId ? botDisplayName : meta.agentName }} 建立连接</span>
               </div>
               <span v-if="shortCwd && !meta.botId" class="text-[11.5px] text-ink-3 font-mono max-w-[260px] truncate">{{ shortCwd }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-else-if="meta.botId && !turns.length"
+          class="absolute inset-0 z-10 flex items-center justify-center px-5 pointer-events-none"
+        >
+          <div class="flex flex-col items-center gap-3 -mt-6 text-center animate-oc-bubble-in pointer-events-auto">
+            <BotAvatar
+              :avatar="botAvatar"
+              :name="botDisplayName"
+              :size="76"
+              :halo="false"
+              :state="live.status === 'error' ? 'sad' : 'happy'"
+              animated
+              interactive
+              antics
+            />
+            <div class="flex flex-col items-center gap-1">
+              <div class="text-[15px] fw-600 text-ink tracking-[-0.01em]">{{ botDisplayName }}</div>
+              <div class="text-[12px] text-ink-3">
+                <template v-if="botPresetDesc">{{ botPresetDesc }} · </template>
+                由 {{ meta.agentName }} 驱动
+              </div>
             </div>
           </div>
         </div>
@@ -814,6 +860,7 @@ async function changeDir(path: string) {
             :bot-avatar="meta.botId ? botAvatar : undefined"
             :live="i === visibleTurns.length - 1 && (running || live.status === 'connecting')"
             :is-last="i === visibleTurns.length - 1"
+            :pending-perm="i === visibleTurns.length - 1 && pendingPerms.length > 0"
             :can-retry="!running"
             @retry="retry"
           />
