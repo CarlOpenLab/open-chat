@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { Actions, ActionsCopy, Bubble, FileCard } from "@antdv-next/x";
+import { Actions, ActionsCopy, Bubble, BubbleDivider, FileCard } from "@antdv-next/x";
 import type { ItemType as ActionItemType } from "@antdv-next/x";
 import { ReloadOutlined, WarningOutlined } from "@antdv-next/icons";
 import { Image } from "antdv-next";
-import { computed, h } from "vue";
+import { computed, h, ref } from "vue";
 import { store } from "../store";
 import { answerText, userText, type Turn } from "../transcript";
 import type { Block } from "../types";
+import BotAvatar from "./BotAvatar.vue";
 import PlanCard from "./PlanCard.vue";
 import ProviderIcon from "./ProviderIcon.vue";
 import ReasoningBlock from "./ReasoningBlock.vue";
@@ -18,16 +19,52 @@ const props = defineProps<{
   conversationId: string;
   agentId?: string;
   agentName?: string;
+  botName?: string;
+  botAvatar?: string;
   live: boolean;
   isLast?: boolean;
   canRetry: boolean;
 }>();
+
+const showBotContext = ref(false);
 
 const emit = defineEmits<{ retry: [blocks: Block[]] }>();
 
 const text = computed(() => answerText(props.turn));
 const userBlocks = computed(() => props.turn.user?.blocks ?? []);
 const userPrompt = computed(() => userText(userBlocks.value));
+const parsedBotPrompt = computed(() => {
+  const raw = userPrompt.value;
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("<bot-context>")) {
+    return { context: "", task: raw };
+  }
+  const end = trimmed.indexOf("</bot-context>");
+  if (end === -1) {
+    return { context: "", task: raw };
+  }
+  const context = trimmed.slice("<bot-context>".length, end).trim();
+  const task = trimmed.slice(end + "</bot-context>".length).trim();
+  return { context, task };
+});
+const displayUserPrompt = computed(() => parsedBotPrompt.value.task || userPrompt.value);
+const botDividerContent = computed(() =>
+  h(
+    "button",
+    {
+      type: "button",
+      class:
+        "inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-[11.5px] text-ink-3 cursor-pointer transition-colors hover:text-ink-2",
+      onClick: () => {
+        showBotContext.value = !showBotContext.value;
+      },
+    },
+    [
+      h("span", `已加载「${props.botName || "Bot"}」人设与长期记忆`),
+      h("span", { class: "text-[11px] opacity-70" }, showBotContext.value ? "收起" : "查看"),
+    ],
+  ),
+);
 const userImages = computed(() =>
   userBlocks.value.filter((b): b is Extract<Block, { type: "image" }> => b.type === "image"),
 );
@@ -84,6 +121,20 @@ const actionItems = computed<ActionItemType[]>(() => {
     class="oc-turn group/turn pt-[6px] pb-1 [&+.oc-turn]:pt-[18px]"
     :class="isLast || live ? '[content-visibility:visible]' : '[content-visibility:auto] [contain-intrinsic-size:auto_220px]'"
   >
+    <!-- Bot context divider bubble (outside user bubble, clean & non-intrusive) -->
+    <div v-if="parsedBotPrompt.context" class="mb-3">
+      <BubbleDivider
+        :content="botDividerContent"
+        :divider-props="{ plain: true, style: { margin: '4px 0' } }"
+      />
+      <div
+        v-if="showBotContext"
+        class="mx-auto max-w-[680px] mt-1.5 rounded-[10px] border border-solid border-line bg-hover px-3 py-2 text-[11px] font-mono leading-[1.55] text-ink-3 whitespace-pre-wrap break-words max-h-[240px] overflow-y-auto"
+      >
+        {{ parsedBotPrompt.context }}
+      </div>
+    </div>
+
     <!-- User Bubble with local custom avatar -->
     <div v-if="turn.user" class="mine mb-3 animate-oc-bubble-in">
       <Bubble
@@ -91,7 +142,7 @@ const actionItems = computed<ActionItemType[]>(() => {
         variant="filled"
         shape="corner"
         class="oc-user-bubble w-full"
-        :content="userPrompt || ' '"
+        :content="displayUserPrompt || ' '"
       >
         <template #avatar>
           <div class="mt-[5px] w-8 h-8 rounded-full inline-flex items-center justify-center overflow-hidden flex-none bg-surface glass-sm border border-solid border-line-strong shadow-card text-ink-2">
@@ -133,7 +184,7 @@ const actionItems = computed<ActionItemType[]>(() => {
                 class="max-w-[240px]"
               />
             </div>
-            <div v-if="userPrompt" class="user-text whitespace-pre-wrap break-words">{{ userPrompt }}</div>
+            <div v-if="displayUserPrompt" class="user-text whitespace-pre-wrap break-words">{{ displayUserPrompt }}</div>
           </div>
         </template>
       </Bubble>
@@ -150,15 +201,22 @@ const actionItems = computed<ActionItemType[]>(() => {
         <template #avatar>
           <div
             class="w-8 h-8 rounded-full inline-flex items-center justify-center overflow-hidden flex-none bg-surface glass-sm border border-solid border-line-strong shadow-card text-ink-2"
-            :title="agentName || 'Agent'"
+            :title="botName || agentName || 'Agent'"
           >
-            <ProviderIcon :id="agentId || ''" :name="agentName" :size="17" />
+            <BotAvatar v-if="botName" :avatar="botAvatar" :name="botName" :size="26" class="rounded-full" />
+            <ProviderIcon v-else :id="agentId || ''" :name="agentName" :size="17" />
           </div>
         </template>
 
         <template #header>
           <div class="flex items-center gap-[7px] h-8 leading-none">
-            <span class="text-[12.5px] fw-580 text-ink-2">{{ agentName || "Agent" }}</span>
+            <span class="text-[12.5px] fw-580 text-ink-2">{{ botName || agentName || "Agent" }}</span>
+            <span
+              v-if="botName && agentName"
+              class="text-[10.5px] text-ink-3 px-1.5 py-[1px] rounded bg-hover border border-solid border-line"
+            >
+              {{ agentName }}
+            </span>
             <span v-if="streaming" class="inline-flex items-center gap-[5px] text-[11px] text-ink-3">
               <span class="w-[5px] h-[5px] rounded-full bg-ok animate-[oc-pulse_1.2s_ease-in-out_infinite]" />
               <span>处理中</span>

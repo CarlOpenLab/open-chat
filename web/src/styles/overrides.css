@@ -138,6 +138,51 @@
   color: var(--text) !important;
 }
 
+/* Two-column macOS-style Settings modal */
+.oc-settings-modal .ant-modal-container,
+.oc-settings-modal .ant-modal-content {
+  padding: 0 !important;
+}
+.oc-settings-modal .ant-modal-body {
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Native <details> progressive disclosure with smooth ::details-content reveal */
+.oc-disclosure > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.oc-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.oc-disclosure > summary .oc-disclosure-chevron {
+  transition: transform 0.2s var(--ease);
+  transform: rotate(-90deg);
+}
+.oc-disclosure[open] > summary .oc-disclosure-chevron {
+  transform: rotate(0deg);
+}
+.oc-disclosure::details-content {
+  interpolate-size: allow-keywords;
+  overflow: clip;
+  contain: layout;
+}
+.oc-disclosure:not([open])::details-content {
+  block-size: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .oc-disclosure::details-content {
+    transition: block-size 0.22s var(--ease), content-visibility 0.22s var(--ease);
+    transition-behavior: allow-discrete;
+  }
+}
+
 .oc-provider-popover .ant-popover-container,
 .oc-provider-popover .ant-popover-inner {
   padding: 0 !important;
@@ -425,8 +470,45 @@
 .oc-convs .antd-conversations-group-collapsible-list {
   padding-top: 1px !important;
 }
-.oc-convs .antd-conversations-group-collapsible-list .antd-conversations-item {
+.oc-convs .antd-conversations-group-collapsible-list .antd-conversations-item,
+.oc-convs.oc-bot-convs .antd-conversations-item {
   padding: 7px 10px 7px 14px !important;
+}
+.oc-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 0.22s var(--ease), opacity 0.18s var(--ease);
+}
+.oc-collapse.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.oc-collapse > .oc-collapse-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.oc-chevron {
+  transition: transform 0.18s var(--ease), color 0.14s var(--ease);
+  transform: rotate(-90deg);
+}
+.oc-chevron.is-open {
+  transform: rotate(0deg);
+}
+.oc-bot-stack {
+  display: inline-flex;
+  align-items: center;
+}
+.oc-bot-stack > .oc-bot-stack-item {
+  transition: margin-left 0.24s var(--ease);
+  will-change: margin-left;
+}
+.oc-bot-stack > .oc-bot-stack-item:not(:first-child) {
+  margin-left: -8px;
+}
+.oc-bot-stack:hover > .oc-bot-stack-item:not(:first-child),
+.oc-bot-stack.is-open > .oc-bot-stack-item:not(:first-child) {
+  margin-left: 0px;
 }
 .oc-convs .proj-group-head {
   flex: 1;

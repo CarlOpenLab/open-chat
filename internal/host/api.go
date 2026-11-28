@@ -324,11 +324,19 @@ func (a *API) SaveSettings(s Settings) (Settings, error) {
 		}
 		s.CustomAgents[i] = c
 	}
+	bots, err := normalizeBots(s.Bots)
+	if err != nil {
+		return Settings{}, err
+	}
+	s.Bots = bots
 	h.settingsMu.Lock()
 	h.settings = s
 	h.settingsMu.Unlock()
 	if err := saveSettings(h.opts.DataDir, s); err != nil {
 		return Settings{}, err
+	}
+	for _, b := range s.Bots {
+		_, _ = h.ensureBotFiles(b.ID)
 	}
 	h.scMu.Lock()
 	sc := h.sc
@@ -338,10 +346,45 @@ func (a *API) SaveSettings(s Settings) (Settings, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			_ = sc.call(ctx, "setAutoAllow", map[string]any{"autoAllow": autoAllow}, nil)
+			// Re-apply explicit per-bot autoAllow overrides to any live bot sessions.
+			h.liveMu.Lock()
+			liveIDs := make([]string, 0, len(h.lives))
+			for id := range h.lives {
+				liveIDs = append(liveIDs, id)
+			}
+			h.liveMu.Unlock()
+			for _, id := range liveIDs {
+				if m, ok := h.store.meta(id); ok && m.BotID != "" {
+					if eff := h.effectiveAutoAllow(m); eff != autoAllow {
+						_ = sc.call(ctx, "setAutoAllow", map[string]any{"key": id, "autoAllow": eff}, nil)
+					}
+				}
+			}
 		}(s.AutoAllow)
 	}
 	h.opts.Push(Push{Kind: "settings", Settings: &s})
 	return s, nil
+}
+
+// StartBot wakes a bot in a fresh conversation and immediately sends its prompt with SOUL + MEMORY.
+func (a *API) StartBot(ctx context.Context, botID, promptOverride string) (Meta, error) {
+	return a.h.startBot(context.WithoutCancel(ctx), botID, promptOverride)
+}
+
+// OpenBotChat opens a fresh interactive conversation with a bot (SOUL + MEMORY
+// are automatically injected when the user sends the first message).
+func (a *API) OpenBotChat(botID string) (Meta, error) {
+	return a.h.openBotChat(botID)
+}
+
+// GetBotFiles returns a bot's on-disk SOUL.md and MEMORY.md, creating defaults if missing.
+func (a *API) GetBotFiles(botID string) (BotFiles, error) {
+	return a.h.ensureBotFiles(botID)
+}
+
+// SaveBotFiles writes a bot's SOUL.md and MEMORY.md atomically to disk.
+func (a *API) SaveBotFiles(botID, soul, memory string) (BotFiles, error) {
+	return a.h.saveBotFiles(botID, soul, memory)
 }
 
 // ListDir lists the subdirectories of path, for the folder picker.

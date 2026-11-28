@@ -17,8 +17,9 @@ import { Checkbox, Dropdown, Input, Modal, Tooltip, message } from "antdv-next";
 import { Icon, addCollection, type IconifyJSON } from "@iconify/vue";
 import rawLucide from "@iconify-json/lucide/icons.json";
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { isArchived, isDark, isMac, newConversation, newConversationInDir, pin, remove, removeWorktree, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
+import { botById, isArchived, isDark, isMac, newConversation, newConversationInDir, openBotChat, openBots, pin, remove, removeWorktree, rename, saveSettings, select, setArchived, setUserAvatar, sortedMetas, store } from "../store";
 import type { Meta } from "../types";
+import BotAvatar from "./BotAvatar.vue";
 import ProviderIcon from "./ProviderIcon.vue";
 
 addCollection(rawLucide as unknown as IconifyJSON);
@@ -62,7 +63,7 @@ function onListContextMenu(e: MouseEvent) {
   const itemEl = target?.closest(".antd-conversations-item");
   const id = itemEl?.querySelector<HTMLElement>("[data-conv-id]")?.dataset.convId;
   if (!id) return;
-  const m = filtered.value.find((x) => x.id === id);
+  const m = filtered.value.find((x) => x.id === id) ?? expandedBotMetas.value.find((x) => x.id === id);
   if (!m) return;
   e.preventDefault();
   e.stopPropagation();
@@ -191,6 +192,7 @@ onBeforeUnmount(() => {
 
 const PINNED_GROUP_KEY = "__pinned__";
 const NO_PROJECT_KEY = "__no_project__";
+const BOT_GROUP_PREFIX = "__bot__:";
 const COLLAPSED_PROJECTS_KEY = "oc.collapsedProjects";
 
 const groupMode = computed<"time" | "project">(() =>
@@ -230,6 +232,7 @@ function projectPathOf(m: Meta): string {
 }
 
 function projectKeyOf(m: Meta): string {
+  if (m.botId) return `${BOT_GROUP_PREFIX}${m.botId}`;
   return projectPathOf(m) || NO_PROJECT_KEY;
 }
 
@@ -260,12 +263,15 @@ const filtered = computed(() => {
   const q = store.search.trim().toLowerCase();
   const list = sortedMetas.value
     .filter((m) => (showArchived.value ? isArchived(m.id) : !isArchived(m.id)))
+    // Keep active Bots' conversations categorized inside the Bots section unless searching or viewing archive
+    .filter((m) => showArchived.value || Boolean(q) || !m.botId || !botById(m.botId))
     .filter(
       (m) =>
         !q ||
         m.title.toLowerCase().includes(q) ||
         m.cwd.toLowerCase().includes(q) ||
         (m.worktreeRepo ?? "").toLowerCase().includes(q) ||
+        (m.botName ?? "").toLowerCase().includes(q) ||
         m.agentName.toLowerCase().includes(q),
     );
 
@@ -301,6 +307,7 @@ const filtered = computed(() => {
 const projectMetaInfo = computed(() => {
   const rawPathByKey = new Map<string, string>();
   for (const m of filtered.value) {
+    if (m.botId) continue;
     const raw = (m.worktreeRepo || m.cwd || "").trim();
     const key = normalizeProjectPath(raw);
     if (key && !rawPathByKey.has(key)) {
@@ -373,16 +380,63 @@ function startNewInProject(groupKey: string) {
     next.delete(groupKey);
     persistCollapsedProjects(next);
   }
+  if (groupKey.startsWith(BOT_GROUP_PREFIX)) {
+    const botId = groupKey.slice(BOT_GROUP_PREFIX.length);
+    void openBotChat(botId).catch((e) => {
+      message.error(e instanceof Error ? e.message : String(e));
+    });
+    return;
+  }
   const dir = projectMetaInfo.value.rawPathByKey.get(groupKey) ?? groupKey;
   newConversationInDir(dir);
 }
 
 function renderProjectGroupLabel(group: string, info: { groupInfo: { data: unknown[] } }) {
   if (group === PINNED_GROUP_KEY) return "置顶";
+  const count = info.groupInfo.data.length;
+
+  if (group.startsWith(BOT_GROUP_PREFIX)) {
+    const botId = group.slice(BOT_GROUP_PREFIX.length);
+    const bot = botById(botId);
+    const firstItem = info.groupInfo.data[0] as { "data-meta"?: Meta } | undefined;
+    const displayName = bot?.name || firstItem?.["data-meta"]?.botName || "Bot";
+    const canAdd = Boolean(bot) && !selecting.value;
+
+    return h("div", { class: ["proj-group-head", { "has-add": canAdd }], title: `Bot：${displayName}` }, [
+      h(BotAvatar, { avatar: bot?.avatar, name: displayName, size: 15, class: "rounded-full flex-none" }),
+      h("span", { class: "proj-group-name" }, displayName),
+      h("span", { class: "proj-group-tail" }, [
+        h("span", { class: "proj-group-count font-mono" }, String(count)),
+        canAdd
+          ? h(
+              Tooltip,
+              { title: `与「${displayName}」新开对话`, mouseEnterDelay: 0.35 },
+              {
+                default: () =>
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      class: "proj-group-add",
+                      "aria-label": `与「${displayName}」新开对话`,
+                      onClick: (e: MouseEvent) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        startNewInProject(group);
+                      },
+                    },
+                    [lucideIcon("plus", 12)],
+                  ),
+              },
+            )
+          : null,
+      ]),
+    ]);
+  }
+
   const isNoProject = group === NO_PROJECT_KEY;
   const displayName = isNoProject ? "未关联目录" : (projectMetaInfo.value.labelByKey.get(group) ?? shortDir(group));
   const fullPath = isNoProject ? "未关联工作目录的对话" : formatDisplayPath(group);
-  const count = info.groupInfo.data.length;
   const canAdd = !isNoProject && !selecting.value;
 
   return h("div", { class: ["proj-group-head", { "has-add": canAdd }], title: fullPath }, [
@@ -448,8 +502,14 @@ const items = computed<ConversationItemType[]>(() =>
 );
 
 const visibleMetas = computed(() => {
-  if (!isProjectMode.value || store.search.trim()) return filtered.value;
-  return filtered.value.filter((m) => m.pinned || !collapsedProjects.value.has(projectKeyOf(m)));
+  const main =
+    !isProjectMode.value || store.search.trim()
+      ? filtered.value
+      : filtered.value.filter((m) => m.pinned || !collapsedProjects.value.has(projectKeyOf(m)));
+  if (botsExpanded.value && !showArchived.value && !store.search.trim()) {
+    return [...expandedBotMetas.value, ...main];
+  }
+  return main;
 });
 
 const visibleSelectedIds = computed(() =>
@@ -575,9 +635,10 @@ function statusNodeFor(m: Meta) {
   return null;
 }
 
-function labelRender(item: ConversationItemType) {
+function renderConvLabel(item: ConversationItemType, inBotGroup = false) {
   const m = (item as unknown as { "data-meta": Meta })["data-meta"];
   const checked = selecting.value && selectedIds.value.has(m.id);
+  const bot = !inBotGroup && m.botId ? botById(m.botId) : undefined;
   const leading = selecting.value
     ? h(
         "span",
@@ -588,9 +649,11 @@ function labelRender(item: ConversationItemType) {
         },
         checked ? [lucideIcon("check", 11, "conv-check-ic")] : [],
       )
-    : h(ProviderIcon, { id: m.agentId, name: m.agentName, size: 13, class: "conv-logo" });
+    : !inBotGroup && m.botId
+      ? h(BotAvatar, { avatar: bot?.avatar, name: bot?.name || m.botName || "Bot", size: 15, class: "rounded-full conv-logo" })
+      : h(ProviderIcon, { id: m.agentId, name: m.agentName, size: 13, class: "conv-logo" });
 
-  const showDirTag = Boolean(m.cwd) && (!isProjectMode.value || Boolean(m.pinned) || Boolean(m.worktree));
+  const showDirTag = !m.botId && Boolean(m.cwd) && (!isProjectMode.value || Boolean(m.pinned) || Boolean(m.worktree));
 
   return h("div", { class: "conv", "data-conv-id": m.id, "data-selected": checked ? "true" : void 0 }, [
     h("div", { class: "conv-row" }, [
@@ -600,6 +663,17 @@ function labelRender(item: ConversationItemType) {
     ]),
     h("div", { class: "conv-meta" }, [
       h("span", { class: "conv-sub" }, [
+        !inBotGroup && m.botId
+          ? h(
+              "span",
+              {
+                class: "inline-flex items-center px-[4px] h-[14px] rounded-[4px] bg-active text-ink-2 text-[9.5px] fw-560 leading-none flex-none",
+                title: `Bot：${m.botName || m.botId}`,
+              },
+              "BOT",
+            )
+          : null,
+        inBotGroup && m.pinned ? h(PushpinFilled, { class: "text-[10px] text-ink-3 flex-none" }) : null,
         h("span", { class: "conv-agent" }, m.agentName),
         showDirTag ? h("span", { class: "conv-sep" }, "·") : null,
         showDirTag
@@ -613,6 +687,14 @@ function labelRender(item: ConversationItemType) {
       h("span", { class: "conv-time mono" }, ago(m.updatedAt)),
     ]),
   ]);
+}
+
+function labelRender(item: ConversationItemType) {
+  return renderConvLabel(item, false);
+}
+
+function botLabelRender(item: ConversationItemType) {
+  return renderConvLabel(item, true);
 }
 
 async function toggleArchive(m: Meta) {
@@ -857,6 +939,113 @@ const avatarMenu = computed(() => ({
 }));
 
 const needsNode = computed(() => Boolean(store.boot?.nodeError));
+const bots = computed(() => store.settings?.bots ?? []);
+const botsExpanded = ref(false);
+const expandedBotIds = ref<Set<string>>(new Set());
+
+const stackedBots = computed(() => bots.value.slice(0, 5));
+const overflowBotCount = computed(() => Math.max(0, bots.value.length - 5));
+
+function botMetasOf(botId: string): Meta[] {
+  return sortedMetas.value
+    .filter((m) => !isArchived(m.id) && m.botId === botId)
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt - a.updatedAt);
+}
+
+function botItemsOf(botId: string): ConversationItemType[] {
+  return botMetasOf(botId).map((m) => ({
+    key: m.id,
+    label: m.title,
+    "data-meta": m,
+  }));
+}
+
+const expandedBotMetas = computed<Meta[]>(() => {
+  if (!botsExpanded.value) return [];
+  const res: Meta[] = [];
+  for (const b of bots.value) {
+    if (expandedBotIds.value.has(b.id)) {
+      res.push(...botMetasOf(b.id));
+    }
+  }
+  return res;
+});
+
+function botLiveBadge(botId: string): "need" | "run" | "unseen" | null {
+  let hasRun = false;
+  let hasUnseen = false;
+  for (const m of botMetasOf(botId)) {
+    if ((m.pending ?? 0) > 0) return "need";
+    const st = store.lives[m.id]?.status ?? m.status;
+    if (st === "running" || st === "connecting") hasRun = true;
+    if (store.turnOutcome[m.id] === "unseen") hasUnseen = true;
+  }
+  if (hasRun) return "run";
+  if (hasUnseen) return "unseen";
+  return null;
+}
+
+function toggleBotsExpanded() {
+  if (showArchived.value) showArchived.value = false;
+  botsExpanded.value = !botsExpanded.value;
+}
+
+function isBotExpanded(botId: string): boolean {
+  return expandedBotIds.value.has(botId);
+}
+
+function toggleBotRow(botId: string) {
+  const next = new Set(expandedBotIds.value);
+  if (next.has(botId)) next.delete(botId);
+  else next.add(botId);
+  expandedBotIds.value = next;
+}
+
+watch(
+  () => store.activeId,
+  (id, prev) => {
+    if (!id || id === prev) return;
+    const m = store.metas[id];
+    if (m?.botId && botById(m.botId)) {
+      botsExpanded.value = true;
+      if (!expandedBotIds.value.has(m.botId)) {
+        const next = new Set(expandedBotIds.value);
+        next.add(m.botId);
+        expandedBotIds.value = next;
+      }
+    }
+  },
+);
+
+watch(bots, (list) => {
+  const valid = new Set(list.map((b) => b.id));
+  if (list.length === 0) {
+    botsExpanded.value = false;
+    expandedBotIds.value = new Set();
+    return;
+  }
+  let changed = false;
+  const next = new Set<string>();
+  for (const id of expandedBotIds.value) {
+    if (valid.has(id)) next.add(id);
+    else changed = true;
+  }
+  if (changed) expandedBotIds.value = next;
+});
+
+async function startBotConversation(botId: string) {
+  try {
+    botsExpanded.value = true;
+    if (!expandedBotIds.value.has(botId)) {
+      const next = new Set(expandedBotIds.value);
+      next.add(botId);
+      expandedBotIds.value = next;
+    }
+    await openBotChat(botId);
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e));
+  }
+}
 </script>
 
 <template>
@@ -871,7 +1060,7 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         :class="selecting ? 'opacity-100' : 'opacity-55 group-hover:opacity-100'"
       >
         <Tooltip
-          v-if="filtered.length > 0 || selecting"
+          v-if="filtered.length > 0 || expandedBotMetas.length > 0 || selecting"
           :title="selecting ? '退出多选 (Esc)' : `多选 (${isMac ? '⌘' : 'Ctrl'}+点击)`"
           :mouse-enter-delay="0.4"
         >
@@ -937,6 +1126,74 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         </button>
         <span v-else class="kbd !bg-transparent !border-transparent opacity-55 flex-none">{{ isMac ? "⌘" : "Ctrl" }} K</span>
       </label>
+
+      <!-- Overlapping Bots Avatar Stack Trigger (hover unfolds smoothly, click expands all Bots below) -->
+      <div
+        v-if="bots.length > 0"
+        class="h-[32px] px-[4px] flex items-center justify-between gap-2"
+      >
+        <button
+          type="button"
+          class="oc-bot-stack h-full px-0 border-0 bg-transparent cursor-pointer"
+          :class="{ 'is-open': botsExpanded }"
+          :aria-expanded="botsExpanded"
+          aria-label="展开或收起 Bots"
+          @click="toggleBotsExpanded"
+        >
+          <span
+            v-for="b in stackedBots"
+            :key="b.id"
+            class="oc-bot-stack-item relative w-[24px] h-[24px] rounded-full border-[1.5px] border-solid border-[var(--bg)] bg-modal inline-flex items-center justify-center flex-none"
+          >
+            <BotAvatar :avatar="b.avatar" :name="b.name" :size="21" class="rounded-full" />
+            <span
+              v-if="botLiveBadge(b.id)"
+              class="absolute -right-[1px] -bottom-[1px] w-[7px] h-[7px] rounded-full border-[1.5px] border-solid border-[var(--bg)]"
+              :class="botLiveBadge(b.id) === 'need' ? 'bg-warn' : 'bg-ok'"
+            />
+          </span>
+          <span
+            v-if="overflowBotCount > 0"
+            class="oc-bot-stack-item relative w-[24px] h-[24px] rounded-full border-[1.5px] border-solid border-[var(--bg)] bg-active text-ink-2 text-[9.5px] font-mono fw-580 inline-grid place-items-center flex-none"
+          >
+            +{{ overflowBotCount }}
+          </span>
+        </button>
+
+        <div class="flex items-center gap-[1px] flex-none">
+          <Tooltip title="新建 Bot" :mouse-enter-delay="0.3">
+            <button
+              type="button"
+              class="inline-grid place-items-center w-6 h-6 border-0 rounded-[7px] bg-transparent text-ink-3 cursor-pointer transition-colors duration-140 hover:bg-hover hover:text-ink"
+              aria-label="新建 Bot"
+              @click="openBots('create')"
+            >
+              <Icon icon="lucide:plus" :width="13.5" :height="13.5" />
+            </button>
+          </Tooltip>
+          <Tooltip title="管理 Bots" :mouse-enter-delay="0.3">
+            <button
+              type="button"
+              class="inline-grid place-items-center w-6 h-6 border-0 rounded-[7px] bg-transparent text-ink-3 cursor-pointer transition-colors duration-140 hover:bg-hover hover:text-ink"
+              aria-label="管理 Bots"
+              @click="openBots('list')"
+            >
+              <Icon icon="lucide:ellipsis" :width="13.5" :height="13.5" />
+            </button>
+          </Tooltip>
+        </div>
+      </div>
+
+      <button
+        v-else
+        type="button"
+        class="group/bots w-full h-[30px] flex items-center gap-2 px-[9px] rounded-[8px] border border-solid border-transparent bg-transparent text-ink-3 text-[12px] fw-500 whitespace-nowrap cursor-pointer transition-all duration-140 ease-oc hover:bg-surface-2 hover:border-line hover:text-ink"
+        @click="openBots('create')"
+      >
+        <Icon icon="lucide:bot" :width="13.5" :height="13.5" class="flex-none opacity-80" />
+        <span>Bots</span>
+        <span class="ml-auto text-[11px] opacity-70 group-hover/bots:opacity-100">+ 新建</span>
+      </button>
     </div>
 
     <div v-if="showArchived" class="flex-none flex items-center justify-between px-[10px] pt-1 pb-[6px]">
@@ -999,6 +1256,106 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
       @contextmenu="onListContextMenu"
       @scroll="closeConvCtx"
     >
+      <!-- Smoothly Expandable Bots Tree (native conversation list UI) -->
+      <div
+        v-if="bots.length > 0 && !showArchived && !store.search.trim()"
+        class="oc-collapse"
+        :class="{ 'is-open': botsExpanded }"
+      >
+        <div class="oc-collapse-inner">
+          <div class="flex flex-col gap-[2px] pb-[4px]">
+            <div v-for="b in bots" :key="b.id">
+              <div
+                role="button"
+                tabindex="0"
+                class="group/bothead h-[28px] px-[6px] mt-[2px] rounded-[8px] flex items-center gap-[4px] text-[12px] fw-540 text-ink-2 cursor-pointer select-none transition-colors duration-140 hover:bg-hover hover:text-ink"
+                :aria-expanded="isBotExpanded(b.id)"
+                @click="toggleBotRow(b.id)"
+                @keydown.enter.prevent="toggleBotRow(b.id)"
+              >
+                <span class="w-[14px] h-[14px] inline-grid place-items-center text-ink-3 flex-none">
+                  <Icon
+                    icon="lucide:chevron-down"
+                    :width="11"
+                    :height="11"
+                    class="oc-chevron"
+                    :class="{ 'is-open': isBotExpanded(b.id) }"
+                  />
+                </span>
+                <div class="relative flex-none ml-[2px]">
+                  <BotAvatar :avatar="b.avatar" :name="b.name" :size="16" class="rounded-full" />
+                  <span
+                    v-if="!isBotExpanded(b.id) && botLiveBadge(b.id)"
+                    class="absolute -right-[2px] -bottom-[2px] w-[6px] h-[6px] rounded-full border border-solid border-[var(--bg)]"
+                    :class="botLiveBadge(b.id) === 'need' ? 'bg-warn' : 'bg-ok'"
+                  />
+                </div>
+                <span class="flex-1 min-w-0 truncate ml-[2px]" :class="isBotExpanded(b.id) ? 'text-ink' : ''">
+                  {{ b.name }}
+                </span>
+                <div class="relative flex-none h-[20px] min-w-[20px] inline-flex items-center justify-end">
+                  <span
+                    v-if="botMetasOf(b.id).length > 0"
+                    class="w-[20px] text-center text-[10.5px] font-mono text-ink-3 opacity-75 group-hover/bothead:opacity-0 group-focus-within/bothead:opacity-0 transition-opacity duration-140"
+                  >
+                    {{ botMetasOf(b.id).length }}
+                  </span>
+                  <div class="absolute right-0 inset-y-0 flex items-center gap-[1px] opacity-0 pointer-events-none group-hover/bothead:opacity-100 group-hover/bothead:pointer-events-auto group-focus-within/bothead:opacity-100 group-focus-within/bothead:pointer-events-auto transition-opacity duration-140">
+                    <Tooltip :title="`与「${b.name}」新对话`" :mouse-enter-delay="0.3">
+                      <button
+                        type="button"
+                        class="w-[20px] h-[20px] border-0 p-0 rounded-[6px] bg-transparent text-ink-2 inline-grid place-items-center cursor-pointer transition-colors hover:bg-active hover:text-ink"
+                        :aria-label="`与 ${b.name} 新对话`"
+                        @click.stop="startBotConversation(b.id)"
+                      >
+                        <Icon icon="lucide:plus" :width="12" :height="12" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip :title="`配置「${b.name}」`" :mouse-enter-delay="0.3">
+                      <button
+                        type="button"
+                        class="w-[20px] h-[20px] border-0 p-0 rounded-[6px] bg-transparent text-ink-3 inline-grid place-items-center cursor-pointer transition-colors hover:bg-active hover:text-ink"
+                        :aria-label="`配置 ${b.name}`"
+                        @click.stop="openBots('list', b.id)"
+                      >
+                        <Icon icon="lucide:sliders-horizontal" :width="11.5" :height="11.5" />
+                      </button>
+                    </Tooltip>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Smoothly Expandable Conversations of This Bot -->
+              <div class="oc-collapse" :class="{ 'is-open': isBotExpanded(b.id) }">
+                <div class="oc-collapse-inner pt-[1px]">
+                  <Conversations
+                    v-if="botItemsOf(b.id).length"
+                    :items="botItemsOf(b.id)"
+                    :active-key="selecting ? undefined : (store.activeId ?? undefined)"
+                    :label-render="botLabelRender"
+                    :menu="selecting ? undefined : menuFor"
+                    class="oc-convs oc-bot-convs"
+                    :class="{ 'is-selecting': selecting }"
+                    @active-change="(key: string) => { if (!selecting) void select(key); }"
+                  />
+                  <button
+                    v-else
+                    type="button"
+                    class="w-full border-0 bg-transparent pl-[24px] pr-[10px] py-[7px] rounded-[10px] flex items-center gap-2 text-[12px] text-ink-3 text-left cursor-pointer transition-colors duration-140 hover:bg-hover hover:text-ink"
+                    @click="startBotConversation(b.id)"
+                  >
+                    <Icon icon="lucide:message-square-plus" :width="13" :height="13" class="flex-none opacity-75" />
+                    <span class="truncate">开始新对话…</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="items.length" class="h-[1px] bg-line mx-[6px] my-[4px]" />
+        </div>
+      </div>
+
       <Conversations
         v-if="items.length"
         :items="items"
@@ -1010,7 +1367,10 @@ const needsNode = computed(() => Boolean(store.boot?.nodeError));
         :class="{ 'is-selecting': selecting, 'is-project-mode': isProjectMode }"
         @active-change="(key: string) => { if (!selecting) void select(key); }"
       />
-      <div v-else class="flex flex-col items-center justify-center gap-2 py-10 px-[14px] text-center">
+      <div
+        v-else-if="!botsExpanded || showArchived || Boolean(store.search.trim())"
+        class="flex flex-col items-center justify-center gap-2 py-10 px-[14px] text-center"
+      >
         <InboxOutlined v-if="showArchived" class="text-[18px] text-ink-3 opacity-50" />
         <MessageOutlined v-else class="text-[18px] text-ink-3 opacity-50" />
         <div class="text-[12.5px] text-ink-3">

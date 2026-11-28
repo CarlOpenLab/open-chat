@@ -19,12 +19,14 @@ import {
   activeLive,
   activeMeta,
   activeTranscript,
+  botById,
   cancel,
   connect,
   enqueueMessage,
   isArchived,
   isMac,
   newConversationInDir,
+  openBotChat,
   pin,
   popQueuedToDraft,
   remove,
@@ -44,6 +46,7 @@ import {
 } from "../store";
 import { answerText, userText } from "../transcript";
 import type { Block, PermissionOption, WorktreeStatus } from "../types";
+import BotAvatar from "./BotAvatar.vue";
 import Composer from "./Composer.vue";
 import FolderPicker from "./FolderPicker.vue";
 import ProviderIcon from "./ProviderIcon.vue";
@@ -53,6 +56,9 @@ import WindowControls from "./WindowControls.vue";
 const meta = computed(() => activeMeta.value!);
 const live = computed(() => activeLive.value);
 const transcript = computed(() => activeTranscript.value);
+const activeBot = computed(() => botById(meta.value.botId));
+const botDisplayName = computed(() => activeBot.value?.name || meta.value.botName || "Bot");
+const botAvatar = computed(() => activeBot.value?.avatar || "");
 
 const scroller = ref<MessageScrollerRef | null>(null);
 const following = ref(true);
@@ -189,9 +195,21 @@ function onRailItemSelect(id: string | number) {
   });
 }
 
+function stripBotContextText(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("<bot-context>")) return raw;
+  const end = trimmed.indexOf("</bot-context>");
+  if (end === -1) return raw;
+  return trimmed.slice(end + "</bot-context>".length).trim() || raw;
+}
+
+function openBotSettings() {
+  store.botsOpen = true;
+}
+
 const scrollerItems = computed<MessageScrollerItem[]>(() =>
   turns.value.map((t, i) => {
-    const prompt = userText(t.user?.blocks ?? []).replace(/\s+/g, " ").trim();
+    const prompt = stripBotContextText(userText(t.user?.blocks ?? [])).replace(/\s+/g, " ").trim();
     const reply = answerText(t).replace(/\s+/g, " ").trim();
     return {
       id: t.id,
@@ -343,6 +361,12 @@ async function reveal() {
 }
 
 function newSameDir() {
+  if (meta.value.botId) {
+    void openBotChat(meta.value.botId).catch((e) => {
+      message.error(e instanceof Error ? e.message : String(e));
+    });
+    return;
+  }
   newConversationInDir(meta.value.worktreeRepo || meta.value.cwd, meta.value.agentId);
 }
 
@@ -404,8 +428,8 @@ const menu = computed(() => ({
     { key: "rename", label: "重命名" },
     { key: "pin", label: meta.value.pinned ? "取消置顶" : "置顶" },
     { key: "archive", label: archived.value ? "取消归档" : "归档对话" },
-    { key: "new-same", label: meta.value.worktree ? "在源仓库新建对话" : meta.value.cwd ? "在同目录新建对话" : "新建同 Agent 对话" },
-    ...(meta.value.cwd ? [{ key: "reveal", label: "在文件夹中显示" }] : []),
+    { key: "new-same", label: meta.value.botId ? `与「${botDisplayName.value}」新开对话` : meta.value.worktree ? "在源仓库新建对话" : meta.value.cwd ? "在同目录新建对话" : "新建同 Agent 对话" },
+    ...(meta.value.cwd && !meta.value.botId ? [{ key: "reveal", label: "在文件夹中显示" }] : []),
     ...(meta.value.worktree ? [{ key: "clean-worktree", label: "清理 Worktree" }] : []),
     { key: "copy-id", label: "复制会话 ID" },
     { type: "divider" as const },
@@ -618,7 +642,18 @@ async function changeDir(path: string) {
               <span>{{ meta.agentName }}</span>
             </span>
 
-            <Tooltip v-if="!meta.worktree && meta.cwd" :title="`在文件夹中显示：${meta.cwd}`" :mouse-enter-delay="0.4">
+            <Tooltip v-if="meta.botId" :title="`由 Bot「${botDisplayName}」驱动 · 点击管理 Bots`" :mouse-enter-delay="0.35">
+              <button
+                type="button"
+                class="inline-flex items-center gap-[5px] h-[22px] pl-1 pr-2 rounded-full bg-hover border border-solid border-line text-[11px] fw-530 text-ink-2 flex-none cursor-pointer transition-colors duration-140 hover:bg-active hover:text-ink no-drag"
+                @click="openBotSettings"
+              >
+                <BotAvatar :avatar="botAvatar" :name="botDisplayName" :size="15" class="rounded-full" />
+                <span class="max-w-[110px] truncate">{{ botDisplayName }}</span>
+              </button>
+            </Tooltip>
+
+            <Tooltip v-if="!meta.worktree && !meta.botId && meta.cwd" :title="`在文件夹中显示：${meta.cwd}`" :mouse-enter-delay="0.4">
               <button
                 class="oc-cwd-chip inline-flex items-center gap-[5px] h-[22px] px-[7px] rounded-[6px] border-0 bg-transparent text-[11px] text-ink-3 max-w-[240px] min-w-0 flex-[0_1_auto] cursor-pointer font-mono transition-colors duration-140 hover:bg-hover hover:text-ink-2 no-drag"
                 @click="reveal"
@@ -649,7 +684,7 @@ async function changeDir(path: string) {
               <span class="text-[11px] font-mono" :class="contextPct > 80 ? 'text-warn' : 'text-ink-3'">{{ contextPct }}%</span>
             </div>
           </Tooltip>
-          <Tooltip title="在同目录新建对话" :mouse-enter-delay="0.4">
+          <Tooltip :title="meta.botId ? `与「${botDisplayName}」新开对话` : '在同目录新建对话'" :mouse-enter-delay="0.4">
             <button class="icon-btn text-[14px]" @click="newSameDir">
               <PlusOutlined />
             </button>
@@ -718,8 +753,9 @@ async function changeDir(path: string) {
             v-else
             class="flex flex-col items-center gap-3 -mt-6 px-6 py-5 rounded-[16px] bg-surface glass-sm border border-solid border-line shadow-card animate-oc-bubble-in"
           >
-            <div class="relative w-11 h-11 rounded-[13px] bg-modal border border-solid border-line-strong grid place-items-center text-ink">
-              <ProviderIcon :id="meta.agentId" :name="meta.agentName" :size="22" />
+            <div class="relative w-11 h-11 rounded-[13px] bg-modal border border-solid border-line-strong grid place-items-center text-ink overflow-hidden">
+              <BotAvatar v-if="meta.botId" :avatar="botAvatar" :name="botDisplayName" :size="30" class="rounded-full" />
+              <ProviderIcon v-else :id="meta.agentId" :name="meta.agentName" :size="22" />
               <span
                 class="absolute -inset-[4px] rounded-[16px] border border-solid border-line-strong opacity-60 animate-[oc-pulse_1.6s_ease-in-out_infinite]"
                 aria-hidden="true"
@@ -727,9 +763,9 @@ async function changeDir(path: string) {
             </div>
             <div class="flex flex-col items-center gap-1 text-center">
               <div class="flex items-center gap-2 text-[13.5px] fw-560 text-ink tracking-[-0.01em]">
-                <span class="shimmer-text">正在与 {{ meta.agentName }} 建立连接</span>
+                <span class="shimmer-text">正在与 {{ meta.botId ? botDisplayName : meta.agentName }} 建立连接</span>
               </div>
-              <span v-if="shortCwd" class="text-[11.5px] text-ink-3 font-mono max-w-[260px] truncate">{{ shortCwd }}</span>
+              <span v-if="shortCwd && !meta.botId" class="text-[11.5px] text-ink-3 font-mono max-w-[260px] truncate">{{ shortCwd }}</span>
             </div>
           </div>
         </div>
@@ -774,6 +810,8 @@ async function changeDir(path: string) {
             :conversation-id="meta.id"
             :agent-id="meta.agentId"
             :agent-name="meta.agentName"
+            :bot-name="meta.botId ? botDisplayName : undefined"
+            :bot-avatar="meta.botId ? botAvatar : undefined"
             :live="i === visibleTurns.length - 1 && (running || live.status === 'connecting')"
             :is-last="i === visibleTurns.length - 1"
             :can-retry="!running"
@@ -794,12 +832,13 @@ async function changeDir(path: string) {
             :agent-name="meta.agentName"
             :cwd="meta.cwd"
             :cwd-locked="turns.length > 0"
+            :hide-cwd="Boolean(meta.botId)"
             :sending="running"
             :disabled="live.status === 'connecting'"
             :pending-perms="pendingPerms"
             :queued-messages="queuedMessages"
             lock-provider
-            :placeholder="running ? '正在生成，输入内容可加入待发队列…' : `让 ${meta.agentName} 做点什么…`"
+            :placeholder="running ? '正在生成，输入内容可加入待发队列…' : meta.botId ? `给 ${botDisplayName} 发消息…` : `让 ${meta.agentName} 做点什么…`"
             @send="onSend"
             @enqueue="onEnqueue"
             @stop="cancel(meta.id)"

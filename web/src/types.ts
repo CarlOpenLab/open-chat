@@ -17,6 +17,28 @@ export interface CustomAgent {
   env?: Record<string, string>;
 }
 
+export interface Bot {
+  id: string;
+  name: string;
+  avatar?: string;
+  agentId: string;
+  modelConfigId?: string;
+  modelValue?: string;
+  schedule?: string;
+  prompt?: string;
+  enabled: boolean;
+  autoAllow?: boolean | null;
+}
+
+export interface BotFiles {
+  botId: string;
+  dir: string;
+  soul: string;
+  memory: string;
+  soulPath: string;
+  memoryPath: string;
+}
+
 export interface Settings {
   theme: "system" | "light" | "dark";
   themeBackground?: "acrylic" | "solid";
@@ -31,6 +53,7 @@ export interface Settings {
   nodePath?: string;
   agents: Record<string, AgentOverride>;
   customAgents: CustomAgent[] | null;
+  bots?: Bot[] | null;
 }
 
 export interface AgentInfo {
@@ -59,6 +82,8 @@ export interface Meta {
   worktreeRepo?: string;
   worktreeBranch?: string;
   worktreeBase?: string;
+  botId?: string;
+  botName?: string;
   createdAt: number;
   updatedAt: number;
   pinned?: boolean;

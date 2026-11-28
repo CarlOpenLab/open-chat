@@ -21,6 +21,33 @@ type Settings struct {
 	NodePath       string                   `json:"nodePath,omitempty"`
 	Agents         map[string]AgentOverride `json:"agents"`
 	CustomAgents   []CustomAgent            `json:"customAgents"`
+	Bots           []Bot                    `json:"bots"`
+}
+
+// Bot is a persistent agent persona with its own directory (SOUL.md & MEMORY.md)
+// that wakes on a schedule or manual dispatch in a fresh session.
+type Bot struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Avatar        string `json:"avatar,omitempty"` // emoji or local image data URL
+	AgentID       string `json:"agentId"`
+	ModelConfigID string `json:"modelConfigId,omitempty"`
+	ModelValue    string `json:"modelValue,omitempty"`
+	Schedule      string `json:"schedule,omitempty"` // "", "daily HH:MM", "every 30m", "every 2h"
+	Prompt        string `json:"prompt,omitempty"`
+	Enabled       bool   `json:"enabled"`
+	// AutoAllow overrides Settings.AutoAllow for this bot when non-nil.
+	AutoAllow *bool `json:"autoAllow,omitempty"`
+}
+
+// BotFiles holds a bot's on-disk SOUL.md and MEMORY.md contents and paths.
+type BotFiles struct {
+	BotID      string `json:"botId"`
+	Dir        string `json:"dir"`
+	Soul       string `json:"soul"`
+	Memory     string `json:"memory"`
+	SoulPath   string `json:"soulPath"`
+	MemoryPath string `json:"memoryPath"`
 }
 
 // AgentOverride changes how a built-in agent launches.
@@ -80,6 +107,8 @@ type Meta struct {
 	WorktreeRepo   string `json:"worktreeRepo,omitempty"`
 	WorktreeBranch string `json:"worktreeBranch,omitempty"`
 	WorktreeBase   string `json:"worktreeBase,omitempty"`
+	BotID          string `json:"botId,omitempty"`
+	BotName        string `json:"botName,omitempty"`
 	CreatedAt      int64  `json:"createdAt"`
 	UpdatedAt      int64  `json:"updatedAt"`
 	Pinned         bool   `json:"pinned,omitempty"`

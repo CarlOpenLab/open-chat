@@ -4,6 +4,7 @@ import { XProvider } from "@antdv-next/x";
 import { XProProvider, zhCN as xProZhCN } from "@antdv-next/x-pro";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import AppSidebar from "./components/AppSidebar.vue";
+import BotsDialog from "./components/BotsDialog.vue";
 import ChatView from "./components/ChatView.vue";
 import NewChat from "./components/NewChat.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
@@ -205,6 +206,7 @@ onBeforeUnmount(() => {
                 />
               </main>
               <SettingsDialog v-model:open="store.settingsOpen" />
+              <BotsDialog v-model:open="store.botsOpen" />
             </template>
 
             <div

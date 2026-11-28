@@ -69,6 +69,13 @@ type Host struct {
 	fileSrv        *http.Server
 	fileSrvBaseURL string
 	fileSrvToken   string
+
+	botMu       sync.Mutex
+	botRunning  map[string]string
+	botRuns     map[string]botRunState
+	botStarted  time.Time
+	botStop     chan struct{}
+	botDone     chan struct{}
 }
 
 type live struct {
@@ -88,7 +95,17 @@ func New(opts Options) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Host{opts: opts, store: st, settings: loadSettings(opts.DataDir), lives: map[string]*live{}, terms: map[string]*termSession{}}
+	h := &Host{
+		opts:       opts,
+		store:      st,
+		settings:   loadSettings(opts.DataDir),
+		lives:      map[string]*live{},
+		terms:      map[string]*termSession{},
+		botRunning: map[string]string{},
+		botRuns:    map[string]botRunState{},
+		botStarted: time.Now(),
+	}
+	h.startBotScheduler()
 	// Resolve the login environment and warm the sidecar up in the
 	// background, so the first conversation doesn't wait for either.
 	go func() {
@@ -99,6 +116,7 @@ func New(opts Options) (*Host, error) {
 
 // Close stops the agents, terminals and writes everything pending to disk.
 func (h *Host) Close() {
+	h.stopBotScheduler()
 	h.closeFileServer()
 	h.closeAllTerms()
 	h.scMu.Lock()
@@ -382,6 +400,10 @@ func (h *Host) scratchDir() string {
 }
 
 func (h *Host) create(agentID, cwd string) (Meta, error) {
+	return h.createOpts(agentID, cwd, true, nil)
+}
+
+func (h *Host) createOpts(agentID, cwd string, remember bool, mutate func(*Meta)) (Meta, error) {
 	a, ok := h.agent(agentID)
 	if !ok {
 		return Meta{}, fmt.Errorf("未知的 agent：%s", agentID)
@@ -394,8 +416,13 @@ func (h *Host) create(agentID, cwd string) (Meta, error) {
 	}
 	t := now()
 	m := Meta{ID: newID(), Title: "新对话", AgentID: a.ID, AgentName: a.Name, Cwd: cwd, CreatedAt: t, UpdatedAt: t, Status: "idle"}
+	if mutate != nil {
+		mutate(&m)
+	}
 	h.store.create(m)
-	h.rememberDir(cwd, a.ID)
+	if remember {
+		h.rememberDir(cwd, a.ID)
+	}
 	h.pushMeta(m)
 	return m, nil
 }
@@ -511,7 +538,7 @@ func (h *Host) open(ctx context.Context, m Meta) (LiveState, string, error) {
 		"key":       m.ID,
 		"agent":     map[string]any{"id": a.ID, "command": a.Command, "args": a.Args, "env": h.effectiveAgentEnv(a)},
 		"cwd":       sessionCwd,
-		"autoAllow": h.getSettings().AutoAllow,
+		"autoAllow": h.effectiveAutoAllow(m),
 	}
 	if m.AcpSessionID != "" {
 		params["resumeId"] = m.AcpSessionID
@@ -646,6 +673,7 @@ func (h *Host) send(ctx context.Context, id string, blocks []Block) error {
 	if h.liveState(id).Status == "running" {
 		return errors.New("上一轮还没结束，先停止它或等它完成")
 	}
+	blocks = h.injectBotContextIfNeeded(m, blocks)
 	text := ""
 	for _, b := range blocks {
 		if b["type"] == "text" {
@@ -655,13 +683,14 @@ func (h *Host) send(ctx context.Context, id string, blocks []Block) error {
 	}
 	h.emit(id, Event{"type": "user_message", "id": newID(), "blocks": blocks, "t": now()})
 	first := m.Preview == ""
+	displayText := stripBotContext(text)
 	m, _ = h.store.update(id, func(mm *Meta) {
 		mm.UpdatedAt = now()
-		if p := oneLine(text, 80); p != "" {
+		if p := oneLine(displayText, 80); p != "" {
 			mm.Preview = p
 		}
 		if first && !mm.TitleLocked && mm.Title == "新对话" {
-			if t := oneLine(text, 28); t != "" {
+			if t := oneLine(displayText, 28); t != "" {
 				mm.Title = t
 			}
 		}
@@ -717,6 +746,7 @@ func (h *Host) finishTurn(id string, e Event) {
 	h.emit(id, e)
 	h.store.update(id, func(mm *Meta) { mm.UpdatedAt = now() })
 	h.pushLive(id)
+	h.onBotTurnFinished(id, e)
 }
 
 func (h *Host) agentEvents(id string, events []Event) {
@@ -817,6 +847,7 @@ func (h *Host) sessionClosed(id, reason string) {
 		h.store.append(id, Event{"type": "turn_end", "stopReason": "error", "error": msg, "t": now()})
 		h.opts.Push(Push{Kind: "events", ConversationID: id, Events: []Event{{"type": "turn_end", "stopReason": "error", "error": msg, "t": now()}}})
 	}
+	h.releaseBotRun(id)
 	h.pushLive(id)
 }
 

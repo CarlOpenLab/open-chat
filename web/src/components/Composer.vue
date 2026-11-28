@@ -56,6 +56,8 @@ const props = defineProps<{
   queuedMessages?: QueuedMessage[];
   /** Highlight the git branch selector as the base branch for a new Worktree. */
   worktreeMode?: boolean;
+  /** Hide the working-directory and git-branch chips (used by Bot conversations). */
+  hideCwd?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -1305,45 +1307,47 @@ defineExpose({ addFiles });
         </Tooltip>
       </Dropdown>
 
-      <span class="w-[1px] h-3 bg-line-strong mx-[2px]" />
+      <template v-if="!hideCwd">
+        <span class="w-[1px] h-3 bg-line-strong mx-[2px]" />
 
-      <div class="group/cwd inline-flex items-center flex-[0_1_auto] min-w-0 max-w-[230px]">
-        <button
-          type="button"
-          class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-[11.5px] flex-[0_1_auto] min-w-0 transition-colors duration-140"
-          :class="[
-            cwd ? 'text-ink-2' : 'text-ink-3',
-            cwdLocked ? 'cursor-default opacity-65' : 'cursor-pointer hover:bg-surface-2 hover:border-line hover:text-ink',
-          ]"
-          :title="cwdLocked ? (cwd ? '对话开始后不能改工作目录' : '当前对话未指定工作目录') : cwd || '点击选择工作目录（可选）'"
-          :disabled="cwdLocked"
-          @click="emit('cwd')"
-        >
-          <!-- Lucide Folder -->
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
-            <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
-          </svg>
-          <span class="truncate" :class="cwd ? 'font-mono' : ''">{{ cwdLabel }}</span>
-          <svg v-if="!cwdLocked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[11px] h-[11px] opacity-65 flex-none">
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
-        </button>
-        <Tooltip v-if="cwd && !cwdLocked" title="不使用工作目录" :mouse-enter-delay="0.35">
+        <div class="group/cwd inline-flex items-center flex-[0_1_auto] min-w-0 max-w-[230px]">
           <button
             type="button"
-            class="inline-grid place-items-center w-[18px] h-[18px] -ml-[2px] border-0 rounded-[5px] bg-transparent text-ink-3 cursor-pointer flex-none opacity-0 transition-all duration-120 group-hover/cwd:opacity-75 hover:!opacity-100 hover:bg-hover hover:text-ink focus-visible:opacity-100"
-            aria-label="不使用工作目录"
-            @click="emit('update:cwd', '')"
+            class="inline-flex items-center gap-[5px] h-6 px-2 border border-solid border-transparent rounded-[7px] bg-transparent text-[11.5px] flex-[0_1_auto] min-w-0 transition-colors duration-140"
+            :class="[
+              cwd ? 'text-ink-2' : 'text-ink-3',
+              cwdLocked ? 'cursor-default opacity-65' : 'cursor-pointer hover:bg-surface-2 hover:border-line hover:text-ink',
+            ]"
+            :title="cwdLocked ? (cwd ? '对话开始后不能改工作目录' : '当前对话未指定工作目录') : cwd || '点击选择工作目录（可选）'"
+            :disabled="cwdLocked"
+            @click="emit('cwd')"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[10.5px] h-[10.5px]">
-              <path d="M18 6 6 18" />
-              <path d="m6 6 12 12" />
+            <!-- Lucide Folder -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="w-[12.5px] h-[12.5px] flex-none">
+              <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
+            </svg>
+            <span class="truncate" :class="cwd ? 'font-mono' : ''">{{ cwdLabel }}</span>
+            <svg v-if="!cwdLocked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[11px] h-[11px] opacity-65 flex-none">
+              <polyline points="6 9 12 15 18 9" />
             </svg>
           </button>
-        </Tooltip>
-      </div>
+          <Tooltip v-if="cwd && !cwdLocked" title="不使用工作目录" :mouse-enter-delay="0.35">
+            <button
+              type="button"
+              class="inline-grid place-items-center w-[18px] h-[18px] -ml-[2px] border-0 rounded-[5px] bg-transparent text-ink-3 cursor-pointer flex-none opacity-0 transition-all duration-120 group-hover/cwd:opacity-75 hover:!opacity-100 hover:bg-hover hover:text-ink focus-visible:opacity-100"
+              aria-label="不使用工作目录"
+              @click="emit('update:cwd', '')"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[10.5px] h-[10.5px]">
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            </button>
+          </Tooltip>
+        </div>
+      </template>
 
-      <template v-if="isGitRepo">
+      <template v-if="!hideCwd && isGitRepo">
         <span class="w-[1px] h-3 bg-line-strong mx-[2px]" />
         <Popover
           :open="branchPopoverOpen"

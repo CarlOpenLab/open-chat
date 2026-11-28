@@ -53,6 +53,10 @@ export const store = reactive({
   /** Pending file to open and highlight in the WorkspacePanel file tree. */
   workspaceReveal: null as { path: string[]; seq: number } | null,
   settingsOpen: false,
+  settingsTab: "agents" as string,
+  botsOpen: false,
+  botsInitialMode: "list" as "list" | "create",
+  botsInitialBotId: null as string | null,
   search: "",
   userAvatar: localStorage.getItem("oc.userAvatar") || "",
   /** Tracks turn completion outcomes per conversation for sidebar status badges. */
@@ -552,7 +556,7 @@ export async function select(id: string | null) {
   }
   if (id && !store.transcripts[id]) await load(id);
   const m = id ? store.metas[id] : null;
-  if (m) {
+  if (m && !m.botId) {
     store.currentCwd = m.worktreeRepo || m.cwd || "";
   }
 }
@@ -810,6 +814,37 @@ export async function remove(id: string) {
   await api.remove(id);
   delete store.metas[id];
   if (store.activeId === id) await select(null);
+}
+
+export function botById(id?: string) {
+  if (!id) return undefined;
+  return store.settings?.bots?.find((b) => b.id === id);
+}
+
+export function openBots(initialMode: "list" | "create" = "list", botId?: string) {
+  store.botsInitialMode = initialMode;
+  store.botsInitialBotId = botId ?? null;
+  store.botsOpen = true;
+}
+
+export async function startBot(botId: string, promptOverride = "") {
+  const m = await api.startBot(botId, promptOverride);
+  store.metas[m.id] = m;
+  store.transcripts[m.id] = emptyTranscript();
+  store.settingsOpen = false;
+  store.botsOpen = false;
+  await select(m.id);
+  return m;
+}
+
+export async function openBotChat(botId: string) {
+  const m = await api.openBotChat(botId);
+  store.metas[m.id] = m;
+  if (!store.transcripts[m.id]) store.transcripts[m.id] = emptyTranscript();
+  store.settingsOpen = false;
+  store.botsOpen = false;
+  await select(m.id);
+  return m;
 }
 
 export async function saveSettings(patch: Partial<Settings>) {

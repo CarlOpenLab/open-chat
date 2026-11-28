@@ -302,12 +302,16 @@ func loadSettings(dir string) Settings {
 		NotifyTurnDone:      true,
 		NotifySound:         true,
 		Agents:              map[string]AgentOverride{},
+		Bots:                []Bot{},
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "settings.json")); err == nil {
 		_ = json.Unmarshal(b, &s)
 	}
 	if s.Agents == nil {
 		s.Agents = map[string]AgentOverride{}
+	}
+	if s.Bots == nil {
+		s.Bots = []Bot{}
 	}
 	if s.Theme == "" {
 		s.Theme = "system"

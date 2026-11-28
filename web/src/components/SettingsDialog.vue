@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import {
+  ApiOutlined,
+  AppstoreOutlined,
+  BgColorsOutlined,
+  CloseOutlined,
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SettingOutlined,
 } from "@antdv-next/icons";
-import { Button, Dropdown, Input, Modal, Switch, Tabs, Tag, Tooltip, message } from "antdv-next";
+import { Button, Dropdown, Input, Modal, Switch, Tag, Tooltip, message } from "antdv-next";
 import { computed, ref, watch } from "vue";
 import { api } from "../api";
 import { sendTestNotification } from "../notify";
@@ -40,6 +45,10 @@ watch(
       local.value.recentDirs = local.value.recentDirs ?? [];
       local.value.themeBackground = local.value.themeBackground === "solid" ? "solid" : "acrylic";
       local.value.conversationGroupBy = local.value.conversationGroupBy === "project" ? "project" : "time";
+      if (store.settingsTab) {
+        tab.value = store.settingsTab;
+        store.settingsTab = "";
+      }
       store.themePreview = null;
       editingCmd.value = {};
       void refreshAgents();
@@ -350,7 +359,7 @@ async function save() {
   if (!local.value) return;
   saving.value = true;
   try {
-    await saveSettings(local.value);
+    await saveSettings({ ...local.value, bots: store.settings?.bots ?? [] });
     store.themePreview = null;
     message.success("已保存");
     emit("update:open", false);
@@ -381,29 +390,112 @@ function toggleCmdEditor(id: string) {
   editingCmd.value[id] = !editingCmd.value[id];
 }
 
+const navGroups = [
+  {
+    label: "Agent",
+    items: [
+      { key: "agents", label: "ACP 供应商", desc: "启停内置 Agent、覆盖启动命令或添加自定义 ACP 命令", icon: ApiOutlined },
+      { key: "updates", label: "Agent 管理", desc: "按本机环境安装、原渠道升级或卸载 Agent", icon: AppstoreOutlined },
+    ],
+  },
+  {
+    label: "应用",
+    items: [
+      { key: "appearance", label: "外观主题", desc: "切换浅色、深色模式与窗口背景质感", icon: BgColorsOutlined },
+      { key: "general", label: "偏好设置", desc: "会话分组、快捷键、桌面通知与运行环境", icon: SettingOutlined },
+    ],
+  },
+] as const;
+
+const activeNav = computed(() => {
+  for (const g of navGroups) {
+    const hit = g.items.find((i) => i.key === tab.value);
+    if (hit) return hit;
+  }
+  return navGroups[0].items[0];
+});
 </script>
 
 <template>
   <Modal
     :open="props.open"
-    :width="600"
+    :width="780"
     :footer="null"
+    :closable="false"
+    wrap-class-name="oc-settings-modal"
     centered
-    title="设置"
     @cancel="emit('update:open', false)"
   >
-    <Tabs v-model:activeKey="tab" size="small">
-      <Tabs.TabPane key="agents" tab="ACP 供应商">
-        <div class="flex flex-col gap-2 max-h-[min(54dvh,420px)] overflow-y-auto py-[2px] pr-[2px]">
-          <div class="flex items-center justify-between gap-2 mb-[2px]">
-            <span class="text-[12px] text-ink-3">已安装且在 PATH 中的 Agent 可直接使用</span>
+    <div class="flex h-[min(74dvh,580px)] min-h-[460px] w-full overflow-hidden">
+      <!-- Left Navigation Sidebar -->
+      <aside class="w-[180px] flex-none bg-hover border-0 border-r border-solid border-line flex flex-col p-3 select-none">
+        <div class="px-2 pt-0.5 pb-2.5 text-[13.5px] font-semibold text-ink tracking-[-0.01em]">设置</div>
+
+        <nav class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3.5" aria-label="设置分类">
+          <div v-for="group in navGroups" :key="group.label" class="flex flex-col gap-0.5">
+            <div class="px-2 pb-1 text-[10.5px] fw-560 text-ink-3 uppercase tracking-[0.04em]">
+              {{ group.label }}
+            </div>
             <button
-              class="inline-flex items-center gap-1 border-0 bg-transparent text-ink-2 cursor-pointer text-[12px] px-1 py-[2px] rounded-[6px] transition-colors duration-120 hover:bg-hover hover:text-ink"
-              @click="refreshAgents"
+              v-for="item in group.items"
+              :key="item.key"
+              type="button"
+              class="w-full h-[32px] px-2.5 border-0 rounded-[8px] flex items-center gap-2 text-left text-[12.5px] cursor-pointer transition-all duration-140"
+              :class="
+                tab === item.key
+                  ? 'bg-modal text-ink fw-580 shadow-card'
+                  : 'bg-transparent text-ink-2 font-normal hover:bg-active hover:text-ink'
+              "
+              :aria-current="tab === item.key ? 'page' : undefined"
+              @click="tab = item.key"
             >
-              <ReloadOutlined /> 重新检测
+              <component :is="item.icon" class="text-[13.5px] flex-none" :class="tab === item.key ? 'text-ink' : 'text-ink-3'" />
+              <span class="flex-1 truncate">{{ item.label }}</span>
+              <span
+                v-if="item.key === 'updates' && outdatedCount > 0"
+                class="px-1.5 h-[17px] rounded-full bg-warn-soft text-warn text-[10.5px] font-mono inline-flex items-center justify-center flex-none"
+              >
+                {{ outdatedCount }}
+              </span>
             </button>
           </div>
+        </nav>
+
+        <div class="pt-2.5 mt-2 border-0 border-t border-solid border-line px-2 flex flex-col gap-0.5">
+          <div class="text-[11px] font-mono text-ink-3 truncate">open-chat {{ store.boot?.version || "" }}</div>
+        </div>
+      </aside>
+
+      <!-- Right Content Pane -->
+      <div class="flex-1 min-w-0 flex flex-col bg-modal">
+        <header class="flex-none h-[54px] px-5 border-0 border-b border-solid border-line flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <div class="text-[14px] font-semibold text-ink leading-tight">{{ activeNav.label }}</div>
+            <div class="text-[11.5px] text-ink-3 truncate mt-[2px]">{{ activeNav.desc }}</div>
+          </div>
+          <button
+            type="button"
+            class="inline-grid place-items-center w-7 h-7 border-0 rounded-[7px] bg-transparent text-ink-3 cursor-pointer flex-none transition-colors hover:bg-hover hover:text-ink"
+            aria-label="关闭设置"
+            @click="emit('update:open', false)"
+          >
+            <CloseOutlined class="text-[12.5px]" />
+          </button>
+        </header>
+
+        <div class="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+          <!-- ACP Providers -->
+          <div v-if="tab === 'agents'" class="flex flex-col gap-2.5">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[12px] text-ink-3">已安装且在 PATH 中的 Agent 可直接使用</span>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 border-0 bg-transparent text-ink-2 cursor-pointer text-[12px] px-1.5 py-[2px] rounded-[6px] transition-colors duration-120 hover:bg-hover hover:text-ink"
+                @click="refreshAgents"
+              >
+                <ReloadOutlined /> 重新检测
+              </button>
+            </div>
 
           <div class="flex flex-col gap-[6px]">
             <div
@@ -478,13 +570,12 @@ function toggleCmdEditor(id: string) {
               </Button>
             </div>
           </div>
-        </div>
-      </Tabs.TabPane>
+          </div>
 
-      <Tabs.TabPane key="updates" tab="Agent 管理">
-        <div class="flex flex-col gap-2 max-h-[min(54dvh,420px)] overflow-y-auto py-[2px] pr-[2px]">
-          <div class="flex items-center justify-between gap-2 mb-[2px]">
-            <span class="text-[12px] text-ink-3">按本机环境安装、原渠道升级或卸载 Agent</span>
+          <!-- Agent Updates -->
+          <div v-else-if="tab === 'updates'" class="flex flex-col gap-2.5">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[12px] text-ink-3">检测与同步本机 Agent CLI 版本</span>
             <div class="inline-flex items-center gap-2 flex-none">
               <Tooltip title="开启后允许 mise upgrade --bump 改写全局 config.toml 中钉死的版本号">
                 <label class="inline-flex items-center gap-[5px] text-[11.5px] text-ink-3 cursor-pointer">
@@ -692,11 +783,10 @@ function toggleCmdEditor(id: string) {
               <div v-for="(w, idx) in updateReport.warnings" :key="idx">{{ w }}</div>
             </div>
           </div>
-        </div>
-      </Tabs.TabPane>
+          </div>
 
-      <Tabs.TabPane key="appearance" tab="主题">
-        <div v-if="local" class="flex flex-col gap-5 max-h-[min(54dvh,420px)] overflow-y-auto py-1 pr-[2px]">
+          <!-- Appearance -->
+          <div v-else-if="tab === 'appearance' && local" class="flex flex-col gap-5">
           <section class="flex flex-col gap-2.5">
             <div>
               <div class="text-[13px] fw-550 text-ink">外观模式</div>
@@ -895,11 +985,10 @@ function toggleCmdEditor(id: string) {
               </button>
             </div>
           </section>
-        </div>
-      </Tabs.TabPane>
+          </div>
 
-      <Tabs.TabPane key="general" tab="偏好">
-        <div v-if="local" class="flex flex-col gap-2 max-h-[min(54dvh,420px)] overflow-y-auto py-[2px] pr-[2px]">
+          <!-- General Preferences -->
+          <div v-else-if="tab === 'general' && local" class="flex flex-col gap-1">
           <section class="flex items-center gap-[14px] py-[10px] border-0 border-b border-solid border-line last-of-type:border-b-0">
             <div class="flex-1 min-w-0">
               <div class="text-[13px] fw-530">会话分组方式</div>
@@ -1023,22 +1112,22 @@ function toggleCmdEditor(id: string) {
             <Button size="small" @click="checkUpdates">检查更新</Button>
           </section>
 
-          <div class="mt-2 pt-[10px] border-0 border-t border-solid border-line flex flex-col gap-1">
-            <div class="text-[11.5px] font-medium text-ink-2 font-mono">
-              open-chat {{ store.boot?.version || "" }}
-            </div>
-            <div class="text-[11.5px] text-ink-3">
-              基于 antdv-next、@antdv-next/x 与 @antdv-next/x-pro 构建
+            <div class="mt-2 pt-[10px] border-0 border-t border-solid border-line flex flex-col gap-1">
+              <div class="text-[11.5px] font-medium text-ink-2 font-mono">
+                open-chat {{ store.boot?.version || "" }}
+              </div>
+              <div class="text-[11.5px] text-ink-3">
+                基于 antdv-next、@antdv-next/x 与 @antdv-next/x-pro 构建
+              </div>
             </div>
           </div>
         </div>
-      </Tabs.TabPane>
-    </Tabs>
 
-    <div class="flex items-center gap-2 pt-3 mt-2 border-0 border-t border-solid border-line">
-      <span class="flex-1" />
-      <Button size="small" @click="emit('update:open', false)">取消</Button>
-      <Button size="small" type="primary" :loading="saving" @click="save">保存</Button>
+        <footer class="flex-none px-5 py-3 border-0 border-t border-solid border-line flex items-center justify-end gap-2 bg-modal">
+          <Button size="small" @click="emit('update:open', false)">取消</Button>
+          <Button size="small" type="primary" :loading="saving" @click="save">保存</Button>
+        </footer>
+      </div>
     </div>
   </Modal>
 
