@@ -1135,7 +1135,7 @@ async function startBotConversation(botId: string) {
         <div class="min-w-0 flex-1 overflow-hidden flex items-center h-full">
           <button
             type="button"
-            class="oc-bot-stack w-full justify-start max-w-full h-full px-0 border-0 bg-transparent cursor-pointer overflow-hidden"
+            class="oc-bot-stack w-full justify-start max-w-full h-full px-0 border-0 bg-transparent cursor-default overflow-hidden"
             :class="{ 'is-open': botsExpanded }"
             :aria-expanded="botsExpanded"
             aria-label="展开或收起 Bots"
