@@ -606,11 +606,7 @@ func (h *Host) openBotChat(botID string) (Meta, error) {
 		}
 		return existing, nil
 	}
-	wakeTime := time.Now()
-	title := fmt.Sprintf("[%s] %s", oneLine(bot.Name, 32), wakeTime.Format("01-02 15:04"))
 	m, err := h.createOpts(bot.AgentID, files.Dir, false, func(mm *Meta) {
-		mm.Title = title
-		mm.TitleLocked = true
 		mm.BotID = bot.ID
 		mm.BotName = bot.Name
 		if bot.ModelConfigID != "" && bot.ModelValue != "" {
@@ -650,10 +646,7 @@ func (h *Host) startBot(_ context.Context, botID, promptOverride string) (Meta, 
 	}
 
 	wakeTime := time.Now()
-	title := fmt.Sprintf("[%s] %s", oneLine(bot.Name, 32), wakeTime.Format("01-02 15:04"))
 	mutate := func(m *Meta) {
-		m.Title = title
-		m.TitleLocked = true
 		m.BotID = bot.ID
 		m.BotName = bot.Name
 		if bot.ModelConfigID != "" && bot.ModelValue != "" {

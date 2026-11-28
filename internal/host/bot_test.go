@@ -385,6 +385,9 @@ func TestOpenBotChatReusesEmptyConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if m1.Title != "新对话" || m1.TitleLocked {
+		t.Fatalf("expected normal auto-titleable bot conversation, got title=%q locked=%v", m1.Title, m1.TitleLocked)
+	}
 	h.liveMu.Lock()
 	h.lives[m1.ID] = &live{state: LiveState{Status: "ready"}}
 	h.liveMu.Unlock()

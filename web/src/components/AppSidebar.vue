@@ -1127,38 +1127,40 @@ async function startBotConversation(botId: string) {
         <span v-else class="kbd !bg-transparent !border-transparent opacity-55 flex-none">{{ isMac ? "⌘" : "Ctrl" }} K</span>
       </label>
 
-      <!-- Overlapping Bots Avatar Stack Trigger (hover unfolds smoothly, click expands all Bots below) -->
+      <!-- Overlapping Bots Avatar Stack Trigger (click smoothly unfolds avatars & expands Bots below) -->
       <div
         v-if="bots.length > 0"
         class="h-[32px] px-[4px] flex items-center justify-between gap-2"
       >
-        <button
-          type="button"
-          class="oc-bot-stack h-full px-0 border-0 bg-transparent cursor-pointer"
-          :class="{ 'is-open': botsExpanded }"
-          :aria-expanded="botsExpanded"
-          aria-label="展开或收起 Bots"
-          @click="toggleBotsExpanded"
-        >
-          <span
-            v-for="b in stackedBots"
-            :key="b.id"
-            class="oc-bot-stack-item relative w-[24px] h-[24px] rounded-full border-[1.5px] border-solid border-[var(--bg)] bg-modal inline-flex items-center justify-center flex-none"
+        <div class="min-w-0 flex-1 overflow-hidden flex items-center h-full">
+          <button
+            type="button"
+            class="oc-bot-stack w-full justify-start max-w-full h-full px-0 border-0 bg-transparent cursor-pointer overflow-hidden"
+            :class="{ 'is-open': botsExpanded }"
+            :aria-expanded="botsExpanded"
+            aria-label="展开或收起 Bots"
+            @click="toggleBotsExpanded"
           >
-            <BotAvatar :avatar="b.avatar" :name="b.name" :size="21" class="rounded-full" />
             <span
-              v-if="botLiveBadge(b.id)"
-              class="absolute -right-[1px] -bottom-[1px] w-[7px] h-[7px] rounded-full border-[1.5px] border-solid border-[var(--bg)]"
-              :class="botLiveBadge(b.id) === 'need' ? 'bg-warn' : 'bg-ok'"
-            />
-          </span>
-          <span
-            v-if="overflowBotCount > 0"
-            class="oc-bot-stack-item relative w-[24px] h-[24px] rounded-full border-[1.5px] border-solid border-[var(--bg)] bg-active text-ink-2 text-[9.5px] font-mono fw-580 inline-grid place-items-center flex-none"
-          >
-            +{{ overflowBotCount }}
-          </span>
-        </button>
+              v-for="b in stackedBots"
+              :key="b.id"
+              class="oc-bot-stack-item relative w-[24px] h-[24px] rounded-full border-[1.5px] border-solid border-[var(--bg)] bg-modal inline-flex items-center justify-center flex-none"
+            >
+              <BotAvatar :avatar="b.avatar" :name="b.name" :size="21" class="rounded-full" />
+              <span
+                v-if="botLiveBadge(b.id)"
+                class="absolute -right-[1px] -bottom-[1px] w-[7px] h-[7px] rounded-full border-[1.5px] border-solid border-[var(--bg)]"
+                :class="botLiveBadge(b.id) === 'need' ? 'bg-warn' : 'bg-ok'"
+              />
+            </span>
+            <span
+              v-if="overflowBotCount > 0"
+              class="oc-bot-stack-item relative w-[24px] h-[24px] rounded-full border-[1.5px] border-solid border-[var(--bg)] bg-active text-ink-2 text-[9.5px] font-mono fw-580 inline-grid place-items-center flex-none"
+            >
+              +{{ overflowBotCount }}
+            </span>
+          </button>
+        </div>
 
         <div class="flex items-center gap-[1px] flex-none">
           <Tooltip title="新建 Bot" :mouse-enter-delay="0.3">
@@ -1327,7 +1329,7 @@ async function startBotConversation(botId: string) {
 
               <!-- Smoothly Expandable Conversations of This Bot -->
               <div class="oc-collapse" :class="{ 'is-open': isBotExpanded(b.id) }">
-                <div class="oc-collapse-inner pt-[1px]">
+                <div class="oc-collapse-inner pt-[5px] pb-[4px]">
                   <Conversations
                     v-if="botItemsOf(b.id).length"
                     :items="botItemsOf(b.id)"

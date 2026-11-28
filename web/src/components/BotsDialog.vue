@@ -45,7 +45,6 @@ const draftSoul = ref("");
 const draftMemory = ref("");
 const origSnapshot = ref("");
 const avatarSeed = ref("open-chat-bot");
-const avatarSeedLocked = ref(false);
 const botFiles = ref<BotFiles | null>(null);
 const editDocTab = ref<EditDocTab>("soul");
 const loadingFiles = ref(false);
@@ -61,8 +60,6 @@ const enabledAgents = computed(() =>
     .filter((a) => !a.disabled)
     .sort((a, b) => Number(b.available) - Number(a.available)),
 );
-
-const isUploadedAvatar = computed(() => /^data:image\/|^https?:\/\//i.test((draft.value?.avatar ?? "").trim()));
 
 function pickDefaultAgentId(): string {
   const pref = store.settings?.defaultAgent;
@@ -119,19 +116,6 @@ watch(enabledAgents, () => {
   }
 });
 
-// Live-evolve the thumbs avatar while typing a new Bot's name until the user rolls or uploads
-watch(
-  () => draft.value?.name,
-  (name) => {
-    if (!creating.value || !draft.value || avatarSeedLocked.value || isUploadedAvatar.value) return;
-    const trimmed = (name ?? "").trim();
-    if (trimmed) {
-      avatarSeed.value = trimmed;
-      draft.value.avatar = makeBotAvatar(trimmed);
-    }
-  },
-);
-
 watch(
   () => draft.value?.agentId,
   (agentId, prev) => {
@@ -146,7 +130,6 @@ watch(
 
 function rollAvatar() {
   if (!draft.value) return;
-  avatarSeedLocked.value = true;
   avatarSeed.value = randomAvatarSeed();
   draft.value.avatar = makeBotAvatar(avatarSeed.value);
 }
@@ -187,7 +170,6 @@ async function onBotAvatarPick(e: Event) {
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
-    avatarSeedLocked.value = true;
     draft.value.avatar = dataUrl;
   } catch {
     message.error("读取头像失败");
@@ -280,7 +262,6 @@ function startCreate(fromList = false) {
   creating.value = true;
   selectedId.value = null;
   avatarSeed.value = seed;
-  avatarSeedLocked.value = false;
   draft.value = {
     id: "",
     name: "",
@@ -305,7 +286,6 @@ async function selectBot(bot: Bot, initialTab: EditDocTab = "soul") {
   selectedId.value = bot.id;
   draft.value = JSON.parse(JSON.stringify(bot)) as Bot;
   avatarSeed.value = parseDicebearSeed(bot.avatar) || bot.name || randomAvatarSeed();
-  avatarSeedLocked.value = true;
   botFiles.value = null;
   draftSoul.value = "";
   draftMemory.value = "";

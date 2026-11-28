@@ -498,15 +498,16 @@
 .oc-bot-stack {
   display: inline-flex;
   align-items: center;
+  cursor: pointer;
 }
 .oc-bot-stack > .oc-bot-stack-item {
   transition: margin-left 0.24s var(--ease);
   will-change: margin-left;
+  cursor: pointer;
 }
 .oc-bot-stack > .oc-bot-stack-item:not(:first-child) {
   margin-left: -8px;
 }
-.oc-bot-stack:hover > .oc-bot-stack-item:not(:first-child),
 .oc-bot-stack.is-open > .oc-bot-stack-item:not(:first-child) {
   margin-left: 0px;
 }
